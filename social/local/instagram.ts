@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { sourceOf } from './_source'
+import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired, runProbe } from './_health'
@@ -135,8 +135,9 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 存一条写好的帖子（待审）。帖子由助手按任务 tasks/write-instagram.md 写，这里校验再存：正文为空报错；
  * 配图用文章正文里的图片，没有图时发布前用 cover_text 生成文字封面；超字数这类问题存下来并在 problems 里返回，让助手改了带 post_id 再存。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; cover_text?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; cover_text?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
+  const picked = pickImages(input, IG.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = igChannel(ctx, input?.channel_id)
   const body = String(input.body ?? '').trim()
@@ -151,10 +152,10 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (id) {
     const old = ctx.db.get('social_posts', id)
     if (!old || old.channel_id !== ch.id || old.article_id !== a.id) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
-    ctx.db.update('social_posts', id, { ...post, updated_at: now() })
+    ctx.db.update('social_posts', id, { ...post, ...(picked ? { images: JSON.stringify(picked) } : {}), updated_at: now() })
   } else {
     { const dup = existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的帖子了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished post for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
-    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(articleImages(a.images)), status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }).id
+    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(picked ?? articleImages(a.images)), status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }).id
   }
   const saved = ctx.db.get('social_posts', id)
   return { post_id: id, channel: ch.name, problems: problems({ body: saved.body, tags: parse(saved.tags, []), images: parse(saved.images, []), cover: saved.cover_text, video: saved.video }, ctx) }

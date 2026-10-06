@@ -34,7 +34,8 @@ annulo run social/social.context --input '{"article_id":"<source.id>","channel_i
 写法归用户（页面上的「AI 要求」改的就是它）；和下面的规则冲突时，以规则为准。
 
 - 每个账号各写一条，账号定位不同就分别写；
-- 整条（含自动接上的文章链接，链接算 23 个字符，中日韩文字和 emoji 算 2）不能超过 280 个字符：`social/x.save` 会检查，超了按返回的 `problems` 改；
+- 整条（含自动接上的文章链接，链接算 23 个字符，中日韩文字和 emoji 算 2）普通账号不能超过 280 个字符。`social/x.save` 不拦字数，存完跑 `annulo run social/x.check --input '{"post_id":"<post_id>"}'` 看 `length` / `max`，超了自己改短；
+  用户说账号开了 Premium、要写长：把「这个账号开了 Premium，可以超过 280」记进写法（`user/plugins/social/prompts/write-x.md`），之后按写法写，不再受 280 限制；
 - 文章链接 `social/x.save` 会自动接在最后，正文里不用写；
 - `tags`：话题数组（不带 #）；`title`：给运营看的标题，不发出去，不超过 20 个字，概括这条推文说什么；
 - 不编造数据、案例；文章里没有的信息不要写。
@@ -52,5 +53,7 @@ annulo run social/x.save --input @/tmp/x.json
 
 `article_title`、`url`、`images` 照取数函数给的原样传（没有就不传）：没写标题时用内容标题，有的平台把链接接在正文后，配图从 `images` 里取。
 
-返回的 `problems` 不是空的（超过 280 字这类），按它改了，带上返回的 `post_id` 再存一次。
+要指定这条配哪几张图（用户说「图都配上」「换成这几张」，或者改写时要换图）：再传 `post_images`，从 `images` 里挑、按顺序，新帖和改写都按它存；不传时新帖按平台默认从 `images` 里取，改写保留原来的图。不要用 `records.patch` 直接改表里的图。
+
+返回的 `problems` 不是空的，或者 `social/x.check` 显示超了字数（没开 Premium 时），改了带上返回的 `post_id` 再存一次。
 存完回复用户：每个账号写了什么，请到后台审核这些待审的帖子。

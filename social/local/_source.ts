@@ -6,6 +6,15 @@
 /** 能交给 b.upload 的素材地址：http(s)，或离线项目本机上传的 /_annulo/uploaded/…（不带端口，Annulo 能力版本 33 起） */
 export const isAssetUrl = (u: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/)\S+$/.test(String(u ?? '').trim())
 
+/**
+ * save 的 post_images：这条帖子要配的图（从内容的 images 里挑、按顺序），用户让「图都配上」「换成这几张」时给。
+ * 给了就用它（新帖、改写都按它存，超过平台上限的截掉）；没给返回 null：新帖按平台默认从 images 里取，改写保留原来的图。
+ */
+export function pickImages(input: any, max: number): string[] | null {
+  if (!Array.isArray(input?.post_images)) return null
+  return [...new Set<string>(input.post_images.map((u: any) => String(u).trim()).filter(isAssetUrl))].slice(0, max)
+}
+
 export type Source = { id: string; title: string; url: string; images: string[] }
 
 /** save 的参数里的来源；没给 article_id 返回 null */

@@ -51,5 +51,7 @@ annulo run social/xhs.save --input @/tmp/xhs.json
 
 `article_title`、`url`、`images` 照取数函数给的原样传（没有就不传）：没写标题时用内容标题，有的平台把链接接在正文后，配图从 `images` 里取。
 
+要指定这条配哪几张图（用户说「图都配上」「换成这几张」，或者改写时要换图）：再传 `post_images`，从 `images` 里挑、按顺序，新帖和改写都按它存；不传时新帖按平台默认从 `images` 里取，改写保留原来的图。不要用 `records.patch` 直接改表里的图。
+
 返回的 `problems` 不是空的（字数偏多、有绝对化用语…），按它改了，带上返回的 `post_id` 再存一次。
 存完回复用户：每个账号写了什么标题，请到后台审核这些待审的帖子。

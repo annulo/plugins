@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { sourceOf } from './_source'
+import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
 import { Expired, runProbe } from './_health'
@@ -62,8 +62,9 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 标题超长、正文为空直接报错；别的不合规格的（字数偏多、标签太多…）存下来并在 problems 里返回，让助手改了再存。
  * 配图用文章正文里的图片。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
+  const picked = pickImages(input, XHS.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = ctx.db.get('social_accounts', input?.channel_id)
   if (!ch || ch.type !== 'xiaohongshu') throw new Error(L(ctx, 'channel_id 要是一个小红书账号', 'channel_id must be a Xiaohongshu account'))
@@ -89,10 +90,10 @@ export function save(input: { article_id: string; article_title?: string; url?: 
     // 改自己刚存的那篇（按 problems 修过之后再存）
     const old = ctx.db.get('social_posts', id)
     if (!old || old.channel_id !== ch.id || old.article_id !== a.id) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
-    ctx.db.update('social_posts', id, { ...post, updated_at: now })
+    ctx.db.update('social_posts', id, { ...post, ...(picked ? { images: JSON.stringify(picked) } : {}), updated_at: now })
   } else {
     { const dup = existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的笔记了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished note for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
-    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(articleImages(a.images)), status: 'pending_review', created_at: now, updated_at: now }).id
+    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(picked ?? articleImages(a.images)), status: 'pending_review', created_at: now, updated_at: now }).id
   }
   const saved = ctx.db.get('social_posts', id)
   return { post_id: id, channel: ch.name, problems: problems({ ...saved, tags: parse(saved.tags, []), images: parse(saved.images, []), video: saved.video }, ctx) }
