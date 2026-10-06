@@ -12,8 +12,7 @@ export const X = {
   videoMaxSeconds: 140,
   videoMaxMB: 512,
   tagsMax: 3, // 话题发布时接在正文后面（#话题），X 上多了反而像广告
-  // 频率：X 对发帖频率宽松得多，但新号短时间连发也会被当成机器人
-  minIntervalMinutes: 30,
+  // 模板只限制 24 小时总量，不要求两条推文之间间隔固定时间。
   dailyMax: 10,
 }
 

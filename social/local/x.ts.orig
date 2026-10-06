@@ -411,10 +411,10 @@ async function openComposer(ctx: any, b: any, ch: any) {
 }
 
 /**
- * 发布一条推文。只发审核通过（approved / scheduled）的；发布前检查规格和每日上限。
+ * 发布一条推文。只发审核通过（approved / scheduled）的；发布前检查规格和发布频率。
  * 上次发布中断过的，先去主页找有没有这条，避免重复发。
  */
-export async function publish(input: { post_id: string }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条推文：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -432,6 +432,10 @@ export async function publish(input: { post_id: string }, ctx: any) {
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
   if (day.length >= X.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${X.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${X.dailyMax}); post again tomorrow`))
+  const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
+  const wait = last + X.minIntervalMinutes * 60_000 - Date.now()
+  if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${X.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${X.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (id: string, extra: object = {}) => {
@@ -469,15 +473,8 @@ export async function publish(input: { post_id: string }, ctx: any) {
     await waitPostable(ctx, b, video ? 10 * 60_000 : 90000, !!video)
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
     const sentAt = Date.now()
-    // 2026-10: X 的弹窗按钮虽可点，浏览器坐标点击有时没有触发提交；直接点弹窗内的按钮。
-    const submitted = await b.eval(`(() => {
-      const button = document.querySelector('[role="dialog"][aria-modal="true"] ${SEL.postBtn}')
-      if (!button || button.getAttribute('aria-disabled') === 'true' || button.disabled) return false
-      button.click()
-      return true
-    })()`)
-    if (!submitted) throw new Error(L(ctx, '发推框的 Post 按钮不可用，X 的页面可能改了', "The Post button is unavailable; X's page may have changed"))
-    ctx.log('X publish: dispatched Post button click')
+    ctx.log('X publish: clicking Post')
+    await b.click(SEL.postBtn)
     const rs = await b.responses(API.create, { min: 1, timeout: 60000 }).catch(() => [])
     const created = rs.filter((r: any) => /\/Create(?:Note)?Tweet(?:\?|$)/.test(r.url ?? ''))
     ctx.log('X publish responses', JSON.stringify(rs.map((r: any) => ({ url: String(r.url).split('?')[0], status: r.status, errors: r.json?.errors?.map((e: any) => e.message) }))))
@@ -506,7 +503,7 @@ export async function publish(input: { post_id: string }, ctx: any) {
   }
 }
 
-/** 到点的排期推文逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮；每日上限照样生效 */
+/** 到点的排期推文逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮，频率限制照样生效 */
 export async function publishDue(input: {}, ctx: any) {
   const xs = new Set(ctx.db.query('social_accounts', { where: { type: 'x' }, limit: 100 }).list.map((c: any) => c.id))
   if (!xs.size) return { due: 0 }
@@ -520,7 +517,7 @@ export async function publishDue(input: {}, ctx: any) {
     const r = await publish({ post_id: p.id }, ctx)
     return { due: due.length, published: r.post_id }
   } catch (e: any) {
-    if (/24 小时内|in 24 hours/.test(e.message)) {
+    if (/至少隔|上限/.test(e.message)) {
       ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
       return { due: due.length, waiting: e.message }
     }
