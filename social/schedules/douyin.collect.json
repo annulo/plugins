@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "douyin"
+  },
+  "every": "6h",
+  "name": "采集抖音视频数据"
+}

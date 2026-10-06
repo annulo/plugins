@@ -1,0 +1,123 @@
+{
+  "name": "社媒笔记",
+  "desc": "要发到社媒渠道（小红书、X…）的笔记 / 推文：草稿、待审、排期、已发布，以及发布后的互动数据",
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "description": "哪个账号（social_accounts 的 id）"
+      },
+      "article_id": {
+        "type": "string",
+        "description": "出自哪篇内容（模板的内容 id，比如外贸模板的文章）；手动新建的为空"
+      },
+      "title": {
+        "type": "string",
+        "description": "标题（X 没有标题：只在后台列表里显示，不发出去）"
+      },
+      "body": {
+        "type": "string",
+        "description": "正文（纯文本）"
+      },
+      "tags": {
+        "type": "string",
+        "description": "话题标签，JSON 数组字符串，不带 #（X 发布时接在正文最后）"
+      },
+      "images": {
+        "type": "string",
+        "description": "配图 URL，JSON 数组字符串；小红书为空时发布前按 cover_text 生成文字封面"
+      },
+      "cover_text": {
+        "type": "string",
+        "description": "封面图上的大字（没有配图时用）"
+      },
+      "status": {
+        "type": "string",
+        "description": "draft → pending_review → approved → scheduled → publishing → published / failed；rejected 退回；removed 已从平台删除（removed_at）"
+      },
+      "review_note": {
+        "type": "string",
+        "description": "审核意见"
+      },
+      "removed_at": {
+        "type": "string",
+        "description": "从平台上删除的时间 ISO8601（status 是 removed 时）"
+      },
+      "scheduled_at": {
+        "type": "string",
+        "description": "排期发布时间 ISO8601"
+      },
+      "claimed_at": {
+        "type": "string",
+        "description": "开始发布的时间（防止重复发）"
+      },
+      "published_at": {
+        "type": "string",
+        "description": "发布时间"
+      },
+      "post_id": {
+        "type": "string",
+        "description": "平台上的笔记 id"
+      },
+      "post_url": {
+        "type": "string",
+        "description": "平台上的笔记地址"
+      },
+      "error": {
+        "type": "string",
+        "description": "发布失败的原因"
+      },
+      "source": {
+        "type": "string",
+        "description": "shuttle：在后台写的；platform：采集时发现的、在平台上直接发的"
+      },
+      "views": {
+        "type": "number",
+        "description": "阅读（采集回写，快照）"
+      },
+      "likes": {
+        "type": "number",
+        "description": "点赞"
+      },
+      "comments": {
+        "type": "number",
+        "description": "评论（X 是回复）"
+      },
+      "collects": {
+        "type": "number",
+        "description": "收藏（X 是书签）"
+      },
+      "shares": {
+        "type": "number",
+        "description": "分享（X 是转发 + 引用）"
+      },
+      "metrics_at": {
+        "type": "string",
+        "description": "互动数据的采集时间"
+      },
+      "created_at": {
+        "type": "string"
+      },
+      "updated_at": {
+        "type": "string"
+      },
+      "history": {
+        "type": "string",
+        "description": "旧字段：每篇每天的快照已经改存 social_post_daily，下次采集时搬过去并清空，别再写"
+      },
+      "video": {
+        "type": "string",
+        "description": "视频（有值就按视频发）：素材库的视频地址（http），或者存在本机的文件 local:<name>（页面「上传本机视频」，Shuttle 的 local/files）；本机函数直接交给 b.upload"
+      },
+      "category": {
+        "type": "string",
+        "description": "分区 / 分类（B 站的分区名等，平台要选的时候用）"
+      }
+    },
+    "required": [
+      "channel_id",
+      "title"
+    ]
+  }
+}

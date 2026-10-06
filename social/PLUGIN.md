@@ -1,0 +1,97 @@
+# 社媒插件（social）
+
+管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站的账号和帖子：用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），
+把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版时自检、交给助手修。
+
+插件只管社媒这一段；**内容从哪来、页面怎么排是模板的事**。这份说明写给助手：项目要用社媒时照这里接。
+
+## 名字
+
+装在项目的 `plugins/social/`，项目里的名字都带插件 id：
+
+| 插件里 | 项目里 |
+|---|---|
+| `local/social.ts` 的 `publish` | 本机函数 `social/social.publish` |
+| `local/x.ts` 的 `save` | `social/x.save`（小红书是 `social/xhs.save`） |
+| `local/stats.ts` 的 `summary` | `social/stats.summary` |
+| `tables/accounts.json` | 表 `social_accounts` |
+| `tasks/write-x.md` | 任务 `social/write-x`；用户改的写法存 `user/plugins/social/prompts/write-x.md` |
+
+## 表
+
+| 表 | 内容 |
+|---|---|
+| `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
+| `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
+| `social_daily` | 账号每天一行：粉丝和互动合计 |
+| `social_post_daily` | 帖子每天一行：当天最后一次采集的累计数 |
+| `social_health` | 浏览器自动化最近一次成没成：一个账号一类操作（自检、发布、删除、采集）一行 |
+
+帖子的 `status`：`pending_review`（待审）→ `approved` → `scheduled`（排期，`scheduled_at`）→ `publishing` → `published` / `failed`；`rejected` 退回；`removed` 已从平台删除。
+审核、排期就是改这条的 `status`、`scheduled_at`（页面直接写表）；发布调 `social/social.publish`，到点的排期由定时任务发。
+
+## 函数
+
+页面按钮调 `social/social.*`，它按账号的平台转给各平台文件：
+
+| 函数 | 做什么 |
+|---|---|
+| `social.login({ type })` / `social.login({ channel_id })` | 添加账号（弹出浏览器让用户登录，登录成功写进 `social_accounts`）/ 重新登录 |
+| `social.publish({ post_id })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开 |
+| `social.remove({ post_id })` | 从平台删除 |
+| `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
+| `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
+| `social.collect({ channel_id })` | 现在采集一个账号 |
+| `social.probe({ channel_id })` | 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发 |
+| `social.health()` | 各账号最近一次自检 / 发布 / 删除 / 采集成没成 |
+| `social.elsewhereAll()` | 登录态在别的电脑上的账号 `{ [账号 id]: 那台电脑的名字 }` |
+| `social.openProfile({ channel_id })` | 用账号自己的浏览器打开它的主页 |
+| `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站） |
+| `stats.summary({ channel_id, days })` | 一个账号近 N 天的概览：发布数、粉丝增量、互动增量、帖子列表 |
+
+手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
+`social.collect`、`publish`、`probe`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
+
+## 写帖子：模板给内容，插件写和存
+
+每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、youtube、xiaohongshu、douyin、bilibili），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
+
+```json
+{ "source": { "fn": "<模板的取数函数>", "id": "<内容 id>" }, "channel_ids": ["<账号 id>", "…"] }
+```
+
+**模板要提供取数函数**（`source.fn`，比如外贸模板的 `content.socialSource`）：输入 `{ id }`，返回要改写的内容
+
+```ts
+{
+  id: string           // 内容 id，存成帖子的 article_id
+  title: string
+  text: string         // 纯文本正文（截到几千字就够）
+  url?: string         // 内容的链接：X、LinkedIn、Facebook、YouTube 会接在正文后
+  images?: string[]    // 公开的 http(s) 配图：图文平台从这里取
+  videos?: { url: string; name?: string; text?: string; tags?: string }[]  // 候选视频：YouTube、抖音、B 站从这里挑
+  project?: unknown    // 项目资料（公司、产品、语气），写的时候参考
+  research?: unknown   // 调研证据，有就引用
+}
+```
+
+助手照任务跑取数函数和 `social/social.context`（账号定位、这篇内容在哪些账号已经写过），写完调 `social/<平台>.save` 存成待审。
+写法（结构、语气、长度）是用户的：默认在 `prompts/write-<平台>.md`，用户在页面上改的存 `user/plugins/social/prompts/write-<平台>.md`。
+页面上放「AI 要求」按钮时，任务 id 写 `social/write-<平台>`。
+
+## 定时任务
+
+每个平台两个：`<平台>.publishDue`（到点的排期逐条发）、`<平台>.collect`（每 6 小时采集），再加 `probeAll`（每天自检一次）。没有这个平台的账号时什么都不做。
+
+## 平台改版了
+
+发布、采集、自检失败都记进 `social_health`，失败的那一步带着现场（截图、页面上的可操作元素）。页面上提示失败时，给一个「交给助手修」，开任务 `social/fix-platform`（参数 `{ "channel_id": "<账号 id>" }`）：
+助手照现场改 `plugins/social/local/<平台>.ts` 里的选择器和接口，改到自检通过。改的是这个项目里的插件文件，插件升级时三方合并。
+
+## 模板怎么接
+
+1. 模板的 `annulo.json` 写 `"plugins": { "social": "https://github.com/annulo/plugins#social" }`，`min_annulo_api` 不低于 28。
+2. 写取数函数（见上），按钮开 `social/write-<平台>` 任务。
+3. 页面：账号列表（读 `social_accounts`，添加账号调 `social/social.login`）、待审和排期的帖子（读写 `social_posts`，发布调 `social/social.publish`）、数据（`social/stats.summary`）、失败提示（`social/social.health`）。
+   插件现在不带页面组件，页面由模板自己写。
+4. 不要在模板里声明 `social_` 开头的表，也不要改 `plugins/social/` 下的默认写法：用户的定制放 `user/plugins/social/`。

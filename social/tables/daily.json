@@ -1,0 +1,53 @@
+{
+  "name": "社媒每日汇总",
+  "desc": "社媒账号每天一行：粉丝和全部笔记互动的合计（采集时更新当天那行）。时间段的增量、按天趋势都用它算",
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "description": "哪个账号（social_accounts 的 id）"
+      },
+      "date": {
+        "type": "string",
+        "description": "日期 YYYY-MM-DD（本机时区）"
+      },
+      "followers": {
+        "type": "number",
+        "description": "粉丝数"
+      },
+      "posts": {
+        "type": "number",
+        "description": "采集到的笔记数"
+      },
+      "views": {
+        "type": "number",
+        "description": "全部笔记的浏览合计（累计值）"
+      },
+      "likes": {
+        "type": "number",
+        "description": "点赞合计"
+      },
+      "comments": {
+        "type": "number",
+        "description": "评论合计"
+      },
+      "collects": {
+        "type": "number",
+        "description": "收藏合计"
+      },
+      "shares": {
+        "type": "number",
+        "description": "分享合计"
+      },
+      "updated_at": {
+        "type": "string",
+        "description": "最后一次采集时间 ISO8601"
+      }
+    },
+    "required": [
+      "channel_id",
+      "date"
+    ]
+  }
+}

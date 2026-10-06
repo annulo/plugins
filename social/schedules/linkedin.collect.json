@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "linkedin"
+  },
+  "every": "6h",
+  "name": "采集 LinkedIn 帖子数据"
+}

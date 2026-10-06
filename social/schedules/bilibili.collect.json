@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "bilibili"
+  },
+  "every": "6h",
+  "name": "采集 B 站视频数据"
+}

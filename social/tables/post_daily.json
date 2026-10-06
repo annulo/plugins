@@ -1,0 +1,50 @@
+{
+  "name": "社媒笔记每日数据",
+  "desc": "每篇笔记每天一行：当天最后一次采集时的累计浏览、点赞、评论、收藏、分享（同一天再采集就更新那行）。单篇某段时间涨了多少 = 期末那天 − 期初前一天，用 ctx.db.aggregate 按 post_id 分组算",
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "description": "哪个账号（social_accounts 的 id）"
+      },
+      "post_id": {
+        "type": "string",
+        "description": "social_posts 的记录 id（不是平台上的笔记 id）"
+      },
+      "date": {
+        "type": "string",
+        "description": "日期 YYYY-MM-DD（本机时区）"
+      },
+      "views": {
+        "type": "number",
+        "description": "浏览（累计）"
+      },
+      "likes": {
+        "type": "number",
+        "description": "点赞（累计）"
+      },
+      "comments": {
+        "type": "number",
+        "description": "评论（累计）"
+      },
+      "collects": {
+        "type": "number",
+        "description": "收藏（累计）"
+      },
+      "shares": {
+        "type": "number",
+        "description": "分享（累计）"
+      },
+      "collected_at": {
+        "type": "string",
+        "description": "这天最后一次采集的时间 ISO8601"
+      }
+    },
+    "required": [
+      "channel_id",
+      "post_id",
+      "date"
+    ]
+  }
+}

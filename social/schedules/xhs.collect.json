@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "xiaohongshu"
+  },
+  "every": "6h",
+  "name": "采集小红书笔记数据"
+}

@@ -1,0 +1,81 @@
+{
+  "name": "社媒账号",
+  "desc": "社媒插件的账号：一个平台账号一行（X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站）。浏览器登录态只在登录用的那台电脑的 profile 里",
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string",
+        "description": "平台：x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili"
+      },
+      "name": {
+        "type": "string",
+        "description": "显示名"
+      },
+      "platform_uid": {
+        "type": "string",
+        "description": "社媒渠道：平台账号 id"
+      },
+      "handle": {
+        "type": "string",
+        "description": "X：@ 后面的用户名（发推、打开主页用），登录时回写"
+      },
+      "avatar": {
+        "type": "string",
+        "description": "社媒渠道：账号头像"
+      },
+      "profile": {
+        "type": "string",
+        "description": "渠道定位：目标读者、语气、不碰的话题（写作时读）"
+      },
+      "login_status": {
+        "type": "string",
+        "description": "社媒渠道：ok / expired / unknown，本地 agent 回写"
+      },
+      "last_checked_at": {
+        "type": "string",
+        "description": "社媒渠道：上次检查登录的时间"
+      },
+      "followers": {
+        "type": "number",
+        "description": "社媒渠道：粉丝数（采集时回写）"
+      },
+      "collected_at": {
+        "type": "string",
+        "description": "社媒渠道：上次采集帖子数据的时间"
+      },
+      "metric_totals": {
+        "type": "string",
+        "description": "社媒渠道：全部已发布内容的互动合计 JSON {views, likes, comments, collects, shares, posts}，采集时按增量更新（local/x.ts 的 channelTotals）"
+      },
+      "browser_profile": {
+        "type": "string",
+        "description": "社媒渠道：本机浏览器 profile 名（登录态留在这台电脑上，见 local/xhs.ts、local/x.ts）"
+      },
+      "browser_profile_id": {
+        "type": "string",
+        "description": "社媒渠道：登录态所在的浏览器 profile 的 id（ctx.browser.profile(browser_profile).id）；本机没有这个 profile 或 id 对不上，就是在别的电脑上，定时任务跳过这个账号（local/social.ts）"
+      },
+      "browser_machine": {
+        "type": "string",
+        "description": "社媒渠道：在哪台电脑上登录的（ctx.workspace.machine.id）；旧版 Shuttle（没有 ctx.browser.profile）按它认"
+      },
+      "browser_machine_name": {
+        "type": "string",
+        "description": "社媒渠道：登录的那台电脑的名字（给用户看）"
+      },
+      "fb_kind": {
+        "type": "string",
+        "description": "Facebook：profile 个人主页 / page 公司主页"
+      },
+      "page_id": {
+        "type": "string",
+        "description": "Facebook 公司主页的 id（fb_kind=page）"
+      },
+      "spare_profiles": {
+        "type": "string",
+        "description": "这个账号也登着的别的浏览器 profile（逗号分隔）：添加账号时登的是已有账号，那个 profile 不能再给新账号用"
+      }
+    }
+  }
+}

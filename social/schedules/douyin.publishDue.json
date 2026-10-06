@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.publishDue",
+  "input": {
+    "type": "douyin"
+  },
+  "every": "15m",
+  "name": "发布到点的抖音视频"
+}

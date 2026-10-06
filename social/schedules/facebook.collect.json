@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "facebook"
+  },
+  "every": "6h",
+  "name": "采集 Facebook 帖子数据"
+}

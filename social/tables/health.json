@@ -1,0 +1,77 @@
+{
+  "name": "社媒平台健康",
+  "desc": "社媒账号的浏览器自动化最近一次成没成：一个账号一类操作一行（自检、发布、删除、采集），plugins/social/local/_health.ts 写入。平台改了页面时据此提示、交给助手修",
+  "json_schema": {
+    "type": "object",
+    "properties": {
+      "channel_id": {
+        "type": "string",
+        "description": "哪个账号（social_accounts 的 id）"
+      },
+      "platform": {
+        "type": "string",
+        "description": "平台：channels.type"
+      },
+      "op": {
+        "type": "string",
+        "description": "probe 自检 / publish 发布 / remove 删除 / collect 采集"
+      },
+      "ok": {
+        "type": "boolean",
+        "description": "最近一次成功了没有"
+      },
+      "kind": {
+        "type": "string",
+        "description": "失败的类型：broken 页面或接口对不上了（要改平台文件）/ expired 登录过期"
+      },
+      "step": {
+        "type": "string",
+        "description": "失败在哪一步（自检的步骤名，或操作名）"
+      },
+      "error": {
+        "type": "string",
+        "description": "报错"
+      },
+      "snapshot": {
+        "type": "string",
+        "description": "现场目录（本机）：shot.png 截图、outline.txt 页面上的可操作元素、page.html、meta.json"
+      },
+      "steps": {
+        "type": "string",
+        "description": "自检每一步的结果 JSON：[{ key, name, ok, ms, detail?, error?, snapshot?, soft? }]"
+      },
+      "post_id": {
+        "type": "string",
+        "description": "发布、删除失败时是哪条内容（social_posts）"
+      },
+      "dismissed_at": {
+        "type": "string",
+        "description": "用户在提示上点了关闭的时间；之后再失败（checked_at 更新）会重新提示"
+      },
+      "fails": {
+        "type": "number",
+        "description": "连续失败次数"
+      },
+      "checked_at": {
+        "type": "string",
+        "description": "最近一次时间 ISO8601"
+      },
+      "last_ok_at": {
+        "type": "string",
+        "description": "最近一次成功的时间"
+      },
+      "created_at": {
+        "type": "string",
+        "description": "ISO8601"
+      },
+      "updated_at": {
+        "type": "string",
+        "description": "ISO8601"
+      }
+    },
+    "required": [
+      "channel_id",
+      "op"
+    ]
+  }
+}
