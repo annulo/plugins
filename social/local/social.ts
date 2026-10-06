@@ -1,5 +1,6 @@
 import { L } from './_i18n'
 import { PLATFORMS } from './_platforms'
+import { isAssetUrl } from './_source'
 import { list as healthList, record, showBrowserIf, track } from './_health'
 
 // 手机上打开后台（不在 Annulo 里）时这几个也能用：shuttle push 会把它们打包成站点 Func，只用 ctx.db
@@ -155,7 +156,7 @@ export function createDraft(input: DirectDraft, ctx: any) {
   const video = String(input.video ?? '').trim()
   const tags = [...new Set((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean))]
   const images = (input.images ?? []).map((s) => String(s).trim())
-  if (images.some((s) => !/^https?:\/\//.test(s))) throw new Error(L(ctx, '配图必须是公开的 http(s) 素材地址', 'Images must be public http(s) asset URLs'))
+  if (images.some((s) => !isAssetUrl(s))) throw new Error(L(ctx, '配图要是素材库里的图片地址', 'Images must be image URLs from Assets'))
   const problems = PLATFORMS[ch.type].draftProblems({ title, body, tags, images, video }, ctx)
   if (problems.length) throw new Error(problems.join('；'))
   const t = new Date().toISOString()
@@ -175,7 +176,7 @@ export function createDraftBatch(input: { drafts: DirectDraft[] }, ctx: any) {
     if (!ch || !['x', 'bilibili'].includes(ch.type) || !PLATFORMS[ch.type]) throw new Error(L(ctx, '请选 X 或 B站账号', 'Choose X or Bilibili accounts'))
     const tags = [...new Set((d.tags ?? []).map((x) => String(x).replace(/^#/, '').trim()).filter(Boolean))]
     const images = d.images ?? []
-    if (images.some((u) => !/^https?:\/\//.test(u))) throw new Error(L(ctx, '配图必须是公开素材地址', 'Images must be public asset URLs'))
+    if (images.some((u) => !isAssetUrl(u))) throw new Error(L(ctx, '配图要是素材库里的图片地址', 'Images must be image URLs from Assets'))
     const errors = PLATFORMS[ch.type].draftProblems({ title: d.title, body: d.body, tags, images, video: d.video }, ctx)
     if (errors.length) throw new Error(`${ch.name}：${errors.join('；')}`)
   }

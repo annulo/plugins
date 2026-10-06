@@ -68,7 +68,7 @@
   title: string
   text: string         // 纯文本正文（截到几千字就够）
   url?: string         // 内容的链接：X、LinkedIn、Facebook、YouTube 会接在正文后
-  images?: string[]    // 公开的 http(s) 配图：图文平台从这里取
+  images?: string[]    // 配图：http(s) 地址，离线项目是本机上传的 /_annulo/uploaded/…；图文平台从这里取
   videos?: { url: string; name?: string; text?: string; tags?: string }[]  // 候选视频：YouTube、抖音、B 站从这里挑
   project?: unknown    // 项目资料（公司、产品、语气），写的时候参考
   research?: unknown   // 调研证据，有就引用

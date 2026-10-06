@@ -145,7 +145,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (!body) throw new Error(L(ctx, '描述要写', 'The description is required'))
   const video = String(input.video ?? '').trim()
   // 可以先空着：用户在社媒页编辑这条时上传本机视频（local:<name>）或从素材库选，没视频发布前 problems 会拦住
-  if (video && !/^(https?:\/\/|local:)/.test(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be an Assets video URL (http / https) or a local file (local:…); leave it empty if there is none'))
+  if (video && !/^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)/.test(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be an Assets video URL (http / https) or a local file (local:…); leave it empty if there is none'))
   const link = /^https?:\/\//.test(a.url ?? '') ? String(a.url) : ''
   if (link && !body.includes(link)) body += '\n\n' + link
   const post: Partial<Post> = {

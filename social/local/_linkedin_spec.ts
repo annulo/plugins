@@ -26,7 +26,7 @@ export function postText(body: string, tags: string[]) {
 }
 
 /** 视频地址：素材库的 http(s) 地址，或存在这台电脑上的 local:<名字> */
-export const isVideoRef = (v: any) => /^(https?:\/\/|local:)\S+/.test(String(v ?? '').trim())
+export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)\S+/.test(String(v ?? '').trim())
 
 /** 检查必填内容和素材；暂不按字符数拦截，平台常量仅供参考。 */
 export function problems(d: { body?: string; tags?: string[]; images?: string[]; video?: string }, ctx?: any): string[] {
