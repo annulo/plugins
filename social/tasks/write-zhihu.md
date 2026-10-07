@@ -13,7 +13,7 @@ description: 把一篇内容改写成知乎专栏文章，每个勾选的账号�
 annulo run <source.fn> --input '{"id":"<source.id>"}'
 ```
 
-输出里：`title`、`text`（纯文本正文）、`url`（内容的链接，可能没有）、`images`（内容里的配图）、`project`（项目资料，可能没有）、`research`（调研证据，可能没有）。
+输出里：`title`、`text`（纯文本正文）、`html`（正文原样的富文本，可能没有）、`url`（内容的链接，可能没有）、`images`（内容里的配图）、`project`（项目资料，可能没有）、`research`（调研证据，可能没有）。
 没有 `source`（用户在对话里直接让你写）：问清楚写哪篇，从项目里读出这些内容再写；没有内容 id 时 `article_id` 用一个能认出这篇内容的短字符串。
 
 再拿账号的上下文：
@@ -35,8 +35,8 @@ annulo run social/social.context --input '{"article_id":"<source.id>","channel_i
 
 - 每个账号各写一篇：账号定位不同，文章分别写，不要一篇复制给几个账号；
 - 标题不超过 100 个字，`social/zhihu.save` 会检查；
-- 正文用 Markdown 的常用写法：`## 小标题`、`- 要点`、`1. 步骤`、`> 引用`、`**加粗**`，空行分段。发布时转成知乎编辑器的格式，表格、代码块这类别的写法会变成普通文字，不要用；
-- 配图：想让哪张图出现在正文哪里，就在那个位置单独一行写 `![](图片地址)`，地址只能用取数函数给的 `images` 里的；没写位置的图放在正文最前面当题图。不写任何图时默认用内容的第一张图当题图；
+- 正文写成富文本 HTML（和后台文章编辑器存的一样，用户在页面上用同一个编辑器改）：`<h2>` / `<h3>` 小标题、`<p>` 段落、`<ul>` / `<ol>` 列表、`<blockquote>` 引用、`<strong>` 加粗、`<a href>` 链接、`<hr>` 分隔，不要 `<table>`、内联样式和 class；
+- 配图就在正文里：有 `html` 就照它改写，保留原来的 `<img src="…">`、放在和上下文对得上的位置；没有 `html` 时从 `images` 里挑图插 `<img src="地址">`，地址只能用 `images` 里的；
 - 不要让人加微信、私信领资料、进群（知乎会限流或删文）；内容的链接可以在文末写一句「原文：<url>」，不要在正文里反复放链接；
 - `tags`：文章话题数组（不带 #），最多 3 个，用知乎上已经有的话题名（发布时按名字搜，只选名字完全一样的，搜不到的跳过）。
 
@@ -46,14 +46,14 @@ annulo run social/social.context --input '{"article_id":"<source.id>","channel_i
 
 ```bash
 cat > /tmp/zhihu.json <<'JSON'
-{ "article_id": "<source.id>", "article_title": "<内容的 title>", "url": "<内容的 url>", "images": ["<内容的 images>"], "channel_id": "<账号 id>", "title": "…", "body": "…", "tags": ["…"] }
+{ "article_id": "<source.id>", "article_title": "<内容的 title>", "url": "<内容的 url>", "images": ["<内容的 images>"], "channel_id": "<账号 id>", "title": "…", "body": "<p>…</p><h2>…</h2><p>…</p><p><img src=\"…\"></p>", "tags": ["…"] }
 JSON
 annulo run social/zhihu.save --input @/tmp/zhihu.json
 ```
 
 `article_title`、`url`、`images` 照取数函数给的原样传（没有就不传）。
 
-要指定这篇配哪几张图（用户说「图都配上」「换成这几张」，或者改写时要换图）：再传 `post_images`，从 `images` 里挑、按顺序；正文里 `![](地址)` 写到的图会自动算进去。不要用 `records.patch` 直接改表里的图。
+知乎没有单独的配图字段：要加图、换图、去掉图都改正文里的 `<img>`，不用传 `post_images`（表里的 `images` 由 save 按正文里的图写）。
 
 返回的 `problems` 不是空的（话题太多、有引流的话…），按它改了，带上返回的 `post_id` 再存一次。
 存完回复用户：每个账号写了什么标题，请到后台审核这些待审的文章。

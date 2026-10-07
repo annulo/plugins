@@ -67,6 +67,7 @@
   id: string           // 内容 id，存成帖子的 article_id
   title: string
   text: string         // 纯文本正文（截到几千字就够）
+  html?: string        // 正文原样的富文本（HTML）：知乎这类富文本平台照它改写，图片留在原位置
   url?: string         // 内容的链接：X、LinkedIn、Facebook、YouTube 会接在正文后；知乎文章可以在文末写一句
   images?: string[]    // 配图：http(s) 地址，离线项目是本机上传的 /_annulo/uploaded/…；图文平台从这里取，知乎文章插在正文里
   videos?: { url: string; name?: string; text?: string; tags?: string }[]  // 候选视频：YouTube、抖音、B 站从这里挑
@@ -79,8 +80,17 @@
 写法（结构、语气、长度）是用户的：默认在 `prompts/write-<平台>.md`，用户在页面上改的存 `user/plugins/social/prompts/write-<平台>.md`。
 页面上放「AI 要求」按钮时，任务 id 写 `social/write-<平台>`。
 
-知乎发的是专栏文章：`title` 是文章标题（≤100 字），`body` 是 Markdown 常用写法的正文（`##` 小标题、列表、引用、加粗），
-单独一行的 `![](地址)` 是插在那里的配图，`images` 里正文没写到位置的图放在最前面当题图；`tags` 是文章话题（最多 3 个）。
+**每个平台的字段不一样**，照平台发帖框本来有什么：
+
+| 平台 | 标题 | 正文 | 配图 / 视频 | 别的 |
+|---|---|---|---|---|
+| X、LinkedIn、Facebook、Instagram | 不发（只在后台列表里显示） | 纯文字 | 一组图（顺序就是轮播顺序）或一个视频 | Instagram、小红书没图时用 `cover_text` 生成文字封面 |
+| 小红书 | 发 | 纯文字 | 一组图或一个视频 | `cover_text` |
+| YouTube、抖音、B 站 | 发 | 纯文字（简介） | 只有视频 | B 站 `category` 分区 |
+| 知乎 | 发 | 富文本 HTML（h2 / h3 / p / ul / ol / blockquote / strong / a / img，和模板文章编辑器存的一样） | 没有单独的配图：图片插在正文里，`images` 由 `zhihu.save` 按正文里的图写 | — |
+
+`tags` 都是话题 / 标签（数量上限各平台不同）。知乎发布时按图切段：文字粘贴进知乎编辑器、图片在原位置上传；旧的 Markdown 写法（`##`、单独一行的 `![](地址)`）还认。
+模板编辑帖子时照这张表显示字段（模板 `lib/social.ts` 里平台的 `fields`）。
 
 ## 定时任务
 

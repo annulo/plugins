@@ -1,7 +1,7 @@
 import { L } from './_i18n'
 import { isAssetUrl, pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
-import { ZHIHU, bodyImages, len, problems, segments } from './_zhihu_spec'
+import { ZHIHU, bodyImages, isHtml, len, problems, segments, type Segment } from './_zhihu_spec'
 import { Expired, runProbe } from './_health'
 
 // 手动草稿按启用的平台校验
@@ -17,8 +17,9 @@ export { problems as draftProblems } from './_zhihu_spec'
 //   zhihu.collect                       采集粉丝数和文章的阅读、赞同、评论、收藏
 //   zhihu.probe({ channel_id })         自检：登录、读文章、文章的删除菜单、打开写文章页，不真的发（local/_health.ts）
 //
-// social_posts 里知乎的一条：title 是文章标题（≤100 字），body 是正文（Markdown 的常用写法，发布时转成 HTML 粘贴进编辑器），
-// 单独一行的 ![](地址) 是一张配图、在那个位置上传；images 是这篇用到的图（JSON 数组），正文里没写到位置的放在正文最前面。
+// social_posts 里知乎的一条：title 是文章标题（≤100 字），body 是正文。正文有两种写法：
+//   - 富文本 HTML（和模板里文章一样的编辑器写的，h2 / h3 / p / ul / ol / blockquote / strong / a / img…），图片就在正文里，images 是正文里的图；
+//   - Markdown 的常用写法（旧的写法，还认）：发布时转成 HTML，单独一行的 ![](地址) 是一张配图，images 里正文没写到位置的图放在最前面。
 // tags 是文章话题（最多 3 个，发布时在「发布设置」里按名字搜，只选名字完全一样的）。
 // post_id 存文章 id，post_url 是 https://zhuanlan.zhihu.com/p/<id>。
 //
@@ -167,8 +168,10 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   const inBody = bodyImages(body)
   const bad = inBody.filter((u) => !isAssetUrl(u))
   if (bad.length) throw new Error(L(ctx, `正文里的图片要用内容 images 里的地址：${bad.join('、')}`, `Images in the body must use URLs from the content's images: ${bad.join(', ')}`))
-  const picked = pickImages(input, ZHIHU.imagesMax)
-  const withBody = (list: string[]) => [...new Set([...list, ...inBody])].slice(0, ZHIHU.imagesMax)
+  const rich = isHtml(body)
+  // 富文本的图都在正文里，images 就是正文里的图；Markdown 写法另外认 post_images（正文里没写位置的放最前面）
+  const picked = rich ? null : pickImages(input, ZHIHU.imagesMax)
+  const withBody = (list: string[]) => (rich ? inBody : [...new Set([...list, ...inBody])]).slice(0, ZHIHU.imagesMax)
   const post: Partial<Post> = { title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])) }
   let id = input.post_id
   if (id) {
@@ -179,7 +182,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   } else {
     const dup = existing(ctx, a.id, ch.id)
     if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇内容还没发出去的文章了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished article for this content (post_id ${dup.id}); pass that post_id to rewrite it`))
-    const images = withBody(picked ?? (inBody.length ? [] : a.images.slice(0, 1)))
+    const images = withBody(picked ?? (inBody.length || rich ? [] : a.images.slice(0, 1)))
     id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(images), status: 'pending_review', created_at: now(), updated_at: now() }).id
   }
   const saved = ctx.db.get('social_posts', id)
@@ -307,11 +310,50 @@ function pasteHtml(b: any, html: string) {
   })()`)
 }
 
-/** 正文里已经上传好的图片数（知乎的图床地址），和有没有「上传失败」 */
-const imageState = (b: any): Promise<{ done: number; failed: boolean }> =>
+/**
+ * 富文本正文按图切段（在页面里用 DOMParser 解析）：顶层的块原样留着，含图的块拆成「去掉图的文字」和图。
+ * 只认能交给 b.upload 的图（http(s)、本机上传的 /_annulo/uploaded/…），别的图丢掉。
+ */
+async function htmlSegments(b: any, html: string): Promise<Segment[]> {
+  const r = await b.eval(`(() => {
+    const doc = new DOMParser().parseFromString('<body>' + ${JSON.stringify(html)} + '</body>', 'text/html')
+    const ok = (u) => /^(https?:\\/\\/|\\/_(annulo|shuttle)\\/uploaded\\/)\\S+$/.test(u || '')
+    const out = []
+    let buf = ''
+    const flush = () => { if (buf && (buf.replace(/<[^>]+>/g, '').trim() || /<hr/i.test(buf))) out.push({ html: buf }); buf = '' }
+    for (const n of [...doc.body.childNodes]) {
+      if (n.nodeType === 3) { if (n.textContent.trim()) { const p = doc.createElement('p'); p.textContent = n.textContent; buf += p.outerHTML } continue }
+      if (n.nodeType !== 1) continue
+      const imgs = n.tagName === 'IMG' ? [n] : [...n.querySelectorAll('img')]
+      if (!imgs.length) { buf += n.outerHTML; continue }
+      const srcs = imgs.map((i) => i.getAttribute('src'))
+      if (n.tagName !== 'IMG') { imgs.forEach((i) => i.remove()); if (n.textContent.trim()) buf += n.outerHTML }
+      flush()
+      for (const s of srcs) if (ok(s)) out.push({ image: s })
+    }
+    flush()
+    return out
+  })()`)
+  if (!Array.isArray(r)) throw new Error('htmlSegments')
+  return r as Segment[]
+}
+
+/**
+ * 正文里图片的状态：done 传好的（图床地址 *.zhimg.com、pic*.zhihu.com），pending 还在传的，failed 有没有「上传失败」。
+ * 知乎选了图先插一张占位图（地址在 zhuanlan.zhihu.com 下，旁边「图片上传中」），传完才换成图床地址（2026-10 实测）：
+ * 占位图不能算传好，不然没传完就粘贴下一段，这张图会丢。
+ */
+const imageState = (b: any): Promise<{ done: number; pending: number; failed: boolean }> =>
   b
-    .eval(`(() => { const ed = document.querySelector(${JSON.stringify(SEL.editor)}); if (!ed) return { done: 0, failed: false }; return { done: [...ed.querySelectorAll('img')].filter(i => /zhimg\\.com|zhihu\\.com/.test(i.src)).length, failed: ${TEXT.uploadFailed}.test(ed.innerText) } })()`)
-    .catch(() => ({ done: 0, failed: false }))
+    .eval(`(() => {
+      const ed = document.querySelector(${JSON.stringify(SEL.editor)})
+      if (!ed) return { done: 0, pending: 0, failed: false }
+      const hosts = [...ed.querySelectorAll('img')].map(i => { try { return new URL(i.src).host } catch (e) { return '' } })
+      const done = hosts.filter(h => /(^|\\.)zhimg\\.com$|^pic[\\w-]*\\.zhihu\\.com$/.test(h)).length
+      const uploading = (ed.innerText.match(/图片上传中/g) || []).length
+      return { done, pending: Math.max(hosts.length - done, uploading), failed: ${TEXT.uploadFailed}.test(ed.innerText) }
+    })()`)
+    .catch(() => ({ done: 0, pending: 0, failed: false }))
 
 /** 上传一张图，插到正文光标处；等到它传完（最多 2 分钟） */
 async function uploadImage(ctx: any, b: any, url: string, n: number) {
@@ -324,7 +366,7 @@ async function uploadImage(ctx: any, b: any, url: string, n: number) {
     await ctx.sleep(1500)
     const s = await imageState(b)
     if (s.failed) throw new Error(L(ctx, `知乎提示第 ${n} 张图上传失败：换一张图（格式支持 jpg、png、webp、gif）`, `Zhihu says image ${n} failed to upload: try another image (jpg, png, webp, gif)`))
-    if (s.done > before) return
+    if (s.done > before && !s.pending) return
   }
   throw new Error(L(ctx, `第 ${n} 张图等了 2 分钟还没传完`, `Image ${n} still wasn't uploaded after 2 minutes`))
 }
@@ -433,10 +475,10 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     await b.type(SEL.title, p.title)
     // 光标放进正文：图片插在光标处，粘贴也从这里开始
     await b.click(SEL.editor)
-    // 正文里没写位置的图放最前面（当题图），其余按正文里 ![](地址) 的位置插
-    const parts = segments(p.body)
+    // 按图切段：文字段粘贴，图在原来的位置上传。Markdown 写法里正文没写位置的图放最前面（当题图）
+    const parts: Segment[] = isHtml(p.body) ? await htmlSegments(b, p.body) : segments(p.body)
     const placed = new Set(parts.flatMap((s) => ('image' in s ? [s.image] : [])))
-    const all = [...images.filter((u) => !placed.has(u)).map((image) => ({ image })), ...parts]
+    const all = isHtml(p.body) ? parts : [...images.filter((u) => !placed.has(u)).map((image) => ({ image })), ...parts]
     let n = 0
     for (const s of all) {
       if ('html' in s) {
@@ -447,6 +489,11 @@ export async function publish(input: { post_id: string; force_interval?: boolean
         ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
         await uploadImage(ctx, b, s.image, n)
       }
+    }
+    // 图都传好了才往下走：数一遍正文里传好的图，和要传的张数对上
+    if (n) {
+      const s = await imageState(b)
+      if (s.pending || s.done < n) throw new Error(L(ctx, `正文里应该有 ${n} 张图，传好的只有 ${s.done} 张${s.pending ? `，还有 ${s.pending} 张没传完` : ''}：没有发布，草稿还在`, `The text should have ${n} images but only ${s.done} uploaded${s.pending ? `, ${s.pending} still uploading` : ''}: nothing was published; the draft is kept`))
     }
     // 粘贴没生效（编辑器换了）时正文是空的：拿第一段文字核对一下
     const plain = (h: string) => norm(h.replace(/<[^>]+>/g, '').replace(/&\w+;/g, ''))

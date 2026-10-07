@@ -20,8 +20,24 @@ export const len = (s: string) => [...(s ?? '')].length
 /** 正文里单独一行的图片：![说明](地址)。助手想让图出现在正文哪里，就在那一行写它 */
 export const IMAGE_LINE = /^!\[[^\]]*\]\(\s*(\S+?)\s*\)$/
 
-/** 正文里写到的图片地址（按出现顺序） */
+/** 正文是不是富文本（HTML，和模板里文章一样的编辑器写的）；不是就按 Markdown 的常用写法读 */
+export const isHtml = (body: string) => /^\s*</.test(String(body ?? ''))
+
+/** 富文本正文的纯文字（字数、检查用） */
+export const htmlText = (html: string) =>
+  String(html ?? '')
+    .replace(/<(br|\/p|\/h\d|\/li|\/blockquote)[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .trim()
+
+/** 正文里的图片地址（按出现顺序）：富文本是 <img src>，Markdown 是单独一行的 ![](地址) */
 export function bodyImages(body: string): string[] {
+  if (isHtml(body)) return [...String(body).matchAll(/<img\b[^>]*?\ssrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1].replace(/&amp;/g, '&'))
   return String(body ?? '')
     .split('\n')
     .map((l) => IMAGE_LINE.exec(l.trim())?.[1] ?? '')
@@ -34,10 +50,11 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; im
   const title = String(d.title ?? '').trim()
   if (!title) out.push(L(ctx, '没有标题', 'No title'))
   else if (len(title) > ZHIHU.titleMax) out.push(L(ctx, `标题 ${len(title)} 个字，最多 ${ZHIHU.titleMax} 个字`, `The title is ${len(title)} characters; max ${ZHIHU.titleMax}`))
-  if (!String(d.body ?? '').trim()) out.push(L(ctx, '没有正文', 'No text'))
+  const plain = isHtml(d.body ?? '') ? htmlText(d.body ?? '') : String(d.body ?? '').trim()
+  if (!plain && !bodyImages(d.body ?? '').length) out.push(L(ctx, '没有正文', 'No text'))
   if ((d.tags?.length ?? 0) > ZHIHU.tagsMax) out.push(L(ctx, `话题 ${d.tags!.length} 个，知乎文章最多 ${ZHIHU.tagsMax} 个`, `${d.tags!.length} topics; Zhihu articles allow ${ZHIHU.tagsMax}`))
   if ((d.images?.length ?? 0) > ZHIHU.imagesMax) out.push(L(ctx, `图片 ${d.images!.length} 张，最多 ${ZHIHU.imagesMax} 张`, `${d.images!.length} images; max ${ZHIHU.imagesMax}`))
-  const text = `${d.title ?? ''}\n${d.body ?? ''}`
+  const text = `${d.title ?? ''}\n${plain}`
   for (const re of ZHIHU.banned) if (re.test(text)) out.push(L(ctx, '含有引导加微信、私下联系的话：知乎会限流或删文', 'Asks readers to add you on WeChat or contact you privately: Zhihu throttles or removes such posts'))
   return out
 }
@@ -57,7 +74,7 @@ function inline(s: string) {
 export type Segment = { html: string } | { image: string }
 
 /**
- * 正文（Markdown 的常用写法：# 标题、- / 1. 列表、> 引用、**加粗**、空行分段）切成几段：
+ * Markdown 正文（常用写法：# 标题、- / 1. 列表、> 引用、**加粗**、空行分段）切成几段：
  * 文字段转成 HTML，粘贴进知乎编辑器（它认 h2、ul、ol、blockquote、b）；单独一行的 ![](地址) 是一张图，在那个位置上传。
  */
 export function segments(body: string): Segment[] {
