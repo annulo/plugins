@@ -62,6 +62,7 @@ const PAGE = 20
 const API = {
   me: '/api/v4/me?include=follower_count,articles_count', // id、url_token、name、avatar_url、follower_count；没登录是 401
   // 创作中心的文章列表：data[].data { id, title, created_time（秒） } + data[].reaction { read_count, vote_up_count, like_count, comment_count, collect_count }
+  publish: '/api/v4/content/publish', // 写文章页点「发布」调的接口；被拒时回 { code, toast_message }
   articles: (offset: number) => `/api/v4/creators/creations/v2/article?start=0&end=0&limit=${PAGE}&offset=${offset}&need_co_creation=1&sort_type=created`,
 }
 const SEL = {
@@ -355,18 +356,40 @@ const imageState = (b: any): Promise<{ done: number; pending: number; failed: bo
     })()`)
     .catch(() => ({ done: 0, pending: 0, failed: false }))
 
-/** 上传一张图，插到正文光标处；等到它传完（最多 2 分钟） */
+/**
+ * 上传一张图，插到正文光标处；等到它传完（最多 2 分钟）。
+ * 知乎服务端偶尔一直回「处理中」，编辑器等 30 秒左右就把图标成「上传失败」（同一张图再传就好，2026-10 实测）：
+ * 点一下失败的图，编辑器会自己重传（最多重试 IMAGE_RETRIES 次）；点完光标停在这张图上，按 ↓ 回到正文末尾，后面的文字和图才接得上。
+ */
+const IMAGE_RETRIES = 3
 async function uploadImage(ctx: any, b: any, url: string, n: number) {
   const before = (await imageState(b)).done
   await b.upload(SEL.imageInput, [url], { timeout: 120000 }).catch((e: any) => {
     throw new Error(L(ctx, `第 ${n} 张图没传上去（图片下载失败或者知乎的图片框变了，SEL.imageInput）：`, `Image ${n} didn't upload (couldn't fetch it, or Zhihu's image input changed — SEL.imageInput): `) + (e?.message ?? e))
   })
-  const end = Date.now() + 120000
+  let retries = 0
+  let end = Date.now() + 120000
   while (Date.now() < end) {
     await ctx.sleep(1500)
     const s = await imageState(b)
-    if (s.failed) throw new Error(L(ctx, `知乎提示第 ${n} 张图上传失败：换一张图（格式支持 jpg、png、webp、gif）`, `Zhihu says image ${n} failed to upload: try another image (jpg, png, webp, gif)`))
-    if (s.done > before && !s.pending) return
+    if (s.failed) {
+      if (retries >= IMAGE_RETRIES) throw new Error(L(ctx, `知乎提示第 ${n} 张图上传失败，重试了 ${retries} 次还是不行：过一会儿再发，或者换一张图（格式支持 jpg、png、webp、gif）`, `Zhihu says image ${n} failed to upload, still failing after ${retries} retries: try again later or use another image (jpg, png, webp, gif)`))
+      retries++
+      ctx.progress({ message: L(ctx, `第 ${n} 张图知乎没传成功，重试第 ${retries} 次…`, `Zhihu failed to upload image ${n}; retry ${retries}…`) })
+      const marked = await b.eval(`(() => {
+        const f = [...document.querySelectorAll(${JSON.stringify(SEL.editor + ' figure')})].find(f => ${TEXT.uploadFailed}.test(f.innerText))
+        if (!f) return false
+        f.setAttribute('data-shuttle-mark', 'failed-image')
+        return true
+      })()`)
+      if (marked) await b.click('[data-shuttle-mark="failed-image"] img').catch(() => {})
+      end = Date.now() + 120000
+      continue
+    }
+    if (s.done > before && !s.pending) {
+      if (retries) await b.press('ArrowDown')
+      return
+    }
   }
   throw new Error(L(ctx, `第 ${n} 张图等了 2 分钟还没传完`, `Image ${n} still wasn't uploaded after 2 minutes`))
 }
@@ -511,6 +534,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
     ctx.progress({ message: L(ctx, '发布…', 'Publishing…') })
     if (!(await markByText(b, SEL.publish, TEXT.publish, 'publish'))) throw new Error(L(ctx, '没找到「发布」按钮（SEL.publish），知乎的页面可能改了', "Couldn't find the Publish button (SEL.publish) — Zhihu's page may have changed"))
+    // 发布被拒（比如「近期发布频率过高，请24小时后重试~」，code 2011）只弹一个几秒就消失的提示，接口回 { code, toast_message }：从接口拿原话
+    b.listen(API.publish)
     await b.click('[data-shuttle-mark="publish"]')
     const end = Date.now() + 60000
     let confirmed = false
@@ -518,6 +543,10 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       await ctx.sleep(1500)
       const m = ARTICLE.exec(String(b.url() ?? ''))
       if (m && !m[2]) return done(m[1], { topics })
+      const rejected = (await b.responses(API.publish, { timeout: 100 }).catch(() => []))
+        .map((r: any) => r.json)
+        .find((j: any) => j && j.code && (j.toast_message || j.message))
+      if (rejected) throw new Error(L(ctx, '知乎没让发：', 'Zhihu refused to publish: ') + (rejected.toast_message || rejected.message) + L(ctx, '（草稿还在）', ' (the draft is kept)'))
       // 有时会弹一个确认框（比如提示内容来源、创作声明）：点里面的「发布 / 确认发布 / 确定」，只点一次
       if (!confirmed && (await markByText(b, `${SEL.modal} button`, TEXT.publishConfirm, 'publish-confirm'))) {
         confirmed = true
