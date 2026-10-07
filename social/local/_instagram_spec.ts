@@ -32,7 +32,7 @@ export function problems(d: { body?: string; tags?: string[]; images?: string[];
   if ((d.tags?.length ?? 0) > IG.tagsMax) out.push(L(ctx, `话题 ${d.tags!.length} 个，最多 ${IG.tagsMax} 个`, `${d.tags!.length} hashtags; max ${IG.tagsMax}`))
   // 有视频就发成 Reel，图片不用（不检查图片张数和封面）
   if (d.video) {
-    if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是素材地址（http / https）或本机文件（local:…）', 'The video must be an asset URL (http / https) or a local file (local:…)'))
+    if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
     return out
   }
   if ((d.images?.length ?? 0) < IG.imagesMin && !d.cover) out.push(L(ctx, 'Instagram 必须配图或视频：文章里没有图，写一句 cover_text 生成文字封面，或者选一个视频', 'Instagram needs an image or a video: the article has none, so write a cover_text for a text cover, or pick a video'))

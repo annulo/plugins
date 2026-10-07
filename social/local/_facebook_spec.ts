@@ -31,7 +31,7 @@ export function problems(d: { body?: string; tags?: string[]; images?: string[];
   if ((d.tags?.length ?? 0) > FB.tagsMax) out.push(L(ctx, `话题 ${d.tags!.length} 个，最多 ${FB.tagsMax} 个`, `${d.tags!.length} hashtags; max ${FB.tagsMax}`))
   // 有视频就发视频帖，图片不用（不检查图片张数）
   if (d.video) {
-    if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是素材地址（http / https）或本机文件（local:…）', 'The video must be an asset URL (http / https) or a local file (local:…)'))
+    if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (d.images && d.images.length > FB.imagesMax) out.push(L(ctx, `图片 ${d.images.length} 张，最多 ${FB.imagesMax} 张`, `${d.images.length} images; max ${FB.imagesMax}`))
   return out
 }

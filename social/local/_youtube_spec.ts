@@ -23,6 +23,6 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; vi
   if (!d.body?.trim()) out.push(L(ctx, '没有正文', 'No text'))
   if (!d.title?.trim()) out.push(L(ctx, '没有视频标题', 'No video title'))
   if (/[<>]/.test(d.title ?? '') || /[<>]/.test(d.body ?? '')) out.push(L(ctx, '标题和描述里不能有 < >（YouTube 不允许）', "Titles and descriptions can't contain < or > (YouTube rule)"))
-  if (!d.video) out.push(L(ctx, '还没选视频：编辑这条，上传本机视频或从素材库选', 'No video yet: edit this post and upload one from this computer or pick one from Assets'))
+  if (!d.video) out.push(L(ctx, '还没选视频：编辑这条，上传本机视频或从资料库选', 'No video yet: edit this post and upload one from this computer or pick one from the Library'))
   return out
 }

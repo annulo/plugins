@@ -41,7 +41,7 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; im
   const video = String(d.video ?? '').trim()
   // 视频笔记不用配图（封面由小红书从视频里自动选），只检查视频地址
   if (video) {
-    if (!isVideoRef(video)) out.push(L(ctx, '视频要是素材地址（http / https）或本机文件（local:…）', 'The video must be an asset URL (http / https) or a local file (local:…)'))
+    if (!isVideoRef(video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (d.images && d.images.length > XHS.imagesMax) out.push(L(ctx, `图片 ${d.images.length} 张，最多 ${XHS.imagesMax} 张`, `${d.images.length} images; max ${XHS.imagesMax}`))
   const text = `${d.title ?? ''}\n${d.body ?? ''}`
   for (const re of XHS.banned) if (re.test(text)) out.push(L(ctx, `含有小红书不允许的内容（${re.source.slice(0, 20)}）：站外链接、引导加微信会被限流`, `Contains content Xiaohongshu doesn't allow (${re.source.slice(0, 20)}): outside links or asking people to add you on WeChat get throttled`))

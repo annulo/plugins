@@ -162,7 +162,7 @@ export function save(input: { article_id?: string; article_title?: string; url?:
   const a = sourceOf(input)
   const ch = biliChannel(ctx, input?.channel_id)
   const video = String(input.video ?? '').trim()
-  if (!isVideoRef(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）；素材库没有视频就先上传一个', 'video must be the URL of a video in Assets (http / https) or a local file (local:…); upload one to Assets first if there is none'))
+  if (!isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；资料库没有视频就先上传一个', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); upload one to the Library first if there is none'))
   const post: Partial<Post> = {
     title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, BILI.titleMax).join(''),
     body: String(input.body ?? '').trim(),

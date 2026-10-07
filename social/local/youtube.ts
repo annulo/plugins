@@ -145,7 +145,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (!body) throw new Error(L(ctx, '描述要写', 'The description is required'))
   const video = String(input.video ?? '').trim()
   // 可以先空着：用户在社媒页编辑这条时上传本机视频（local:<name>）或从素材库选，没视频发布前 problems 会拦住
-  if (video && !/^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)/.test(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be an Assets video URL (http / https) or a local file (local:…); leave it empty if there is none'))
+  if (video && !/^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)/.test(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be a Library video URL (http / https) or a local file (local:…); leave it empty if there is none'))
   const link = /^https?:\/\//.test(a.url ?? '') ? String(a.url) : ''
   if (link && !body.includes(link)) body += '\n\n' + link
   const post: Partial<Post> = {
@@ -471,7 +471,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     ctx.progress({ message: L(ctx, '打开上传对话框…', 'Opening the upload dialog…') })
     await openUpload(ctx, b, ch)
-    ctx.progress({ message: L(ctx, '下载素材库里的视频并上传…', 'Downloading the video from Assets and uploading…') })
+    ctx.progress({ message: L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
     await b.upload(SEL.fileInput, [p.video], { timeout: 10 * 60_000 }).catch((e: any) => {
       throw new Error(L(ctx, '视频没传上去（素材地址下载失败，或者超过 2GB）：', "The video didn't upload (couldn't download the asset URL, or it's over 2GB): ") + (e?.message ?? e))
     })

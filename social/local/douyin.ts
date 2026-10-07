@@ -159,7 +159,7 @@ export function save(input: { article_id?: string; article_title?: string; url?:
   const a = sourceOf(input)
   const ch = dyChannel(ctx, input?.channel_id)
   const video = String(input.video ?? '').trim()
-  if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be the URL of a video in Assets (http / https) or a local file (local:…); leave it empty if none fits'))
+  if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); leave it empty if none fits'))
   const post: Partial<Post> = {
     title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, DOUYIN.titleMax).join(''),
     body: String(input.body ?? '').trim(),

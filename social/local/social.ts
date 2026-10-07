@@ -156,7 +156,7 @@ export function createDraft(input: DirectDraft, ctx: any) {
   const video = String(input.video ?? '').trim()
   const tags = [...new Set((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean))]
   const images = (input.images ?? []).map((s) => String(s).trim())
-  if (images.some((s) => !isAssetUrl(s))) throw new Error(L(ctx, '配图要是素材库里的图片地址', 'Images must be image URLs from Assets'))
+  if (images.some((s) => !isAssetUrl(s))) throw new Error(L(ctx, '配图要是资料库里的图片地址', 'Images must be image URLs from the Library'))
   const problems = PLATFORMS[ch.type].draftProblems({ title, body, tags, images, video }, ctx)
   if (problems.length) throw new Error(problems.join('；'))
   const t = new Date().toISOString()
@@ -176,7 +176,7 @@ export function createDraftBatch(input: { drafts: DirectDraft[] }, ctx: any) {
     if (!ch || !['x', 'bilibili'].includes(ch.type) || !PLATFORMS[ch.type]) throw new Error(L(ctx, '请选 X 或 B站账号', 'Choose X or Bilibili accounts'))
     const tags = [...new Set((d.tags ?? []).map((x) => String(x).replace(/^#/, '').trim()).filter(Boolean))]
     const images = d.images ?? []
-    if (images.some((u) => !isAssetUrl(u))) throw new Error(L(ctx, '配图要是素材库里的图片地址', 'Images must be image URLs from Assets'))
+    if (images.some((u) => !isAssetUrl(u))) throw new Error(L(ctx, '配图要是资料库里的图片地址', 'Images must be image URLs from the Library'))
     const errors = PLATFORMS[ch.type].draftProblems({ title: d.title, body: d.body, tags, images, video: d.video }, ctx)
     if (errors.length) throw new Error(`${ch.name}：${errors.join('；')}`)
   }

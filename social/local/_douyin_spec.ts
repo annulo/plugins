@@ -31,7 +31,7 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; vi
   if (tags.length > DOUYIN.tagsMax) out.push(L(ctx, `话题 ${tags.length} 个，最多 ${DOUYIN.tagsMax} 个`, `${tags.length} hashtags; max ${DOUYIN.tagsMax}`))
   const len = [...descText(String(d.body ?? ''), tags)].length
   if (len > DOUYIN.descMax) out.push(L(ctx, `简介连同话题 ${len} 个字，最多 ${DOUYIN.descMax} 个`, `Description with hashtags is ${len} characters; max ${DOUYIN.descMax}`))
-  if (!d.video) out.push(L(ctx, '还没选视频：编辑这条，上传本机视频或从素材库选', 'No video yet: edit this post and upload one from this computer or pick one from Assets'))
-  else if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是素材地址（http / https）或本机文件（local:…）', 'The video must be an asset URL (http / https) or a local file (local:…)'))
+  if (!d.video) out.push(L(ctx, '还没选视频：编辑这条，上传本机视频或从资料库选', 'No video yet: edit this post and upload one from this computer or pick one from the Library'))
+  else if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   return out
 }

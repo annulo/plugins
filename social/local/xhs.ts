@@ -81,7 +81,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   // 视频笔记：给了 video 就存（素材地址或 local: 本机文件）；不给不动原来的
   if (input.video !== undefined) {
     const video = String(input.video ?? '').trim()
-    if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是素材库里视频的地址（http / https）或本机文件（local:…）', 'video must be an asset URL (http / https) or a local file (local:…)'))
+    if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）', 'video must be a Library URL (http / https) or a local file (local:…)'))
     post.video = video
   }
   const now = new Date().toISOString()
@@ -362,7 +362,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
       await ctx.sleep(1000)
       const sel = await videoInput(b)
       if (!sel) throw new Error(L(ctx, '「上传视频」里没找到选视频的文件框（SEL.videoInput），小红书的页面可能改了', "No video file input under \"上传视频\" (SEL.videoInput) — Xiaohongshu's page may have changed"))
-      ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载素材库里的视频并上传…', 'Downloading the video from Assets and uploading…') })
+      ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
       await b.upload(sel, [video], { timeout: VIDEO_WAIT_MS })
       await waitVideo(ctx, b)
       await b.waitFor(SEL.title, { timeout: 60000 })
