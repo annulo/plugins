@@ -302,7 +302,7 @@ function recentPublished(ctx: any, channelId: string, sinceMs: number): Post[] {
 }
 
 /**
- * 发布一篇笔记到小红书。只发审核通过（approved / scheduled）的；发布前检查平台规格和发布频率。
+ * 发布一篇笔记到小红书。只发审核通过（approved / scheduled）的；发布前检查平台规格；发布频率只是建议，超了照样发。
  * private: true 发成「仅自己可见」（试发用）。
  */
 export async function publish(input: { post_id: string; private?: boolean; force_interval?: boolean }, ctx: any) {
@@ -322,13 +322,13 @@ export async function publish(input: { post_id: string; private?: boolean; force
   const bad = problems({ title: p.title, body: p.body, tags, images, video }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合小红书的规格：', "Doesn't meet Xiaohongshu's limits: ") + bad.join('; '))
 
-  // 频率：两篇之间至少隔 N 分钟，一天最多 M 篇（按这个账号最近的发布算）
   if (!input.private) {
     const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-    if (day.length >= XHS.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 篇，上限 ${XHS.dailyMax} 篇，明天再发`, `"${ch.name}" already posted ${day.length} notes in 24 hours (limit ${XHS.dailyMax}); post again tomorrow`))
+    // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+    if (day.length >= XHS.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 篇，上限 ${XHS.dailyMax} 篇，明天再发`, `"${ch.name}" already posted ${day.length} notes in 24 hours (limit ${XHS.dailyMax}); post again tomorrow`))
     const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
     const wait = last + XHS.minIntervalMinutes * 60_000 - Date.now()
-    if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一篇刚发不久，两篇至少隔 ${XHS.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; notes need at least ${XHS.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+    if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一篇刚发不久，两篇至少隔 ${XHS.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; notes need at least ${XHS.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
   }
 
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: new Date().toISOString(), error: null })
@@ -404,7 +404,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
   }
 }
 
-/** 到点的排期笔记逐篇发布（定时任务调用）。一次最多发 1 篇，其余等下一轮，频率限制照样生效 */
+/** 到点的排期笔记逐篇发布（定时任务调用）。一次最多发 1 篇，其余等下一轮 */
 export async function publishDue(input: {}, ctx: any) {
   const now = Date.now()
   const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list

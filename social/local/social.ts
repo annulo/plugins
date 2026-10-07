@@ -16,7 +16,7 @@ export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewh
 //   social.check / publish / remove({ post_id })
 //   social.login({ type, channel_id? })          添加账号 / 重新登录
 //   social.collect({ channel_id } | { type })     采集一个账号，或者某个平台的全部账号（定时任务）
-//   social.publishDue({ type })                  发布某个平台到点的排期（定时任务；一次一条，频率限制照样生效）
+//   social.publishDue({ type })                  发布某个平台到点的排期（定时任务；一次一条）
 //   social.probe({ channel_id })                 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发（各平台的 probe）
 //   social.probeAll()                            自检所有已登录的账号（定时任务，每天一次）
 //   social.health()                              各账号最近一次自检 / 发布 / 删除 / 采集成没成（social_health）

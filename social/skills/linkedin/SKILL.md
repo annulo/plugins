@@ -29,7 +29,7 @@ LinkedIn 的开放接口要申请合作伙伴权限，登录、发布、采集�
 | `social/linkedin.checkLogin({ channel_id })` | 后台检查登录是否还有效 |
 | `social/linkedin.save({ article_id, channel_id, title?, body, tags, post_id? })` | 存一条写好的帖子（pending_review），返回 `problems`；文章有 `url` 会接在正文最后。写帖子本身按任务 `plugins/social/tasks/write-linkedin.md` |
 | `social/linkedin.check({ post_id })` | 规格检查：正文 + 话题 ≤ 3000 字符、话题 ≤ 5 个、图片 ≤ 9 张（见 `plugins/social/local/_linkedin_spec.ts`） |
-| `social/linkedin.publish({ post_id })` | 发布。检查规格和频率（两条隔 60 分钟、一天 5 条）；上次中断过的先去动态里找有没有这条，避免重复发 |
+| `social/linkedin.publish({ post_id })` | 发布。检查规格（发布频率只是建议：两条隔 60 分钟、一天 5 条，超了照样发）；上次中断过的先去动态里找有没有这条，避免重复发 |
 | `social/linkedin.publishDue({})` | 定时任务：到点的排期帖子逐条发布 |
 | `social/linkedin.remove({ post_id })` | 从 LinkedIn 删除一条已发布的帖子（不可恢复，只在用户明确要求时调） |
 | `social/linkedin.collect({ channel_id? })` | 采集自己「动态 → 帖子」里最近的帖子和粉丝数；在 LinkedIn 上直接发的也收进来（source: platform） |

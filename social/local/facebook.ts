@@ -654,7 +654,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
 }
 
 /**
- * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格和发布频率。
+ * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去主页上找有没有这条，避免重复发。主页渠道先切到主页身份再发。
  */
 export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
@@ -674,10 +674,11 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const text = postText(p.body, tags)
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-  if (day.length >= FB.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${FB.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${FB.dailyMax}); post again tomorrow`))
+  // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+  if (day.length >= FB.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${FB.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${FB.dailyMax}); post again tomorrow`))
   const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
   const wait = last + FB.minIntervalMinutes * 60_000 - Date.now()
-  if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${FB.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${FB.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+  if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${FB.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${FB.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
@@ -735,7 +736,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/** 到点的排期帖子逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮，频率限制照样生效 */
+/** 到点的排期帖子逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮 */
 export async function publishDue(_input: {}, ctx: any) {
   const fbs = new Set(ctx.db.query('social_accounts', { where: { type: 'facebook' }, limit: 100 }).list.map((c: any) => c.id))
   if (!fbs.size) return { due: 0 }

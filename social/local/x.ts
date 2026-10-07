@@ -413,7 +413,7 @@ async function openComposer(ctx: any, b: any, ch: any) {
 }
 
 /**
- * 发布一条推文。只发审核通过（approved / scheduled）的；发布前检查规格和每日上限。
+ * 发布一条推文。只发审核通过（approved / scheduled）的；发布前检查规格；每日条数只是建议，超了照样发。
  * 上次发布中断过的，先去主页找有没有这条，避免重复发。
  */
 export async function publish(input: { post_id: string }, ctx: any) {
@@ -433,7 +433,8 @@ export async function publish(input: { post_id: string }, ctx: any) {
   ctx.log('X publish target', p.id, ch.id)
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-  if (day.length >= X.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${X.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${X.dailyMax}); post again tomorrow`))
+  // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+  if (day.length >= X.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${X.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${X.dailyMax}); post again tomorrow`))
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (id: string, extra: object = {}) => {
@@ -511,7 +512,7 @@ export async function publish(input: { post_id: string }, ctx: any) {
   }
 }
 
-/** 到点的排期推文逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮；每日上限照样生效 */
+/** 到点的排期推文逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮 */
 export async function publishDue(input: {}, ctx: any) {
   const xs = new Set(ctx.db.query('social_accounts', { where: { type: 'x' }, limit: 100 }).list.map((c: any) => c.id))
   if (!xs.size) return { due: 0 }

@@ -35,8 +35,8 @@ pending_review ─通过─▶ approved ─立即发布─▶ publishing ─▶ 
 | `social/xhs.checkLogin({ channel_id })` | 后台检查登录是否还有效，写回 `login_status` |
 | `social/xhs.save({ article_id, channel_id, title, body, tags, cover_text, post_id? })` | 存一篇写好的笔记（pending_review），校验规格、返回 `problems`；同一篇文章在一个账号上已有笔记会报错。写笔记本身按任务 `plugins/social/tasks/write-xiaohongshu.md` |
 | `social/xhs.check({ post_id })` | 按平台规格检查（标题 20 字、正文 1000 字、话题 10 个、站外链接、引导加微信、广告法绝对化用语） |
-| `social/xhs.publish({ post_id, private? })` | 发布。`private: true` 发成仅自己可见（试发）。发布前检查规格和频率（两篇隔 2 小时、一天 3 篇，见 `plugins/social/local/_xhs_spec.ts`）；上次中断过的先查平台上有没有这篇，避免重复发 |
-| `social/xhs.publishDue({})` | 定时任务：到点的排期笔记逐篇发布，碰到频率限制就放回排期下一轮再试 |
+| `social/xhs.publish({ post_id, private? })` | 发布。`private: true` 发成仅自己可见（试发）。发布前检查规格；发布频率只是建议（两篇隔 2 小时、一天 3 篇，超了照样发，见 `plugins/social/local/_xhs_spec.ts`）；上次中断过的先查平台上有没有这篇，避免重复发 |
+| `social/xhs.publishDue({})` | 定时任务：到点的排期笔记逐篇发布，一次一篇 |
 | `social/xhs.remove({ post_id })` | 从小红书删除一篇已发布的笔记（不可恢复，只在用户明确要求时调） |
 | `social/xhs.collect({ channel_id? })` | 采集：笔记列表的互动数据、粉丝数写回表里；平台上直接发的笔记也收进来 |
 | `social/social.purge({ post_id })` | 彻底删掉一条已删除 / 已退回的记录和它每天的互动数据（页面上的「删除记录」）。还在平台上的不能删，先 `social/xhs.remove`；只在用户明确要求时调 |
