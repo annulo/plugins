@@ -8,7 +8,7 @@ export const cloud = ['check', 'createDraftBatch']
 // 手机上点也能做，转给电脑上开着的 Annulo 跑（要本机浏览器的登录态）
 export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewhereAll']
 
-// 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts）。
+// 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts、zhihu.ts）。
 // 页面上的按钮调这里，不用关心笔记 / 推文是哪个平台的。支持哪些平台在 _platforms.ts。项目里的名字都带插件 id：social/social.publish、social/x.save……
 //
 //   social.context({ article_id?, channel_ids })  写帖子前取账号的上下文（定位、这篇内容在这个账号有没有写过）。要改写的内容本身由模板的取数函数给（见 PLUGIN.md）；
@@ -113,6 +113,7 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
     xiaohongshu: uid ? `https://www.xiaohongshu.com/user/profile/${uid}` : '',
     bilibili: uid ? `https://space.bilibili.com/${uid}` : '',
     douyin: uid ? `https://www.douyin.com/user/${uid}` : '',
+    zhihu: handle ? `https://www.zhihu.com/people/${handle}` : '',
     x: handle ? `https://x.com/${handle}` : '',
     linkedin: handle ? `https://www.linkedin.com/in/${handle}/` : '',
     instagram: handle ? `https://www.instagram.com/${handle}/` : '',

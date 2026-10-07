@@ -38,7 +38,7 @@ annulo run social/social.probe --input '{"channel_id":"<channel_id>"}'
 
 ## 3. 改平台文件
 
-平台文件在 `plugins/social/local/` 下：`linkedin.ts`（LinkedIn）、`x.ts`（X）、`facebook.ts`、`instagram.ts`、`youtube.ts`、`xhs.ts`（小红书）、`douyin.ts`（抖音）、`bilibili.ts`（B 站）。
+平台文件在 `plugins/social/local/` 下：`linkedin.ts`（LinkedIn）、`x.ts`（X）、`facebook.ts`、`instagram.ts`、`youtube.ts`、`xhs.ts`（小红书）、`douyin.ts`（抖音）、`bilibili.ts`（B 站）、`zhihu.ts`（知乎）。
 页面元素在文件开头的 `SEL` 常量里，数据接口在 `API` 常量里；发布、自检共用同一份代码（`openComposer` 这类函数），改一处两边都好。
 
 - **加，不删**：在原来的选择器后面用逗号加上新的（`'旧的, 新的'`），旧的留着——平台常常同时跑新旧两版页面，不同用户看到的不一样。

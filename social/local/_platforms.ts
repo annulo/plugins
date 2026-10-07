@@ -11,5 +11,6 @@ import * as youtube from './youtube'
 import * as xhs from './xhs'
 import * as douyin from './douyin'
 import * as bilibili from './bilibili'
+import * as zhihu from './zhihu'
 
-export const PLATFORMS: Record<string, any> = { x, linkedin, facebook, instagram, youtube, xiaohongshu: xhs, douyin, bilibili }
+export const PLATFORMS: Record<string, any> = { x, linkedin, facebook, instagram, youtube, xiaohongshu: xhs, douyin, bilibili, zhihu }

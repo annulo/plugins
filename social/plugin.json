@@ -1,8 +1,8 @@
 {
   "name": { "zh": "社媒", "en": "Social media" },
   "description": {
-    "zh": "管理 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站账号：用本机浏览器登录，把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数。",
-    "en": "Manage X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin and Bilibili accounts: log in with this computer's browser, rewrite content into posts for each platform, publish or schedule them after review, and collect engagement and follower numbers on a schedule."
+    "zh": "管理 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎账号：用本机浏览器登录，把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数。",
+    "en": "Manage X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin, Bilibili and Zhihu accounts: log in with this computer's browser, rewrite content into posts for each platform, publish or schedule them after review, and collect engagement and follower numbers on a schedule."
   },
   "min_annulo_api": 33
 }

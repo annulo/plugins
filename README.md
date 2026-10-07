@@ -4,7 +4,7 @@ Plugins for [Annulo](https://github.com/annulo) projects. A project is a templat
 
 | Plugin | What you get |
 |---|---|
-| [`social`](social) | X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin and Bilibili accounts: log in with this computer's browser, rewrite content into posts for each platform, publish or schedule them after review, and collect engagement and follower numbers. See [`social/PLUGIN.md`](social/PLUGIN.md). |
+| [`social`](social) | X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin, Bilibili and Zhihu accounts: log in with this computer's browser, rewrite content into posts for each platform, publish or schedule them after review, and collect engagement and follower numbers. See [`social/PLUGIN.md`](social/PLUGIN.md). |
 
 ## Install a plugin
 

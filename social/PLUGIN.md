@@ -1,6 +1,6 @@
 # 社媒插件（social）
 
-管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站的账号和帖子：用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），
+管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎的账号和帖子：用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），
 把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版时自检、交给助手修。
 
 插件只管社媒这一段；**内容从哪来、页面怎么排是模板的事**。这份说明写给助手：项目要用社媒时照这里接。
@@ -21,7 +21,7 @@
 
 | 表 | 内容 |
 |---|---|
-| `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
+| `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili / zhihu）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
 | `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
 | `social_daily` | 账号每天一行：粉丝和互动合计 |
 | `social_post_daily` | 帖子每天一行：当天最后一次采集的累计数 |
@@ -54,7 +54,7 @@
 
 ## 写帖子：模板给内容，插件写和存
 
-每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、youtube、xiaohongshu、douyin、bilibili），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
+每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、youtube、xiaohongshu、douyin、bilibili、zhihu），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
 
 ```json
 { "source": { "fn": "<模板的取数函数>", "id": "<内容 id>" }, "channel_ids": ["<账号 id>", "…"] }
@@ -67,8 +67,8 @@
   id: string           // 内容 id，存成帖子的 article_id
   title: string
   text: string         // 纯文本正文（截到几千字就够）
-  url?: string         // 内容的链接：X、LinkedIn、Facebook、YouTube 会接在正文后
-  images?: string[]    // 配图：http(s) 地址，离线项目是本机上传的 /_annulo/uploaded/…；图文平台从这里取
+  url?: string         // 内容的链接：X、LinkedIn、Facebook、YouTube 会接在正文后；知乎文章可以在文末写一句
+  images?: string[]    // 配图：http(s) 地址，离线项目是本机上传的 /_annulo/uploaded/…；图文平台从这里取，知乎文章插在正文里
   videos?: { url: string; name?: string; text?: string; tags?: string }[]  // 候选视频：YouTube、抖音、B 站从这里挑
   project?: unknown    // 项目资料（公司、产品、语气），写的时候参考
   research?: unknown   // 调研证据，有就引用
@@ -78,6 +78,9 @@
 助手照任务跑取数函数和 `social/social.context`（账号定位、这篇内容在哪些账号已经写过），写完调 `social/<平台>.save` 存成待审。
 写法（结构、语气、长度）是用户的：默认在 `prompts/write-<平台>.md`，用户在页面上改的存 `user/plugins/social/prompts/write-<平台>.md`。
 页面上放「AI 要求」按钮时，任务 id 写 `social/write-<平台>`。
+
+知乎发的是专栏文章：`title` 是文章标题（≤100 字），`body` 是 Markdown 常用写法的正文（`##` 小标题、列表、引用、加粗），
+单独一行的 `![](地址)` 是插在那里的配图，`images` 里正文没写到位置的图放在最前面当题图；`tags` 是文章话题（最多 3 个）。
 
 ## 定时任务
 
