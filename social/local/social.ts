@@ -11,7 +11,7 @@ export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewh
 // 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts、zhihu.ts）。
 // 页面上的按钮调这里，不用关心笔记 / 推文是哪个平台的。支持哪些平台在 _platforms.ts。项目里的名字都带插件 id：social/social.publish、social/x.save……
 //
-//   social.context({ article_id?, channel_ids })  写帖子前取账号的上下文（定位、这篇内容在这个账号有没有写过）。要改写的内容本身由模板的取数函数给（见 PLUGIN.md）；
+//   social.context({ article_id?, channel_ids })  写帖子前取账号的上下文（定位、这篇内容在这个账号有没有写过、没发出去的那一版现在的内容）。要改写的内容本身由模板的取数函数给（见 PLUGIN.md）；
 //                                                 写由助手按各平台的任务（tasks/write-<平台>.md）做，存用各平台的 save（social/x.save、social/xhs.save……）
 //   social.check / publish / remove({ post_id })
 //   social.login({ type, channel_id? })          添加账号 / 重新登录
@@ -141,7 +141,9 @@ export function context(input: { article_id?: string; channel_ids: string[] }, c
     const own = articleId ? ctx.db.query('social_posts', { where: { article_id: articleId, channel_id: id }, limit: 50 }).list.filter((p: any) => p.status !== 'rejected' && p.status !== 'removed') : []
     // 还没发出去的最新一版：AI 改写时改它（带 post_id 存回去），不另起一条；只有已发布的版本时 post_id 为空，另写一条新的
     const draft = own.filter((p: any) => !['published', 'publishing'].includes(p.status)).sort((x: any, y: any) => String(y.updated_at ?? '').localeCompare(String(x.updated_at ?? '')))[0]
-    return { id: ch.id, name: ch.name, type: ch.type, profile: ch.profile ?? '', has_post: own.length > 0, post_id: draft?.id ?? '' }
+    // 那一版现在的内容（可能是用户手改过的）：页面上「AI 改写」带着改写要求（任务参数 note）时，在它的基础上改
+    const tags = (() => { try { return JSON.parse(draft?.tags ?? '[]') } catch { return [] } })()
+    return { id: ch.id, name: ch.name, type: ch.type, profile: ch.profile ?? '', has_post: own.length > 0, post_id: draft?.id ?? '', draft: draft ? { title: draft.title ?? '', body: draft.body ?? '', tags } : null }
   })
   return { channels }
 }

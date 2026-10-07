@@ -24,6 +24,7 @@ annulo run social/social.context --input '{"article_id":"<source.id>","channel_i
 
 `channels` 是每个账号和它的定位（`profile`）。
 `post_id` 不为空的账号已经有这篇内容还没发出去的版本：改写那一条，存的时候带上这个 `post_id`，不要另起一条；`has_post` 为 true 但 `post_id` 为空，说明只有已经发出去的版本，另写一条新的。
+有 `note` 时是改写：在 `draft`（那一版现在的标题、正文、话题，可能是用户手改过的）的基础上按 `note` 改，没让改的地方保持原样，存的时候带上 `post_id`；`note` 和写法冲突时照 `note`（规则里的平台限制照样要守）。没有 `draft` 就按 `note` 的意思写一版新的。
 
 按名称、说明和标签从 `videos` 里挑和这篇内容最相关的一个。**没有合适的视频（或者没有 `videos`）就把 `video` 留空照样存**：用户审核时可以上传本机视频或另选。
 

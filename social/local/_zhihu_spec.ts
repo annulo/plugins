@@ -140,3 +140,10 @@ export function segments(body: string): Segment[] {
   flush()
   return out
 }
+
+/** Markdown 正文转成富文本 HTML（旧的 Markdown 写法的版本放进富文本编辑器时用）：单独一行的 ![](地址) 变成一张图 */
+export function markdownToHtml(body: string): string {
+  return segments(body)
+    .map((s) => ('html' in s ? s.html : `<p><img src="${esc(s.image)}"></p>`))
+    .join('')
+}

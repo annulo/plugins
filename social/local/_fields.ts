@@ -11,7 +11,7 @@ import { LI, postText as liText } from './_linkedin_spec'
 import { X, tweetText, xLen } from './_x_spec'
 import { XHS } from './_xhs_spec'
 import { YT, postText as ytText } from './_youtube_spec'
-import { ZHIHU, htmlText } from './_zhihu_spec'
+import { ZHIHU, htmlText, isHtml, markdownToHtml } from './_zhihu_spec'
 
 export type PostFields = {
   /** 标题：publish 会发出去；note 平台上没有标题（X、LinkedIn…），只是后台列表里认这条用的 */
@@ -47,3 +47,9 @@ export const FIELDS: Record<string, PostFields> = {
   bilibili: { title: 'publish', titleMax: BILI.titleMax, body: 'text', bodyMax: BILI.descMax, len: (b, t) => chars(biliDesc(b, t)), tags: BILI.tagsMax, images: 0, video: 'only', cover: false, category: true },
   zhihu: { title: 'publish', titleMax: ZHIHU.titleMax, body: 'rich', bodyMax: 50000, len: (b) => chars(htmlText(b).replace(/\s+/g, '')), tags: ZHIHU.tagsMax, images: 0, cover: false, category: false },
 }
+
+/**
+ * 富文本平台的正文：已经是 HTML 原样返回；旧的 Markdown 写法（## 小标题、- 列表、单独一行的 ![](地址)）转成 HTML，
+ * 模板把它放进富文本编辑器、预览之前过一遍，不然 Markdown 会挤成一整段。
+ */
+export const toRich = (body: string) => (!String(body ?? '').trim() || isHtml(body) ? String(body ?? '') : markdownToHtml(body))

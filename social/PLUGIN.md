@@ -57,8 +57,10 @@
 每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、youtube、xiaohongshu、douyin、bilibili、zhihu），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
 
 ```json
-{ "source": { "fn": "<模板的取数函数>", "id": "<内容 id>" }, "channel_ids": ["<账号 id>", "…"] }
+{ "source": { "fn": "<模板的取数函数>", "id": "<内容 id>" }, "channel_ids": ["<账号 id>", "…"], "note": "<可选：这次怎么改>" }
 ```
+
+`note` 是改写要求（页面上「AI 改写」弹框里填的）：有它时助手在那一版现在的内容上按它改（`social.context` 返回的 `draft`），没提到的地方不动；第一次生成不传。
 
 **模板要提供取数函数**（`source.fn`，比如外贸模板的 `content.socialSource`）：输入 `{ id }`，返回要改写的内容
 
