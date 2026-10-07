@@ -484,9 +484,12 @@ export async function publish(input: { post_id: string }, ctx: any) {
     const created = rs.filter((r: any) => /\/Create(?:Note)?Tweet(?:\?|$)/.test(r.url ?? ''))
     ctx.log('X publish responses', JSON.stringify(rs.map((r: any) => ({ url: String(r.url).split('?')[0], status: r.status, errors: r.json?.errors?.map((e: any) => e.message) }))))
     for (const r of created) {
-      const result = r.json?.data?.create_tweet?.tweet_results?.result ?? r.json?.data?.create_note_tweet?.tweet_results?.result
+      // 长推文（CreateNoteTweet）的结果在 data.notetweet_create 下
+      const d = r.json?.data
+      const result = (d?.create_tweet ?? d?.notetweet_create ?? d?.create_note_tweet)?.tweet_results?.result
       const id = result?.rest_id ?? result?.tweet?.rest_id
       if (id) return done(String(id))
+      ctx.log('X publish: no tweet id in response', JSON.stringify(Object.keys(d ?? {})))
     }
     // 页面已发成功但响应接口变了时，先检查实际帖子，不把它误判成失败或再次发送。
     const snapshot = (await b.snapshot({ label: 'publish-confirm' }).catch(() => null))?.dir
