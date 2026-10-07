@@ -60,8 +60,8 @@ const SEL = {
   mediaBtn: 'button[aria-label="Media"], button[aria-label="媒体"], button[aria-label*="Add media"], button[aria-label*="Add a photo"], button[aria-label*="添加媒体"], button[aria-label*="添加照片"]',
   videoBtn: 'button[aria-label*="Add a video"], button[aria-label*="添加视频"]', // 老版发帖框图片、视频是两个按钮
   fileInput: 'input[type="file"]',
-  // 2025 年底新版的 class 是混淆过的：按钮文字正好是 Post / 发布 的那个由 markPostBtn 打上 data-shuttle-post；老版的 class 兜底
-  postBtn: 'button[data-view-name="share-post"], button[data-shuttle-post], button.share-actions__primary-action',
+  // 发布按钮由 markPostBtn 在当前发帖框里定位，避免点到信息流里的同名按钮
+  postBtn: 'button[data-shuttle-post]',
   // 发完的提示条「Post successful. View post」里的链接；新版是 [role=alert]
   toastLink: '[role="alert"] a[href*="/feed/update/"], .artdeco-toast-item a[href*="/feed/update/"], .artdeco-toasts_toasts a[href*="/feed/update/"]',
   controlMenu: 'button.feed-shared-control-menu__trigger, button[aria-label*="control menu"], button[aria-label*="更多操作"]',
@@ -386,10 +386,20 @@ async function fillText(ctx: any, b: any, text: string) {
   await ctx.sleep(800)
 }
 
-/** 新版发帖页的「Post」按钮没有稳定的 class：找文字正好是 Post / 发布 的按钮，打上 data-shuttle-post（SEL.postBtn 认它） */
+/** 新版发帖页的按钮没有稳定 class；中文版的按钮文字是「动态」而非「发布」 */
 function markPostBtn(b: any) {
   return b
-    .eval(`(() => { const e = [...document.querySelectorAll('button')].find(x => /^(Post|发布|發佈)$/.test((x.innerText || '').trim())); if (e) e.setAttribute('data-shuttle-post', '1'); return !!e })()`)
+    .eval(`(() => {
+      document.querySelectorAll('[data-shuttle-post]').forEach(x => x.removeAttribute('data-shuttle-post'))
+      const editor = [...document.querySelectorAll(${JSON.stringify(SEL.editor)})].pop()
+      if (!editor) return false
+      const scope = editor.closest('dialog, [role="dialog"]') || editor.closest('.share-creation-state, .share-box') || document
+      const buttons = [...scope.querySelectorAll('button')]
+      const e = buttons.find(x => /^(Post|发布|發佈|动态|動態)$/.test((x.innerText || '').trim()))
+        || buttons.find(x => x.matches('button[data-view-name="share-post"], button.share-actions__primary-action'))
+      if (e) e.setAttribute('data-shuttle-post', '1')
+      return !!e
+    })()`)
     .catch(() => false)
 }
 
@@ -398,10 +408,13 @@ async function waitPostable(ctx: any, b: any, timeoutMs: number, video = false) 
   const start = Date.now()
   const deadline = start + timeoutMs
   let told = start
+  let found = false
   while (Date.now() < deadline) {
-    await markPostBtn(b)
-    const ok = await b.eval(`(() => { const e = document.querySelector('${SEL.postBtn}'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
-    if (ok) return
+    if (await markPostBtn(b)) {
+      found = true
+      const ok = await b.eval(`(() => { const e = document.querySelector('${SEL.postBtn}'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
+      if (ok) return
+    }
     if (video && Date.now() - told >= 15000) {
       told = Date.now()
       const secs = Math.round((Date.now() - start) / 1000)
@@ -409,6 +422,7 @@ async function waitPostable(ctx: any, b: any, timeoutMs: number, video = false) 
     }
     await ctx.sleep(video ? 2000 : 1000)
   }
+  if (!found) throw new Error(L(ctx, '发帖框里没找到发布按钮，LinkedIn 的页面可能改了', "Couldn't find the Post button in the composer — LinkedIn's page may have changed"))
   throw new Error(
     video
       ? L(ctx, `等了 ${Math.round(timeoutMs / 60_000)} 分钟，发布按钮还是灰的（视频没处理完，或者超过了 LinkedIn 的限制：最长 ${LI.videoMaxMinutes} 分钟）`, `Waited ${Math.round(timeoutMs / 60_000)} minutes and the Post button is still disabled (video not processed yet, or over LinkedIn's limit of ${LI.videoMaxMinutes} minutes)`)
@@ -547,7 +561,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     // 正文里有链接时 LinkedIn 要生成预览卡片，填完马上点 Post 会没反应（新版）：等它稳定一下
     await ctx.sleep(4000)
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
-    await markPostBtn(b)
+    if (!(await markPostBtn(b))) throw new Error(L(ctx, '发帖框里没找到发布按钮，LinkedIn 的页面可能改了', "Couldn't find the Post button in the composer — LinkedIn's page may have changed"))
     await b.click(SEL.postBtn)
     // 视频帖子点了发布后 LinkedIn 还要处理一会儿，成功提示来得晚
     const urn = await newPostId(ctx, b, video ? 180000 : 45000)
@@ -726,8 +740,7 @@ export async function probe(input: { channel_id: string }, ctx: any) {
     })
     await t.step('composer', L(ctx, '打开发帖框', 'Open the composer'), () => openComposer(ctx, b, ch))
     await t.step('post_button', L(ctx, '找到发布按钮', 'Find the Post button'), async () => {
-      await markPostBtn(b)
-      if (!(await b.exists(SEL.postBtn))) throw new Error(L(ctx, '发帖框里没找到发布按钮（SEL.postBtn）', 'No Post button in the composer (SEL.postBtn)'))
+      if (!(await markPostBtn(b)) || !(await b.exists(SEL.postBtn))) throw new Error(L(ctx, '发帖框里没找到发布按钮（SEL.postBtn）', 'No Post button in the composer (SEL.postBtn)'))
     })
     await t.soft('media', L(ctx, '上传图片 / 视频的入口', 'Image / video upload'), async () => {
       // 有 input 就看 accept 收不收视频；没有就只确认「添加媒体」按钮在（不点：点了会弹系统的选文件窗口）
