@@ -653,7 +653,8 @@ async function openComposer(ctx: any, b: any, ch: any) {
   await b.goto(channelUrl(ch))
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
   await ctx.sleep(3000)
-  const deadline = Date.now() + 30000
+  // 脚本自己只试约 10 秒（一两轮），认不出入口就交给浏览器助手，别空转半分钟
+  const deadline = Date.now() + 10000
   while (Date.now() < deadline) {
     if (await b.exists(SEL.editor).catch(() => false)) return
     const clicked = (await clickText(b, { scope: '[role="main"]', sel: '[role="button"]', re: SEL.composerEntry })) || (await b.click(SEL.composerEntryLabel, { timeout: 2000 }).then(() => true, () => false))

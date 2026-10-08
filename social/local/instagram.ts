@@ -673,7 +673,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       let helped = false
       while (!(await b.exists(SEL.caption).catch(() => false))) {
         // 一直没点到「下一步」（Instagram 换了界面、按钮换了字、弹窗挡着）：交给浏览器助手走到写说明的页面，「分享」不许它点。只请一次
-        if (!helped && (clicks === 0 ? Date.now() > deadline - (video ? 4 * 60_000 : 40_000) : Date.now() > deadline)) {
+        // 脚本自己只找一小会儿（图片帖约 8 秒、视频帖约 30 秒，视频要等处理）就交给助手，别空转太久
+        if (!helped && (clicks === 0 ? Date.now() > deadline - (video ? 4.5 * 60_000 : 52_000) : Date.now() > deadline)) {
           helped = true
           if (await assist(ctx, b, '点「下一步 / Next / 继续」走到写说明（caption）的页面，有弹窗挡着先关掉；不要点分享', { until: SEL.caption, avoid: TEXT.share, maxSteps: 8 })) break
         }

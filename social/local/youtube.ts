@@ -280,20 +280,23 @@ async function useChannel(ctx: any, b: any, ch: any) {
   await b.goto(`${STUDIO}/channel/${ch.platform_uid}`)
   await ctx.sleep(3000)
   const uc = await studioChannel(b)
-  if (!uc || uc === ch.platform_uid) return
+  if (!uc || uc === ch.platform_uid) return // 没登录：后面各自的检查会报登录过期
   const target = (await listChannels(ctx, b)).find((c) => c.id === ch.platform_uid)
-  if (!target?.signin) return
+  if (!target?.signin) throw new Error(L(ctx, `这个浏览器登录的 Google 账号下没有频道「${ch.name}」：到「社媒」里给它点「重新登录」`, `The Google account in this browser doesn't have the channel "${ch.name}": click "Log in again" for it on the Social media page`))
   ctx.progress({ message: L(ctx, `切换到频道「${ch.name}」`, `Switching to the channel "${ch.name}"`) })
   await b.goto(new URL(target.signin, SITE).toString())
   await ctx.sleep(3000)
   await b.goto(`${STUDIO}/channel/${ch.platform_uid}`)
   await ctx.sleep(3000)
+  // 切完再核对一次：还不是这个频道就停下，免得发到、删到别的频道
+  const now = await studioChannel(b)
+  if (now && now !== ch.platform_uid) throw new Error(L(ctx, `没能切换到频道「${ch.name}」（Studio 里还是 ${now}）：到「社媒」里给它点「重新登录」`, `Couldn't switch to the channel "${ch.name}" (Studio is still on ${now}): click "Log in again" for it on the Social media page`))
 }
 
 /** 打开这个频道的浏览器，并切到这个频道 */
 async function openFor(ctx: any, ch: any) {
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
-  await useChannel(ctx, b, ch).catch(() => {})
+  await useChannel(ctx, b, ch) // 切不到这个频道就报错，不往下发（不能吞掉：会发到别的频道）
   return b
 }
 
@@ -375,7 +378,9 @@ export function addChosen(input: { choose: { profile: string; pages: { id: strin
 export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = ytChannel(ctx, input?.channel_id)
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again"`))
-  const b = await openFor(ctx, ch)
+  // 检查登录：切不过去也不抛错，下面比对频道 id，不对就记成登录过期
+  const b = await openBrowser(ctx, { profile: ch.browser_profile })
+  await useChannel(ctx, b, ch).catch(() => {})
   await b.goto(ch.platform_uid ? `${STUDIO}/channel/${ch.platform_uid}` : STUDIO)
   await ctx.sleep(4000)
   const uc = await studioChannel(b)
