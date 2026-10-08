@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.6.0
+  zh: 添加 Facebook 时，个人号和你管理的公共主页列出来勾选，只添加勾上的（不同项目可以各用一个主页）；添加 YouTube 时，同一个 Google 账号下有几个频道也列出来勾选，发布、采集前自动切到对应的频道。Facebook 和 YouTube 的账号名、头像读对了（之前会读成「管理公共主页」「XX的头像」或频道 id）。需要模板的勾选弹窗：外贸第 122 版、自媒体 0.10.0 起。
+  en: "When adding Facebook, your personal profile and the Pages you manage are listed to pick from, and only the picked ones are added (different projects can each use one Page); when adding YouTube, all channels under the Google account are listed the same way, and publishing and collecting switch to the right channel first. Facebook and YouTube account names and avatars are read correctly (they could show up as \"Manage Page\", \"X's profile picture\" or a channel id). Needs the picking dialog in the templates: Trade v122 and Creator 0.10.0 or later."
 - version: 0.5.5
   zh: Facebook：发帖时弹出的推广窗（比如「直接与用户对话」让你加「立即拨打」按钮）会自动点「以后再说」关掉，定时发布不会被它挡住。
   en: "Facebook: promo popups that show up while posting (like \"Talk to people directly\" asking to add a Call button) are dismissed with \"Not now\", so scheduled posts aren't blocked by them."
