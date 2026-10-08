@@ -127,7 +127,9 @@ export async function track<T>(ctx: any, ch: { id: string; type: string; login_s
   if (open) c.browser = { ...ctx.browser, open: async (o: any) => { const b = await open(o); pages.push(b); return b } }
   try {
     const out = await fn(c)
-    if (pages.length) record(ctx, ch, op, { ok: true })
+    // 浏览器助手帮过的步骤（_assist.ts）带进这次成功的记录：平台可能改了页面，提醒把新写法改进代码
+    const assisted: any[] = c.__assisted ?? []
+    if (pages.length) record(ctx, ch, op, { ok: true, ...(assisted.length ? { steps: assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })) } : {}) })
     return out
   } catch (e: any) {
     if (pages.length) {

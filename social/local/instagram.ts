@@ -3,6 +3,7 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired, runProbe } from './_health'
+import { assist } from './_assist'
 
 // Instagram 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。支持个人 / 创作者账号的图片帖子（单图、多图）和视频帖（发成 Reel）。
 //
@@ -669,7 +670,13 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     {
       const deadline = Date.now() + (video ? 5 * 60_000 : 60_000)
       let clicks = 0
+      let helped = false
       while (!(await b.exists(SEL.caption).catch(() => false))) {
+        // 一直没点到「下一步」（Instagram 换了界面、按钮换了字、弹窗挡着）：交给浏览器助手走到写说明的页面，「分享」不许它点。只请一次
+        if (!helped && (clicks === 0 ? Date.now() > deadline - (video ? 4 * 60_000 : 40_000) : Date.now() > deadline)) {
+          helped = true
+          if (await assist(ctx, b, '点「下一步 / Next / 继续」走到写说明（caption）的页面，有弹窗挡着先关掉；不要点分享', { until: SEL.caption, avoid: TEXT.share, maxSteps: 8 })) break
+        }
         if (Date.now() > deadline) {
           if (!clicks) throw new Error(video ? L(ctx, '选完视频 5 分钟还没出「Next / 下一步」：视频可能太大、太长或格式 Instagram 不收，也可能页面改了', "No \"Next\" 5 minutes after choosing the video: it may be too large, too long or a format Instagram rejects, or the page changed") : L(ctx, '选完图后没找到「Next / 下一步」，Instagram 的页面可能改了', "Couldn't find \"Next\" after choosing images — Instagram's page may have changed"))
           throw new Error(L(ctx, '点了「Next / 下一步」还是没到写说明的页面，Instagram 的页面可能改了', "Clicked \"Next\" but never reached the caption page — Instagram's page may have changed"))

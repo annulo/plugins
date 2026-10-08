@@ -3,6 +3,7 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
 import { Expired, runProbe } from './_health'
+import { assist } from './_assist'
 
 // Facebook 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。个人主页和用户管理的公司主页（Page）都支持：
 // 一次登录后，个人号和他管理的每个主页列出来让用户勾选，勾上的各添加成一个渠道（fb_kind: 'profile' | 'page'，social.addChosen），
@@ -89,6 +90,8 @@ const SEL = {
   deleteItem: '^(Move to trash|Move to Trash|Delete post|Delete|移至回收站|移到回收站|删除帖子|删除|移至垃圾桶|刪除貼文|刪除)$',
   deleteConfirm: '^(Move|Delete|移动|移至|删除|移動|刪除)$',
 }
+// 发帖按钮的字：浏览器助手（_assist.ts）不许点它们，发出去由脚本点
+const POST_WORDS = ['Post', '发帖', '发布', '發佈', '發佈貼文', 'Share now', '立即分享']
 // 未登录时会被带到这些地址
 const LOGGED_OUT = /\/(login|checkpoint|recover|reg\/|r\.php)/
 // facebook.com/<这些> 不是账号或主页
@@ -657,6 +660,8 @@ async function openComposer(ctx: any, b: any, ch: any) {
     if (clicked && (await b.waitFor(SEL.editor, { timeout: 10000 }).then(() => true, () => false))) return
     await ctx.sleep(2000)
   }
+  // 脚本认不出入口（Facebook 改了文字、挡着弹窗）：交给浏览器助手打开发帖框，发帖按钮不许它点
+  if (await assist(ctx, b, "打开发帖框：点「What's on your mind? / 你在想什么」那一栏（有弹窗挡着先关掉），出现写帖子的输入框", { until: SEL.editor, avoid: POST_WORDS })) return
   throw new Error(L(ctx, "没打开发帖框（没找到「What's on your mind?」），Facebook 的页面可能改了", "Couldn't open the post composer (no \"What's on your mind?\") — Facebook's page may have changed"))
 }
 
