@@ -662,7 +662,7 @@ async function openComposer(ctx: any, b: any, ch: any) {
     await ctx.sleep(2000)
   }
   // 脚本认不出入口（Facebook 改了文字、挡着弹窗）：交给浏览器助手打开发帖框，发帖按钮不许它点
-  if (await assist(ctx, b, "打开发帖框：点「What's on your mind? / 你在想什么」那一栏（有弹窗挡着先关掉），出现写帖子的输入框", { until: SEL.editor, avoid: POST_WORDS })) return
+  if (await assist(ctx, b, "打开写帖子的输入框（「What's on your mind? / 你在想什么」那一栏）", { until: SEL.editor, avoid: POST_WORDS })) return
   throw new Error(L(ctx, "没打开发帖框（没找到「What's on your mind?」），Facebook 的页面可能改了", "Couldn't open the post composer (no \"What's on your mind?\") — Facebook's page may have changed"))
 }
 

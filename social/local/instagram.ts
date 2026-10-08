@@ -558,7 +558,7 @@ async function waitShared(ctx: any, b: any, timeoutMs: number, video = false): P
  */
 async function openComposer(ctx: any, b: any, _ch: any) {
   // 走路的一步：脚本先快速试一次（入口最多等 8 秒），没打开选图窗口就请浏览器助手（_assist.ts 的 ensure）
-  const ok = await ensure(ctx, b, '打开新建帖子（左栏的「创建 / Create / 新帖子」，子菜单里选「帖子 / Post」），出现选择电脑里文件的界面；有「打开通知」之类的弹窗先关掉', SEL.fileInput, async () => {
+  const ok = await ensure(ctx, b, '打开新建帖子，出现选择电脑里文件的界面', SEL.fileInput, async () => {
     await b.waitFor(SEL.create, { timeout: 8000 })
     // 页面出来后再关挡在前面的「打开通知」这类弹窗（关一个可能还有下一个，最多 3 次）
     for (let i = 0; i < 3 && (await clickText(b, TEXT.notNow)); i++) await ctx.sleep(800)
@@ -671,7 +671,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
         // 脚本自己只找一小会儿（图片帖约 8 秒、视频帖约 30 秒，视频要等处理）就交给助手，别空转太久
         if (!helped && (clicks === 0 ? Date.now() > deadline - (video ? 4.5 * 60_000 : 52_000) : Date.now() > deadline)) {
           helped = true
-          if (await assist(ctx, b, '点「下一步 / Next / 继续」走到写说明（caption）的页面，有弹窗挡着先关掉；不要点分享', { until: SEL.caption, avoid: TEXT.share, maxSteps: 8 })) break
+          if (await assist(ctx, b, '走到写说明（caption）的页面', { until: SEL.caption, avoid: TEXT.share, maxSteps: 8 })) break
         }
         if (Date.now() > deadline) {
           if (!clicks) throw new Error(video ? L(ctx, '选完视频 5 分钟还没出「Next / 下一步」：视频可能太大、太长或格式 Instagram 不收，也可能页面改了', "No \"Next\" 5 minutes after choosing the video: it may be too large, too long or a format Instagram rejects, or the page changed") : L(ctx, '选完图后没找到「Next / 下一步」，Instagram 的页面可能改了', "Couldn't find \"Next\" after choosing images — Instagram's page may have changed"))
@@ -694,7 +694,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (!(await clickTextWait(ctx, b, TEXT.share, 8000))) {
       // 「分享」找不到或被挡住（弹窗、提示）：请浏览器助手把挡着的东西弄走，AI 不许点分享；露出来以后还是脚本点
       const stop = await markReady(b, 'share', TEXT.share)
-      const ok = await assist(ctx, b, '关掉挡在前面的弹窗或提示，让写说明页上的「分享 / Share」按钮露出来（不要点分享）', { until: readySel('share'), avoid: TEXT.share })
+      const ok = await assist(ctx, b, '让写说明页上的「分享 / Share」按钮露出来、能点（不要点分享）', { until: readySel('share'), avoid: TEXT.share })
       await stop()
       if (!ok || !(await clickTextWait(ctx, b, TEXT.share, 5000))) throw new Error(L(ctx, '没找到「Share / 分享」按钮，Instagram 的页面可能改了', "Couldn't find the \"Share\" button — Instagram's page may have changed"))
     }
@@ -754,7 +754,7 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
   if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) {
     // 菜单没打开、换了样子：请浏览器助手打开这条帖子的「…」菜单，让「删除」露出来；AI 不许点删除，还是脚本点
     const stop = await markReady(b, 'del', TEXT.del)
-    const ok = await assist(ctx, b, '打开这条帖子的「…」更多选项菜单，让「删除 / Delete」出现（不要点删除）', { until: readySel('del'), avoid: TEXT.del })
+    const ok = await assist(ctx, b, '打开这条帖子的更多选项菜单，让「删除 / Delete」出现（不要点删除）', { until: readySel('del'), avoid: TEXT.del })
     await stop()
     if (!ok || !(await clickTextWait(ctx, b, TEXT.del, 5000))) throw new Error(L(ctx, '菜单里没有「删除」，这条可能不是这个账号发的', 'No "Delete" in the menu — this post may not be from this account'))
   }
