@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.6.2
+  zh: Instagram：修了文案填进说明框时重复两遍、或者前面多出上次留下的文字：每次填之前先清空说明框。
+  en: "Instagram: fixed the caption being filled in twice or after leftover text from an earlier attempt — the caption box is cleared before filling."
 - version: 0.6.1
   zh: Facebook、Instagram、LinkedIn、X：正文里已经写了的话题，发布时不再在末尾重复接一遍（之前会出现两行一样的话题）。
   en: "Facebook, Instagram, LinkedIn, X: hashtags already in the text aren't appended again when publishing (the hashtag line could show up twice)."
