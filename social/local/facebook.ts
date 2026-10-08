@@ -78,6 +78,8 @@ const SEL = {
   // 发帖框里的按钮：主页发帖有时先「Next」（发布设置）再「Post」
   nextBtn: '^(Next|下一步|下一页|繼續|下一頁|下一步驟)$',
   postBtn: '^(Post|发帖|发布|發佈|發佈貼文)$',
+  // 发帖时 Facebook 会弹推广窗（「直接与用户对话」让主页加「立即拨打」按钮这类），点「以后再说」关掉，不然可能挡住发帖
+  notNow: '^(Not now|Not Now|Maybe later|Later|Skip|以后再说|稍后再说|暂时不要|跳过|以後再說|稍後再說|暫時不要|略過)$',
   // 主页上「切换到主页身份」的按钮（新版主页体验）
   switchBtn: '^(Switch now|Switch Now|Switch|立即切换|切换|立即切換|切換)$',
   // 顶栏右上角的头像菜单（切回个人身份用）
@@ -702,6 +704,7 @@ async function waitPostable(ctx: any, b: any, timeoutMs: number, video = false) 
       const min = Math.floor((told - start) / 60000)
       ctx.progress({ message: L(ctx, `视频还在上传 / 处理${pct ? ` ${pct}%` : ''}，已等 ${min} 分钟…`, `Video still uploading / processing${pct ? ` ${pct}%` : ''} — ${min} min so far…`) })
     }
+    if (await clickText(b, { scope: SEL.dialog, re: SEL.notNow })) await ctx.sleep(1000)
     if (await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })) {
       const ok = await b.eval(`(() => { const e = document.querySelector('[data-shuttle-post]'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
       if (ok) return
@@ -737,6 +740,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
         if (id || urlObj) return { id, url: urlObj?.url ?? '' }
       }
     }
+    if (await clickText(b, { scope: SEL.dialog, re: SEL.notNow })) ctx.log(L(ctx, '关掉了 Facebook 弹出的推广窗（以后再说）', 'Dismissed a Facebook promo popup (Not now)'))
     // 发帖框关了还等 15 秒，还没有结果就不等了
     if (!(await b.exists(SEL.editor).catch(() => false))) {
       closedAt = closedAt || Date.now()

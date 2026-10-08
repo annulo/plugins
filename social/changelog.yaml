@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.5.5
+  zh: Facebook：发帖时弹出的推广窗（比如「直接与用户对话」让你加「立即拨打」按钮）会自动点「以后再说」关掉，定时发布不会被它挡住。
+  en: "Facebook: promo popups that show up while posting (like \"Talk to people directly\" asking to add a Call button) are dismissed with \"Not now\", so scheduled posts aren't blocked by them."
 - version: 0.5.4
   zh: Facebook：修了发帖卡在「下一页」、最后报「发布按钮一直是灰的」：Facebook 的发帖框改成了两层，现在能找到「下一页」和「发帖」按钮。
   en: "Facebook: fixed posting getting stuck on \"Next\" and failing with \"The Post button stayed disabled\" — Facebook's composer now has two layers, and the Next and Post buttons are found again."
