@@ -246,19 +246,22 @@ async function loggedIn(b: any) {
 }
 
 /** 当前页面顶上的名字、头像、地址里的用户名（个人主页、公司主页通用） */
-async function readHeader(b: any): Promise<{ handle: string; name: string; avatar: string }> {
+async function readHeader(b: any): Promise<{ handle: string; name: string; title: string; avatar: string }> {
   const r = await b
     .eval(`(() => {
       const u = new URL(location.href)
       const seg = u.pathname.split('/').filter(Boolean)[0] || ''
-      const h1 = [...document.querySelectorAll('[role="main"] h1, h1')].map(e => (e.innerText || '').trim().split('\\n')[0]).find(Boolean)
-      const name = h1 || document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '')
+      // 自己管理的主页打开是管理面板，第一个 h1 是「管理公共主页」这类通用标题，跳过
+      const generic = /^(管理公共主页|管理主页|管理專頁|管理粉絲專頁|专业面板|專業主控板|Manage Page|Professional dashboard|Facebook)$/i
+      const h1 = [...document.querySelectorAll('[role="main"] h1, h1')].map(e => (e.innerText || '').trim().split('\\n')[0]).find(t => t && !generic.test(t))
+      const title = document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '').trim()
+      const name = h1 || (generic.test(title) ? '' : title)
       const avatar = [...document.querySelectorAll('[role="main"] svg image, [role="main"] image')].map(e => e.getAttribute('xlink:href') || e.getAttribute('href') || '').find(s => /fbcdn|scontent/.test(s)) || ''
-      return { seg, id: u.searchParams.get('id') || '', name, avatar }
+      return { seg, id: u.searchParams.get('id') || '', name, title: generic.test(title) ? '' : title, avatar }
     })()`)
     .catch(() => null)
-  if (!r) return { handle: '', name: '', avatar: '' }
-  return { handle: r.seg && !RESERVED.test(r.seg) ? r.seg : '', name: String(r.name ?? '').trim(), avatar: r.avatar }
+  if (!r) return { handle: '', name: '', title: '', avatar: '' }
+  return { handle: r.seg && !RESERVED.test(r.seg) ? r.seg : '', name: String(r.name ?? '').trim(), title: String(r.title ?? ''), avatar: r.avatar }
 }
 
 /** 页面上的粉丝数：「1.2K followers」「1,234 位粉丝」「粉丝 3万」这类，读不到返回 undefined */
@@ -367,7 +370,8 @@ async function listPages(ctx: any, b: any, selfId: string): Promise<FbPage[]> {
     await b.goto(SITE + (/^\d+$/.test(p.id) ? `/profile.php?id=${p.id}` : `/${p.handle || p.id}`)).catch(() => {})
     await ctx.sleep(3000)
     const h = await readHeader(b)
-    if (h.name) p.name = cleanName(h.name)
+    // 主页名优先用网页标题（「Talizen | Facebook」）：管理面板上的大标题不一定是主页名
+    if (h.title || h.name) p.name = cleanName(h.title || h.name)
     if (h.avatar) p.avatar = h.avatar
     if (h.handle && !p.handle) p.handle = h.handle
     const f = await followersOnPage(b)
