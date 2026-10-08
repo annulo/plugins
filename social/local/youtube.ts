@@ -5,6 +5,7 @@ import { YT, postText, problems } from './_youtube_spec'
 import { Expired, runProbe } from './_health'
 
 // YouTube 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个 YouTube 频道，发的是素材库里的视频。
+// 一个 Google 账号下有几个频道（品牌账号）时，添加时列出来让用户勾选，各添加成一个渠道、共用一个浏览器；操作前切到对应的频道（useChannel）。
 //
 //   youtube.save({ article_id, channel_id, title, body, tags, video, post_id? })
 //                                          存一条写好的视频文案（待审，social_posts）；由助手按任务 tasks/write-youtube.md 写
@@ -195,23 +196,105 @@ async function hasLoginCookie(b: any) {
 }
 
 /** 公开频道页的 ytInitialData → 频道名、@handle、头像、订阅数（订阅数隐藏时没有） */
-async function readChannel(b: any, uc: string): Promise<YtChannel> {
+async function readChannel(ctx: any, b: any, uc: string): Promise<YtChannel> {
   await b.goto(`${SITE}/channel/${uc}?hl=en`)
-  const data = await b.eval(`window.ytInitialData || null`).catch(() => null)
+  // 打开后 ytInitialData 不是马上就有：等到有这个频道的 metadata（最多 10 秒），不然名字会读空
+  let data: any = null
+  for (let i = 0; i < 20 && !data?.metadata?.channelMetadataRenderer; i++) {
+    // 整个 ytInitialData 传不回来（太大、有不能序列化的东西，eval 会出错）：在页面里只取 metadata 和 header，转成字符串
+    const raw = await b.eval(`(() => { const d = window.ytInitialData; return d ? JSON.stringify({ metadata: d.metadata, header: d.header }) : '' })()`).catch(() => '')
+    try { data = raw ? JSON.parse(String(raw)) : null } catch { data = null }
+    if (!data?.metadata?.channelMetadataRenderer) await ctx.sleep(500) // 本机函数里没有 setTimeout
+  }
   const meta = data?.metadata?.channelMetadataRenderer ?? find(data, (x) => x.externalId === uc && typeof x.title === 'string') ?? {}
   const thumbs: any[] = meta.avatar?.thumbnails ?? []
-  const handle = /\/(@[^/?#]+)/.exec(String(meta.vanityChannelUrl ?? ''))?.[1] ?? /"(@[\w.\-]{3,30})"/.exec(JSON.stringify(data?.header ?? {}))?.[1] ?? ''
+  // @handle：vanityChannelUrl 不一定有（2026-10 新频道只有 ownerUrls）
+  const handle = [meta.vanityChannelUrl, ...(meta.ownerUrls ?? [])].map((u) => /\/(@[^/?#]+)/.exec(String(u ?? ''))?.[1]).find(Boolean) ?? /"(@[\w.\-]{3,30})"/.exec(JSON.stringify(data?.header ?? {}))?.[1] ?? ''
   const subs = /"([\d.,]+\s*[KkMmBb]?)\s+subscribers?"/.exec(JSON.stringify(data?.header ?? data ?? {}))?.[1]
-  const u: YtChannel = { id: uc, name: String(meta.title ?? '') || uc, handle: decodeURIComponent(handle), avatar: thumbs.length ? String(thumbs[thumbs.length - 1].url) : '' }
+  // 读不到名字时 name 留空（不拿频道 id 充数）：写回账号时空的不覆盖原来的名字（channelFields）
+  const u: YtChannel = { id: uc, name: String(meta.title ?? ''), handle: decodeURIComponent(handle), avatar: thumbs.length ? String(thumbs[thumbs.length - 1].url) : '' }
   const n = subs != null ? count(subs) : undefined
   if (n != null) u.followers = n
   return u
 }
 
 function channelFields(u: YtChannel) {
-  const f: any = { platform_uid: u.id, name: u.name, handle: u.handle, avatar: u.avatar, login_status: 'ok', last_checked_at: now() }
+  // 名字、@handle、头像读到了才写：读空的不覆盖账号上原来的
+  const f: any = { platform_uid: u.id, login_status: 'ok', last_checked_at: now(), ...(u.name ? { name: u.name } : {}), ...(u.handle ? { handle: u.handle } : {}), ...(u.avatar ? { avatar: u.avatar } : {}) }
   if (u.followers != null) f.followers = u.followers
   return f
+}
+
+// ---- 一个 Google 账号下的多个频道（品牌账号）----
+// YouTube 头像菜单里「切换账号」调的 account/accounts_list：这个浏览器登录的 Google 账号下所有的频道，
+// 每个带名字、@handle、头像、是不是当前频道，和切换过去用的登录地址（signinUrl，含 authuser / pageid，Google 账号的顺序会变，用时现查）。
+// 频道 id 是 offlineCacheKeyToken.clientCacheKey 前面加 UC。在页面里调（带 SAPISIDHASH，和 YouTube 自己调一样）。
+
+type YtIdentity = { id: string; name: string; handle: string; avatar: string; selected: boolean; signin: string; byline: string }
+
+async function listChannels(ctx: any, b: any): Promise<YtIdentity[]> {
+  if (!/^https:\/\/www\.youtube\.com\//.test(b.url())) {
+    await b.goto(`${SITE}/?hl=en`)
+    await ctx.sleep(2000)
+  }
+  const items: any[] = (await b
+    .eval(`(async () => {
+      const sapisid = (document.cookie.match(/(?:^|;\\s*)(?:SAPISID|__Secure-3PAPISID)=([^;]+)/) || [])[1]
+      if (!sapisid || !window.ytcfg) return []
+      const ts = Math.floor(Date.now() / 1000)
+      const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ts + ' ' + sapisid + ' ' + location.origin))
+      const hash = [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, '0')).join('')
+      const r = await fetch('/youtubei/v1/account/accounts_list?prettyPrint=false', { method: 'POST', credentials: 'include',
+        headers: { 'content-type': 'application/json', authorization: 'SAPISIDHASH ' + ts + '_' + hash, 'x-origin': location.origin, 'x-goog-authuser': String(ytcfg.get('SESSION_INDEX') || 0) },
+        body: JSON.stringify({ context: ytcfg.get('INNERTUBE_CONTEXT') }) })
+      const j = await r.json()
+      const out = []
+      const text = t => (t && (t.simpleText || (t.runs || []).map(x => x.text).join(''))) || ''
+      const walk = (o, d) => {
+        if (!o || typeof o !== 'object' || d > 60) return
+        if (o.accountItem) {
+          const a = o.accountItem
+          const tokens = ((a.serviceEndpoint || {}).selectActiveIdentityEndpoint || {}).supportedTokens || []
+          const key = (tokens.find(t => t.offlineCacheKeyToken) || {}).offlineCacheKeyToken
+          const signin = (tokens.find(t => t.accountSigninToken) || {}).accountSigninToken
+          out.push({ hasChannel: !!a.hasChannel, id: key ? 'UC' + key.clientCacheKey : '', name: text(a.accountName), handle: text(a.channelHandle), byline: text(a.accountByline),
+            avatar: (((a.accountPhoto || {}).thumbnails || []).slice(-1)[0] || {}).url || '', selected: !!a.isSelected, signin: signin ? signin.signinUrl : '' })
+        }
+        for (const k in o) walk(o[k], d + 1)
+      }
+      walk(j, 0)
+      return out
+    })()`)
+    .catch(() => [])) || []
+  return items
+    .filter((a) => a.hasChannel && /^UC[\w-]{22}$/.test(a.id))
+    .map((a) => ({ id: a.id, name: a.name || a.id, handle: a.handle, avatar: String(a.avatar).replace(/=s\d+-/, '=s176-'), selected: a.selected, signin: a.signin, byline: a.byline }))
+}
+
+/**
+ * 让 Studio 用这个频道：当前不是它就从频道列表里切过去（一个 Google 账号下有几个频道时）。
+ * 只有一个频道、没登录、列表里没有它时什么都不做，后面各自的检查会报「登录过期」「登录的是另一个频道」
+ */
+async function useChannel(ctx: any, b: any, ch: any) {
+  if (!ch?.platform_uid) return
+  await b.goto(`${STUDIO}/channel/${ch.platform_uid}`)
+  await ctx.sleep(3000)
+  const uc = await studioChannel(b)
+  if (!uc || uc === ch.platform_uid) return
+  const target = (await listChannels(ctx, b)).find((c) => c.id === ch.platform_uid)
+  if (!target?.signin) return
+  ctx.progress({ message: L(ctx, `切换到频道「${ch.name}」`, `Switching to the channel "${ch.name}"`) })
+  await b.goto(new URL(target.signin, SITE).toString())
+  await ctx.sleep(3000)
+  await b.goto(`${STUDIO}/channel/${ch.platform_uid}`)
+  await ctx.sleep(3000)
+}
+
+/** 打开这个频道的浏览器，并切到这个频道 */
+async function openFor(ctx: any, ch: any) {
+  const b = await openBrowser(ctx, { profile: ch.browser_profile })
+  await useChannel(ctx, b, ch).catch(() => {})
+  return b
 }
 
 /**
@@ -240,7 +323,23 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     if (await hasLoginCookie(b)) throw new Error(L(ctx, '登录了 Google，但这个账号还没有 YouTube 频道（或者没进到 Studio）。先在窗口里创建频道，再点一次「添加 YouTube 频道」', 'Logged in to Google, but this account has no YouTube channel yet (or Studio didn\'t open). Create a channel in the window, then click "Add YouTube channel" again'))
     throw new Error(L(ctx, '5 分钟内没有完成登录。再点一次「添加 YouTube 频道」接着登（登到一半的会保留）', 'Login wasn\'t finished within 5 minutes. Click "Add YouTube channel" to continue (what you did so far is kept)'))
   }
-  const u = await readChannel(b, uc)
+  // 新添加、这个 Google 账号下有几个频道：列出来让用户勾选（social.addChosen → addChosen），不同项目可以各勾一个
+  if (!old) {
+    const chans = await listChannels(ctx, b)
+    if (chans.length > 1) {
+      const exists = (id: string) => !!ctx.db.query('social_accounts', { where: { type: 'youtube', platform_uid: id }, limit: 1 }).list[0]
+      return {
+        choose: {
+          type: 'youtube',
+          profile,
+          uid: uc,
+          desc: L(ctx, '这个 Google 账号下有这些 YouTube 频道。勾选要在这个项目里运营的（别的项目再登录时可以勾别的）。', 'This Google account has these YouTube channels. Pick the ones to run in this project (you can pick others when you sign in from another project).'),
+          pages: chans.map((c) => ({ id: c.id, name: c.name, handle: c.handle, avatar: c.avatar, label: [L(ctx, 'YouTube 频道', 'YouTube channel'), c.handle].filter(Boolean).join(' · '), added: exists(c.id) })),
+        },
+      }
+    }
+  }
+  const u = await readChannel(ctx, b, uc)
   const fields = channelFields(u)
   const same = ctx.db.query('social_accounts', { where: { type: 'youtube', platform_uid: uc }, limit: 1 }).list[0]
   if (old && same && same.id !== old.id) throw new Error(L(ctx, `登录的是「${u.name}」，它已经是另一个频道了。重新登录时请登录原来的频道`, `You logged in as ${u.name}, which is already another channel here. Log in with the original channel`))
@@ -248,17 +347,35 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   const target = old ?? same
   if (target) {
     ctx.db.update('social_accounts', target.id, { ...fields, ...profileFields(target, profile) })
-    return { id: target.id, name: fields.name, added: false }
+    return { id: target.id, name: fields.name ?? target.name, added: false }
   }
-  const ch = ctx.db.insert('social_accounts', { type: 'youtube', browser_profile: profile, ...fields, created_at: now() })
-  return { id: ch.id, name: fields.name, added: true }
+  // 新建的账号总要有个名字：频道页没读到就先用频道 id，下次采集读到了会换掉
+  const ch = ctx.db.insert('social_accounts', { type: 'youtube', browser_profile: profile, name: uc, ...fields, created_at: now() })
+  return { id: ch.id, name: fields.name ?? uc, added: true }
+}
+
+/** 建用户勾选的频道（login 返回的 choose 原样带回来，page_ids 是勾上的频道 id）：共用登录时的浏览器 profile，已有的更新 */
+export function addChosen(input: { choose: { profile: string; pages: { id: string; name: string; handle?: string; avatar?: string }[] }; page_ids?: string[] }, ctx: any) {
+  const c = input?.choose
+  const picked = (c?.pages ?? []).filter((p) => (input.page_ids ?? []).includes(p.id))
+  if (!c?.profile || !picked.length) throw new Error(L(ctx, '至少勾一个频道', 'Pick at least one channel'))
+  const ids: string[] = []
+  for (const p of picked) {
+    const fields = channelFields({ id: p.id, name: p.name, handle: p.handle ?? '', avatar: p.avatar ?? '' })
+    const ex = ctx.db.query('social_accounts', { where: { type: 'youtube', platform_uid: p.id }, limit: 1 }).list[0]
+    if (ex) {
+      ctx.db.update('social_accounts', ex.id, { ...fields, ...profileFields(ex, c.profile) })
+      ids.push(ex.id)
+    } else ids.push(ctx.db.insert('social_accounts', { type: 'youtube', browser_profile: c.profile, ...fields, created_at: now() }).id)
+  }
+  return { ids }
 }
 
 /** 检查登录是否还有效（后台打开，不弹窗），写回 login_status */
 export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = ytChannel(ctx, input?.channel_id)
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again"`))
-  const b = await openBrowser(ctx, { profile: ch.browser_profile })
+  const b = await openFor(ctx, ch)
   await b.goto(ch.platform_uid ? `${STUDIO}/channel/${ch.platform_uid}` : STUDIO)
   await ctx.sleep(4000)
   const uc = await studioChannel(b)
@@ -333,7 +450,11 @@ async function readVideos(ctx: any, b: any, uc: string): Promise<{ videos: YtVid
   for (const r of rs ?? []) if (r.json) videosOf(r.json, byId)
   if (byId.size) return { videos: [...byId.values()], loggedOut: false, exact: true }
   await b.goto(`${SITE}/channel/${uc}/videos?hl=en`)
-  publicVideosOf(await b.eval(`window.ytInitialData || null`).catch(() => null), byId)
+  // 整个 ytInitialData 对象传不回来：在页面里转成字符串再解析（同 readChannel）
+  const raw = await b.eval(`(() => { try { return JSON.stringify(window.ytInitialData || null) } catch (e) { return '' } })()`).catch(() => '')
+  let initial: any = null
+  try { initial = raw ? JSON.parse(String(raw)) : null } catch { initial = null }
+  publicVideosOf(initial, byId)
   return { videos: [...byId.values()], loggedOut: false, exact: false }
 }
 
@@ -460,7 +581,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     return { id: p.id, post_id: vid, ...extra }
   }
   try {
-    const b = await openBrowser(ctx, { profile: ch.browser_profile })
+    const b = await openFor(ctx, ch)
     if (interrupted) {
       ctx.progress({ message: L(ctx, '上次没发完，先看看 Studio 里有没有这条…', "Last attempt didn't finish; checking Studio for this video first…") })
       const r = await readVideos(ctx, b, ch.platform_uid)
@@ -598,7 +719,7 @@ export async function remove(input: { post_id?: string; video_id?: string; chann
   const vid = p?.post_id || input?.video_id
   const ch = ytChannel(ctx, p?.channel_id || input?.channel_id || '')
   if (!vid || !ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, '要给出视频（post_id），或者 video_id + channel_id；发布时没认出 id 的视频请到 YouTube Studio 里删', 'Give a video post (post_id), or video_id + channel_id; videos published without a recognized id must be deleted in YouTube Studio'))
-  const b = await openBrowser(ctx, { profile: ch.browser_profile })
+  const b = await openFor(ctx, ch)
   await openRowMenu(ctx, b, ch, vid)
   let clicked = false
   for (const t of ['Delete forever', '永久删除']) {
@@ -632,9 +753,9 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       out.push({ channel: ch.name, skipped: L(ctx, '没登录', 'Not logged in') })
       continue
     }
-    const b = await openBrowser(ctx, { profile: ch.browser_profile })
+    const b = await openFor(ctx, ch)
     const r = await readVideos(ctx, b, ch.platform_uid)
-    const info = r.loggedOut ? null : await readChannel(b, ch.platform_uid).catch(() => null)
+    const info = r.loggedOut ? null : await readChannel(ctx, b, ch.platform_uid).catch(() => null)
     await b.close()
     if (r.loggedOut) {
       ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
@@ -704,7 +825,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
 export async function probe(input: { channel_id: string }, ctx: any) {
   const ch = ytChannel(ctx, input?.channel_id)
   return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
+    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openFor(ctx, ch))
     t.page = b
     await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
       if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
@@ -715,7 +836,7 @@ export async function probe(input: { channel_id: string }, ctx: any) {
       if (uc !== ch.platform_uid) throw new Expired(L(ctx, `Studio 里登录的是另一个频道（${uc}），不是这个频道（${ch.platform_uid}）`, `Studio is logged in to another channel (${uc}), not this one (${ch.platform_uid})`))
     })
     await t.step('account', L(ctx, '读频道信息', 'Read the channel'), async () => {
-      const u = await readChannel(b, ch.platform_uid)
+      const u = await readChannel(ctx, b, ch.platform_uid)
       if (!u.name || u.name === u.id) throw new Error(L(ctx, '读不到频道名（公开频道页的 ytInitialData 结构变了）', "Couldn't read the channel name (the channel page's ytInitialData changed)"))
       return `${u.name}${u.handle ? ' ' + u.handle : ''}` + (u.followers != null ? L(ctx, ` · ${u.followers} 订阅`, ` · ${u.followers} subscribers`) : L(ctx, ' · 没读到订阅数', ' · subscribers not found'))
     })
