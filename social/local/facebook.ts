@@ -251,12 +251,21 @@ async function readHeader(b: any): Promise<{ handle: string; name: string; title
     .eval(`(() => {
       const u = new URL(location.href)
       const seg = u.pathname.split('/').filter(Boolean)[0] || ''
-      // 自己管理的主页打开是管理面板，第一个 h1 是「管理公共主页」这类通用标题，跳过
+      // 名字：主区域（[role="main"]）里的 h1，比如主页上的「Talizen」。不能写成 '[role="main"] h1, h1'：
+      // querySelectorAll 按文档顺序返回，左边栏的「管理公共主页」会排在前面。网页标题常常只是「(14) Facebook」，只作最后的办法
       const generic = /^(管理公共主页|管理主页|管理專頁|管理粉絲專頁|专业面板|專業主控板|Manage Page|Professional dashboard|Facebook)$/i
-      const h1 = [...document.querySelectorAll('[role="main"] h1, h1')].map(e => (e.innerText || '').trim().split('\\n')[0]).find(t => t && !generic.test(t))
+      const firstLine = e => (e.innerText || '').trim().split('\\n')[0].trim()
+      const main = document.querySelector('[role="main"]')
+      const h1 = [...(main ? main.querySelectorAll('h1') : []), ...document.querySelectorAll('h1')].map(firstLine).find(t => t && !generic.test(t))
+      const og = (document.querySelector('meta[property="og:title"]') || {}).content || ''
       const title = document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '').trim()
-      const name = h1 || (generic.test(title) ? '' : title)
-      const avatar = [...document.querySelectorAll('[role="main"] svg image, [role="main"] image')].map(e => e.getAttribute('xlink:href') || e.getAttribute('href') || '').find(s => /fbcdn|scontent/.test(s)) || ''
+      const name = h1 || (og && !generic.test(og) ? og : '') || (generic.test(title) ? '' : title)
+      // 头像：主区域里显示得最大的 Facebook 图片（svg 里的 image，头像是一个大圆）；封面是 <img>，不算
+      const pics = [...(main || document).querySelectorAll('svg image')]
+        .map(e => ({ src: e.getAttribute('xlink:href') || e.getAttribute('href') || '', w: (e.closest('svg') || e).getBoundingClientRect().width }))
+        .filter(x => /fbcdn|scontent/.test(x.src))
+        .sort((a, b) => b.w - a.w)
+      const avatar = (pics[0] || {}).src || (document.querySelector('meta[property="og:image"]') || {}).content || ''
       return { seg, id: u.searchParams.get('id') || '', name, title: generic.test(title) ? '' : title, avatar }
     })()`)
     .catch(() => null)
@@ -370,8 +379,7 @@ async function listPages(ctx: any, b: any, selfId: string): Promise<FbPage[]> {
     await b.goto(SITE + (/^\d+$/.test(p.id) ? `/profile.php?id=${p.id}` : `/${p.handle || p.id}`)).catch(() => {})
     await ctx.sleep(3000)
     const h = await readHeader(b)
-    // 主页名优先用网页标题（「Talizen | Facebook」）：管理面板上的大标题不一定是主页名
-    if (h.title || h.name) p.name = cleanName(h.title || h.name)
+    if (h.name) p.name = cleanName(h.name)
     if (h.avatar) p.avatar = h.avatar
     if (h.handle && !p.handle) p.handle = h.handle
     const f = await followersOnPage(b)
