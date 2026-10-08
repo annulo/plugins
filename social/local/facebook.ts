@@ -654,15 +654,13 @@ async function openComposer(ctx: any, b: any, ch: any) {
 }
 
 /**
- * 把文字放进发帖框：真的打字（Facebook 的编辑器是 Lexical，模拟的 paste 事件不一定认；LinkedIn 新版就是这样）。
- * 打不进去再退回粘贴。注意：打字时 # 和 @ 会弹出话题 / 提及建议，话题放在最后、之间用空格隔开，不会误选。
+ * 把文字放进发帖框：先粘贴（Facebook 的编辑器是 Lexical，认 paste 事件，换行、链接都原样进去）。
+ * 粘贴不进去再清空了真的打字。不用打字打头：2026-10 实测打字会丢第一段、链接后面的换行被吃掉、段落顺序乱掉；
+ * 两次之间一定先清空，不然第二次接在第一次后面，正文重复。
  */
 async function fillText(ctx: any, b: any, text: string) {
   const same = async () => String(await b.eval(`([...document.querySelectorAll(${JSON.stringify(SEL.editor)})].pop()?.innerText || '')`)).replace(/\s+/g, '') === text.replace(/\s+/g, '')
   await b.click(SEL.editor)
-  await b.type(SEL.editor, text, { clear: true }).catch(() => {})
-  await ctx.sleep(800)
-  if (await same()) return
   await b.eval(`(() => {
     const el = [...document.querySelectorAll(${JSON.stringify(SEL.editor)})].pop()
     el.focus()
@@ -670,7 +668,10 @@ async function fillText(ctx: any, b: any, text: string) {
     dt.setData('text/plain', ${JSON.stringify(text)})
     el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
   })()`)
-  await ctx.sleep(800)
+  await ctx.sleep(1000)
+  if (await same()) return
+  await b.type(SEL.editor, text, { clear: true }).catch(() => {})
+  await ctx.sleep(1000)
   if (!(await same())) throw new Error(L(ctx, '正文没填进发帖框，Facebook 的编辑器可能改了', "Couldn't fill in the text — Facebook's editor may have changed"))
 }
 

@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.5.3
+  zh: Facebook：修了发帖时报「正文没填进发帖框」：正文改成整段粘贴进去，不再逐字打（打字会丢段落、带链接时顺序乱），重试也不会把正文填两遍。
+  en: "Facebook: fixed \"Couldn't fill in the text\" when posting — the text is now pasted in whole instead of typed (typing dropped paragraphs and scrambled text around links), and a retry no longer fills it in twice."
 - version: 0.5.2
   zh: 升级说明有了中英文：英文界面的升级卡片显示英文（需要 Annulo 下一个版本）。
   en: Upgrade notes now come in Chinese and English; the upgrade card follows your interface language (needs the next Annulo release).
