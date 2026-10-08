@@ -76,7 +76,7 @@ const SEL = {
   // 收视频的那个 input（accept 里有 video）；没有就退回 fileInput
   videoInput: '[role="dialog"] input[type="file"][accept*="video"]',
   // 发帖框里的按钮：主页发帖有时先「Next」（发布设置）再「Post」
-  nextBtn: '^(Next|下一步|繼續)$',
+  nextBtn: '^(Next|下一步|下一页|繼續|下一頁|下一步驟)$',
   postBtn: '^(Post|发帖|发布|發佈|發佈貼文)$',
   // 主页上「切换到主页身份」的按钮（新版主页体验）
   switchBtn: '^(Switch now|Switch Now|Switch|立即切换|切换|立即切換|切換)$',
@@ -117,21 +117,26 @@ async function cookie(b: any, name: string): Promise<string> {
 }
 
 /**
- * 在 scope（取最后一个，弹窗叠着时是最上面那个）里找 sel 中 aria-label 或文字匹配 re 的第一个可见元素，打上 attr。
+ * 在 scope 里找 sel 中 aria-label 或文字匹配 re 的第一个可见元素，打上 attr。scope 有好几个时从最后一个
+ * （叠在最上面的弹窗）往前找：2026-10 起发帖框是两个 role=dialog，外层「创建帖子」放着全部按钮，
+ * 最后一个「发帖」只是标题栏、只有关闭按钮，只看最后一个就找不到「下一页」「发布」。
  * Facebook 的按钮没有稳定的 class，全靠这个认。
  */
 async function mark(b: any, o: { scope?: string; sel?: string; re: string; attr: string }): Promise<boolean> {
   return !!(await b
     .eval(`(() => {
       document.querySelectorAll('[${o.attr}]').forEach(e => e.removeAttribute('${o.attr}'))
-      const root = ${o.scope ? `[...document.querySelectorAll(${JSON.stringify(o.scope)})].pop()` : 'document'}
-      if (!root) return false
+      const roots = ${o.scope ? `[...document.querySelectorAll(${JSON.stringify(o.scope)})].reverse()` : '[document]'}
       const re = new RegExp(${JSON.stringify(o.re)}, 'i')
-      const e = [...root.querySelectorAll(${JSON.stringify(o.sel ?? '[role="button"], button, [role="menuitem"], a')})].find(x => {
-        if (!x.getClientRects().length) return false
-        const t = [(x.getAttribute('aria-label') || '').trim(), (x.innerText || '').trim().split('\\n')[0]]
-        return t.some(s => s && re.test(s))
-      })
+      let e = null
+      for (const root of roots) {
+        e = [...root.querySelectorAll(${JSON.stringify(o.sel ?? '[role="button"], button, [role="menuitem"], a')})].find(x => {
+          if (!x.getClientRects().length) return false
+          const t = [(x.getAttribute('aria-label') || '').trim(), (x.innerText || '').trim().split('\\n')[0]]
+          return t.some(s => s && re.test(s))
+        })
+        if (e) break
+      }
       if (e) e.setAttribute('${o.attr}', '1')
       return !!e
     })()`)
@@ -677,7 +682,7 @@ async function fillText(ctx: any, b: any, text: string) {
 
 /** 发帖框里显示的上传进度（「Uploading 45%」「45%」这类），读不到返回空 */
 async function uploadPercent(b: any): Promise<string> {
-  const t = String(await b.eval(`([...document.querySelectorAll(${JSON.stringify(SEL.dialog)})].pop()?.innerText || '')`).catch(() => ''))
+  const t = String(await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.dialog)})].map(d => d.innerText || '').join('\\n')`).catch(() => ''))
   return /(\d{1,3})\s*%/.exec(t)?.[1] ?? ''
 }
 

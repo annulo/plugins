@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.5.4
+  zh: Facebook：修了发帖卡在「下一页」、最后报「发布按钮一直是灰的」：Facebook 的发帖框改成了两层，现在能找到「下一页」和「发帖」按钮。
+  en: "Facebook: fixed posting getting stuck on \"Next\" and failing with \"The Post button stayed disabled\" — Facebook's composer now has two layers, and the Next and Post buttons are found again."
 - version: 0.5.3
   zh: Facebook：修了发帖时报「正文没填进发帖框」：正文改成整段粘贴进去，不再逐字打（打字会丢段落、带链接时顺序乱），重试也不会把正文填两遍。
   en: "Facebook: fixed \"Couldn't fill in the text\" when posting — the text is now pasted in whole instead of typed (typing dropped paragraphs and scrambled text around links), and a retry no longer fills it in twice."
