@@ -1,0 +1,34 @@
+# 升级说明，新的在最上面：每条一个 version 加各语言一段（zh、en……，可以再加别的语言）。
+# Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
+# Upgrade notes, newest first: each entry has a version plus one note per language.
+
+- version: 0.5.1
+  zh: 知乎：之前写的 Markdown 版本打开时自动转成富文本；知乎拒绝发布时直接显示知乎的原话（比如发布太频繁），图片上传失败会自动重试。各平台：页面上「AI 改写」可以写这次怎么改，助手在这一版现在的内容上改；发布频率改成只是建议，超了也照样发、排期到点就发。
+  en: "Zhihu: older Markdown versions turn into rich text when opened; when Zhihu rejects a post its own message is shown (e.g. posting too often), and failed image uploads retry. All platforms: \"AI rewrite\" takes instructions and edits the current content; posting frequency is only a suggestion — posts and schedules go out even past it."
+- version: 0.5.0
+  zh: 每个平台的字段集中成一张表（标题发不发、正文纯文字还是富文本、配图、视频、封面、分区），模板页面照它显示。知乎文章改成和文章一样的富文本：小标题、列表、加粗、引用、图片都在正文里，发布时原样排到知乎；修了正文多张图时后面的图会丢
+  en: "Each platform's fields (title, plain or rich text, images, video, cover, category) live in one table the template pages follow. Zhihu articles are rich text like articles and keep their layout when published; fixed later images getting lost when the body has several."
+- version: 0.4.0
+  zh: 新增知乎：添加知乎账号，把内容改写成知乎专栏文章（小标题、列表、正文配图、话题），审核后发布或排期，采集阅读、赞同、评论、收藏和粉丝数
+  en: "New: Zhihu. Add a Zhihu account, rewrite content into Zhihu column articles (headings, lists, inline images, topics), review, publish or schedule, and collect views, upvotes, comments, saves and followers."
+- version: 0.3.3
+  zh: 社媒：修复中文版 LinkedIn 找不到发布按钮、发帖一直超时的问题
+  en: "Fixed LinkedIn in Chinese not finding the Post button and timing out."
+- version: 0.3.2
+  zh: 社媒：提示文字里的「素材库」统一改叫「资料库」
+  en: "Wording: the asset library is consistently called Library in prompts."
+- version: 0.3.1
+  zh: 社媒：X 发长推文（开了 Premium、超过 280 字）后能认出发布成功，不再明明发出去了却标成发布失败
+  en: "X: long posts (Premium, over 280 characters) are recognized as published instead of being marked failed."
+- version: 0.3.0
+  zh: 社媒：写帖子时能指定配哪几张图、按什么顺序，改写时也能换图；文章里本机上传的图也能配进帖子；写推文先查字数，开了 Premium 的账号可以写长
+  en: "Choose which images go in a post and in what order, also when rewriting; locally uploaded article images can be used; tweets are length-checked first and Premium accounts can write long posts."
+- version: 0.2.0
+  zh: 社媒：离线项目里上传的图片、视频（/_annulo/uploaded/…）也能配进帖子发布；需要 Annulo 2026.10.6-7 或更新
+  en: "Images and videos uploaded in offline projects (/_annulo/uploaded/…) can be used in posts. Needs Annulo 2026.10.6-7 or later."
+- version: 0.1.1
+  zh: X：发推时直接点弹窗里的 Post 按钮（有时坐标点击不触发发布）；去掉两条推文至少隔 30 分钟的限制，只保留 24 小时最多 10 条
+  en: "X: clicks the Post button in the dialog directly (coordinate clicks sometimes didn't publish); dropped the 30-minute gap between posts, keeping at most 10 per 24 hours."
+- version: 0.1.0
+  zh: 第一版：X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站的账号、帖子、发布、采集和自检
+  en: "First release: accounts, posts, publishing, collecting and self-test for X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin and Bilibili."

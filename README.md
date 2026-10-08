@@ -47,7 +47,7 @@ The plugin id is the directory name: lowercase letters and digits only.
 
 ## Versions
 
-A version is a semver tag (`v1.2.0`) on this repository; pre-releases are not offered. The tag message is the upgrade note users see. Every tag must contain finished plugins: Annulo copies the directory as it is at the tag.
+A version is a semver tag (`v1.2.0`) on this repository; pre-releases are not offered. Upgrade notes live in each plugin's `changelog.yaml` (newest first; each entry has a `version` plus one note per language code, e.g. `zh`, `en`), and Annulo shows the one matching the interface language, falling back to `en`. Write the tag message in English; it is shown only when `changelog.yaml` has no entry for that version. Every tag must contain finished plugins: Annulo copies the directory as it is at the tag.
 
 ## License
 
