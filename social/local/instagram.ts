@@ -27,6 +27,7 @@ import { Expired, runProbe } from './_health'
 // 这一版是照 Instagram 网页的结构写的，还没用真实账号跑过。最可能要对着页面改的几步：
 //   1. 发帖入口（左栏「New post / Create」的 svg aria-label，以及点开后有没有「Post」子菜单）；
 //   2. 选完图后的两次「Next」、说明框的 aria-label、「Share」按钮（都按文字认，界面语言不是中英文时认不出）；
+//      2026-10 起有的账号是整页的发帖（地址 /create/style/ 这类，没有弹窗、底部「滤镜 / 编辑」、右上角「下一步」），按钮在整页里找（clickText）；
 //   3. 发完认新帖子的 shortcode（media/configure 接口的响应，认不到再去 feed 里按文案对）；
 //   4. 删除菜单里的「Delete」和确认框；
 //   5. 视频帖：Reel 提示框的「OK」、视频处理完才能点的「Next」（点到出说明框为止，不数次数）、转码没完时的重试。
@@ -74,7 +75,8 @@ const SEL = {
   // 收视频的 input（accept 里有 video）；没有就退回 fileInput
   videoInput: 'div[role="dialog"] input[type="file"][accept*="video"], form[enctype="multipart/form-data"] input[type="file"][accept*="video"]',
   // Reel 的说明框是「Add a caption...」（中文界面「添加配文...」，2026-09 实测），图片帖是「Write a caption...」
-  caption: 'div[role="dialog"] [contenteditable="true"][aria-label*="Write a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="Add a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="撰写说明"], div[role="dialog"] [contenteditable="true"][aria-label*="说明"], div[role="dialog"] [contenteditable="true"][aria-label*="配文"], div[role="dialog"] div[role="textbox"][contenteditable="true"]',
+  // 2026-10 有的账号灰度到整页的发帖（地址 /create/…，没有弹窗，右上角「下一步」）：说明框不在弹窗里，后面几个不带弹窗前缀的就是给它的
+  caption: 'div[role="dialog"] [contenteditable="true"][aria-label*="Write a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="Add a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="撰写说明"], div[role="dialog"] [contenteditable="true"][aria-label*="说明"], div[role="dialog"] [contenteditable="true"][aria-label*="配文"], div[role="dialog"] div[role="textbox"][contenteditable="true"], [contenteditable="true"][aria-label*="Write a caption"], [contenteditable="true"][aria-label*="Add a caption"], [contenteditable="true"][aria-label*="撰写说明"], [contenteditable="true"][aria-label*="配文"]',
   moreOptions: 'svg[aria-label="More options"], svg[aria-label="更多选项"], svg[aria-label="更多選項"]',
   marked: '[data-shuttle-btn="1"]',
 }
@@ -419,10 +421,13 @@ async function clickText(b: any, texts: string[], inDialog = true): Promise<bool
     .eval(
       `(() => {
         document.querySelectorAll('[data-shuttle-btn]').forEach(e => e.removeAttribute('data-shuttle-btn'))
-        const want = ${JSON.stringify(texts)}
-        const roots = ${inDialog} ? [...document.querySelectorAll(${JSON.stringify(SEL.dialog)})] : [document]
+        // 比较时两边都去掉空白：整页发帖的「下一步」会折成两行，「Not Now」本身带空格
+        const want = ${JSON.stringify(texts)}.map(t => t.replace(/\\s+/g, ''))
+        // 整页的发帖（地址 /create/…，2026-10 灰度）没有弹窗：在整个页面里找
+        const onCreatePage = location.pathname.startsWith('/create/')
+        const roots = ${inDialog} && !onCreatePage ? [...document.querySelectorAll(${JSON.stringify(SEL.dialog)})] : [document]
         for (const r of roots.reverse()) {
-          const e = [...r.querySelectorAll('button, [role="button"], a[role="link"], div[tabindex]')].find(x => want.includes((x.innerText || '').trim()) && !x.disabled && x.getAttribute('aria-disabled') !== 'true')
+          const e = [...r.querySelectorAll('button, [role="button"], a[role="link"], div[tabindex]')].find(x => want.includes((x.innerText || '').replace(/\\s+/g, '')) && !x.disabled && x.getAttribute('aria-disabled') !== 'true')
           if (e) { e.setAttribute('data-shuttle-btn', '1'); return true }
         }
         return false
