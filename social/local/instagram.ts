@@ -444,20 +444,38 @@ async function clickTextWait(ctx: any, b: any, texts: string[], timeoutMs: numbe
 }
 
 /**
- * 把文案放进说明框（Lexical 编辑器）。2026-09 实测 Reel 的说明框不认模拟打字（打完框里还是空的），靠后面的粘贴填进去。先真的打字；打出来不对（# 话题、@ 会弹建议框，换行时可能被选中替换；表情、中文偶尔丢字），
- * 清空后改用粘贴，再不行用 insertText。三种都不对才报错，报错里带上框里实际的字，方便对着改。
+ * 把文案放进说明框（Lexical 编辑器）：先粘贴（Lexical 认 paste 事件，换行原样进去），不对再打字，最后用 insertText。
+ * 每种方法之前都先清空并确认框里空了：框里可能有上一次没发完留下的字、Instagram 预填的字，或者上一种方法填进去的半截，
+ * 不清空新文案会接在后面（2026-10 出现过「旧文字 + 新文案」、文案重复两遍）。清空用真实按键：选中框里的内容再按退格，
+ * execCommand('selectAll' / 'delete') Lexical 不认。三种都不对才报错，报错里带上框里实际的字，方便对着改。
  */
 async function fillCaption(ctx: any, b: any, text: string) {
   const want = text.replace(/\s+/g, '')
   const read = async () => String(await b.eval(`(document.querySelector(${JSON.stringify(SEL.caption)})?.innerText || '')`).catch(() => ''))
   const same = async () => (await read()).replace(/\s+/g, '') === want
+  const selectAll = () =>
+    b.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(SEL.caption)})
+      if (!el) return
+      el.focus()
+      const r = document.createRange()
+      r.selectNodeContents(el)
+      const s = window.getSelection()
+      s.removeAllRanges()
+      s.addRange(r)
+    })()`).catch(() => {})
+  const clear = async () => {
+    for (let i = 0; i < 3 && (await read()).trim(); i++) {
+      await selectAll()
+      await b.press('Backspace').catch(() => {})
+      await ctx.sleep(300)
+    }
+  }
   const inPage = (how: 'paste' | 'insert') =>
     b.eval(`(() => {
       const el = document.querySelector(${JSON.stringify(SEL.caption)})
       if (!el) return
       el.focus()
-      document.execCommand('selectAll', false)
-      document.execCommand('delete', false)
       if (${JSON.stringify(how)} === 'paste') {
         const dt = new DataTransfer()
         dt.setData('text/plain', ${JSON.stringify(text)})
@@ -465,11 +483,10 @@ async function fillCaption(ctx: any, b: any, text: string) {
       } else document.execCommand('insertText', false, ${JSON.stringify(text)})
     })()`).catch(() => {})
   await b.click(SEL.caption)
-  await b.type(SEL.caption, text, { clear: true }).catch(() => {})
-  await ctx.sleep(800)
-  if (await same()) return
-  for (const how of ['paste', 'insert'] as const) {
-    await inPage(how)
+  for (const how of ['paste', 'type', 'insert'] as const) {
+    await clear()
+    if (how === 'type') await b.type(SEL.caption, text).catch(() => {})
+    else await inPage(how)
     await ctx.sleep(1000)
     if (await same()) return
   }
