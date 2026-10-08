@@ -18,7 +18,8 @@ import { Expired, runProbe } from './_health'
 // 只传视频、不传图片，过完视频编辑页（下一步 / 完成），等 LinkedIn 传完处理完（大文件要几分钟）再发。
 //
 // 页面结构和接口（2026-09）写成常量，LinkedIn 改版时只改这里。
-// 读账号和帖子数据用 LinkedIn 网页自己调的 voyager 接口（在页面里带着登录态 fetch，csrf-token 就是 JSESSIONID cookie），不解析页面。
+// 不自己调 LinkedIn 的接口（voyager）：主动请求内部接口、和页面操作对不上，容易被风控认成脚本（2026-10 有账号被限制登录、要求验证身份）。
+// 账号信息打开自己的主页（/in/me/）读页面；帖子数据只收动态页滚动时页面自己请求回来的 voyager 响应（b.listen，不额外发请求）。
 // 这一版是照 LinkedIn 网页的结构写的，还没用真实账号跑过：出错时先看报错里说的是哪一步，再对照页面改下面的常量。
 
 type Post = {
@@ -49,12 +50,13 @@ const now = () => new Date().toISOString()
 
 const SITE = 'https://www.linkedin.com'
 const API = {
-  me: '/voyager/api/me', // 登录的账号：miniProfile（名字、publicIdentifier、头像）
-  network: (id: string) => `/voyager/api/identity/profiles/${encodeURIComponent(id)}/networkinfo`, // followersCount
-  feed: '/voyager/api/', // 动态列表、发帖结果都在 voyager 接口里，按内容认
+  feed: '/voyager/api/', // 页面自己请求的动态列表、发帖结果（只监听，不主动调），按内容认
 }
 const SEL = {
-  me: 'img.global-nav__me-photo, .global-nav__me, button.global-nav__primary-link-me-menu-trigger', // 顶栏的「我」，登录了才有
+  // 登录了才有的：顶栏的「我」，或者「消息」「人脉」入口（2025 年底新版顶栏的「我」认不出了，后两个兜底）
+  me: 'img.global-nav__me-photo, .global-nav__me, button.global-nav__primary-link-me-menu-trigger, a[href*="/messaging/"], a[href*="/mynetwork/"]',
+  // 主页顶部卡片里的头像（新旧版各一种），读不到再按 alt 是名字的图找
+  avatar: 'img.pv-top-card-profile-picture__image--show, img.pv-top-card-profile-picture__image, .pv-top-card__photo img, img.profile-photo-edit__preview',
   startPost: 'button.share-box-feed-entry__trigger, .share-box-feed-entry__top-bar button, button[aria-label*="Start a post"], button[aria-label*="发布动态"]',
   editor: '.share-creation-state__text-editor .ql-editor, .share-box .ql-editor[contenteditable="true"], div.ql-editor[contenteditable="true"], div[role="textbox"][contenteditable="true"]',
   mediaBtn: 'button[aria-label="Media"], button[aria-label="媒体"], button[aria-label*="Add media"], button[aria-label*="Add a photo"], button[aria-label*="添加媒体"], button[aria-label*="添加照片"]',
@@ -78,32 +80,6 @@ function liChannel(ctx: any, id: string) {
   const ch = ctx.db.get('social_accounts', id)
   if (!ch || ch.type !== 'linkedin') throw new Error(L(ctx, '要选一个 LinkedIn 账号', 'Pick a LinkedIn account'))
   return ch
-}
-
-/** 在页面里带着登录态调 voyager 接口；没登录或失败返回 null */
-async function voyager(b: any, path: string): Promise<any> {
-  return b
-    .eval(
-      `(async () => {
-        const m = document.cookie.match(/JSESSIONID="?([^";]+)"?/)
-        if (!m) return null
-        const r = await fetch(${JSON.stringify(path)}, { credentials: 'include', headers: { 'csrf-token': m[1], 'x-restli-protocol-version': '2.0.0', accept: 'application/json' } })
-        if (!r.ok) return null
-        return await r.json()
-      })()`,
-    )
-    .catch(() => null)
-}
-
-/** 整棵 JSON 里找第一个满足条件的对象（接口的层级常变，不写死路径） */
-function find(o: any, ok: (x: any) => boolean, depth = 0): any {
-  if (!o || typeof o !== 'object' || depth > 30) return null
-  if (!Array.isArray(o) && ok(o)) return o
-  for (const k in o) {
-    const r = find(o[k], ok, depth + 1)
-    if (r) return r
-  }
-  return null
 }
 
 /** LinkedIn 的 id（活动、帖子）前 41 位是毫秒时间戳：从 id 算发布时间 */
@@ -167,32 +143,36 @@ export function check(input: { post_id: string }, ctx: any) {
 
 type LiUser = { id: string; name: string; handle: string; avatar: string; followers?: number }
 
-/** /voyager/api/me 的响应 → 账号信息 */
-function userOf(json: any): LiUser | null {
-  const mp = find(json, (x) => typeof x.publicIdentifier === 'string' && (x.firstName != null || x.lastName != null))
-  if (!mp) return null
-  const pic = find(mp.picture ?? mp.profilePicture ?? {}, (x) => typeof x.rootUrl === 'string' && Array.isArray(x.artifacts))
-  const art = pic?.artifacts?.slice().sort((a: any, b: any) => (b.width ?? 0) - (a.width ?? 0))[0]
-  const plain = json?.plainId ?? find(json, (x) => x.plainId != null)?.plainId
-  return {
-    id: String(plain ?? mp.entityUrn ?? mp.objectUrn ?? mp.publicIdentifier),
-    // 中日韩的名字按「姓名」连着写（张亮），别的按「名 姓」加空格
-    name: (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(`${mp.firstName ?? ''}${mp.lastName ?? ''}`) ? [mp.lastName, mp.firstName].filter(Boolean).join('') : [mp.firstName, mp.lastName].filter(Boolean).join(' ')) || mp.publicIdentifier,
-    handle: mp.publicIdentifier,
-    avatar: pic && art ? pic.rootUrl + art.fileIdentifyingUrlPathSegment : '',
+/**
+ * 打开自己的主页读账号：/in/me/ 会跳到 /in/<handle>/，handle 从地址里取，名字读标题（h1，读不到用网页标题「名字 | LinkedIn」），
+ * 头像读顶部卡片，粉丝数读页面上的「N followers」。会离开当前页面。账号的 id 用 handle（以前用接口里的数字 id，见 sameAccount）。
+ */
+async function readUser(ctx: any, b: any): Promise<LiUser | null> {
+  await b.goto(SITE + '/in/me/')
+  let handle = ''
+  for (let i = 0; i < 10 && !handle; i++) {
+    const m = /\/in\/([^/?#]+)/.exec(b.url())
+    if (m && m[1] !== 'me') handle = decodeURIComponent(m[1])
+    else await ctx.sleep(1500)
   }
+  if (!handle) return null
+  await b.waitFor('main h1, h1', { timeout: 15000 }).catch(() => {})
+  await ctx.sleep(1500)
+  const r: any = await b
+    .eval(
+      `(() => {
+        const name = (document.querySelector('main h1')?.innerText || document.querySelector('h1')?.innerText || document.title.replace(/^\\(\\d+\\)\\s*/, '').split('|')[0] || '').trim()
+        const img = document.querySelector(${JSON.stringify(SEL.avatar)})
+          || [...document.images].find(i => name && (i.alt || '').includes(name) && /licdn\\.com/.test(i.src))
+        return { name, avatar: img?.src || '' }
+      })()`,
+    )
+    .catch(() => null)
+  return { id: handle, handle, name: r?.name || handle, avatar: /^https:/.test(r?.avatar ?? '') ? r.avatar : '', followers: await followersOnPage(b) }
 }
 
-async function readUser(b: any): Promise<LiUser | null> {
-  const u = userOf(await voyager(b, API.me))
-  if (!u) return null
-  const net = await voyager(b, API.network(u.handle))
-  const f = net ? find(net, (x) => typeof x.followersCount === 'number') : null
-  if (f) u.followers = f.followersCount
-  // networkinfo 接口 2025 年底下线了（410）：在个人页 / 动态页上读左边卡片的「Followers 数字」（采集时正好在动态页）
-  else u.followers = await followersOnPage(b)
-  return u
-}
+/** 这个账号是不是这次登录的人：以前的账号 platform_uid 存的是接口里的数字 id，现在是 handle，所以 handle 一样也算 */
+const sameAccount = (ch: any, u: LiUser) => !!ch && (ch.platform_uid === u.id || ch.handle === u.handle)
 
 /** 页面上的粉丝数：「Followers\n1,234」「1.2K followers」「关注者 3万」这类，读不到返回 undefined */
 async function followersOnPage(b: any): Promise<number | undefined> {
@@ -205,13 +185,9 @@ async function followersOnPage(b: any): Promise<number | undefined> {
   return Math.round(n * mul)
 }
 
-/**
- * 登录了没有：先看是不是被带到了登录页；再问 LinkedIn 自己的接口 /voyager/api/me，拿得到账号就是登录了。
- * 不靠页面元素：LinkedIn 改版常换 class 名（2025 年底新版顶栏的「我」就认不出了，登录了还一直等）；顶栏的「我」只作兜底。
- */
+/** 登录了没有：被带到登录页、验证页就是没登录；否则看页面上有没有登录了才有的入口（SEL.me） */
 async function loggedIn(b: any) {
   if (LOGGED_OUT.test(b.url())) return false
-  if (userOf(await voyager(b, API.me))) return true
   return !!(await b.exists(SEL.me).catch(() => false))
 }
 
@@ -238,12 +214,12 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     ok = await loggedIn(b)
   }
   if (!ok) throw new Error(L(ctx, '5 分钟内没有完成登录。再点一次「添加 LinkedIn 账号」接着登（登到一半的会保留）', 'Login wasn\'t finished within 5 minutes. Click "Add LinkedIn account" to continue (what you did so far is kept)'))
-  const u = await readUser(b)
-  if (!u) throw new Error(L(ctx, '登录了，但没读到账号信息，LinkedIn 的接口可能改了（/voyager/api/me）', "Logged in, but couldn't read the account info — LinkedIn's API may have changed (/voyager/api/me)"))
+  const u = await readUser(ctx, b)
+  if (!u) throw new Error(L(ctx, '登录了，但没读到账号信息：打开 /in/me/ 没跳到自己的主页，LinkedIn 的页面可能改了', "Logged in, but couldn't read the account info: /in/me/ didn't lead to your profile — LinkedIn's page may have changed"))
   const fields = channelFields(u)
-  const same = ctx.db.query('social_accounts', { where: { type: 'linkedin', platform_uid: u.id }, limit: 1 }).list[0]
+  const same = ctx.db.query('social_accounts', { where: { type: 'linkedin' }, limit: 100 }).list.find((c: any) => sameAccount(c, u))
   if (old && same && same.id !== old.id) throw new Error(L(ctx, `登录的是「${u.name}」，它已经是另一个账号了。重新登录时请登录原来的账号`, `You logged in as ${u.name}, which is already another account here. Log in with the original account`))
-  if (old && old.platform_uid && old.platform_uid !== u.id) throw new Error(L(ctx, `登录的是「${u.name}」，不是这个账号原来的 LinkedIn。重新登录时请登录原来的账号`, `You logged in as ${u.name}, not this account's original LinkedIn. Log in with the original account`))
+  if (old && old.platform_uid && !sameAccount(old, u)) throw new Error(L(ctx, `登录的是「${u.name}」，不是这个账号原来的 LinkedIn。重新登录时请登录原来的账号`, `You logged in as ${u.name}, not this account's original LinkedIn. Log in with the original account`))
   const target = old ?? same
   if (target) {
     ctx.db.update('social_accounts', target.id, { ...fields, ...profileFields(target, profile) })
@@ -644,7 +620,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
     const posts = await readPosts(ctx, b, ch.handle, 6)
     const ok = await loggedIn(b)
-    const user = ok ? await readUser(b) : null
+    const user = ok ? await readUser(ctx, b) : null
     await b.close()
     if (!ok) {
       ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
@@ -714,8 +690,8 @@ export async function probe(input: { channel_id: string }, ctx: any) {
       if (LOGGED_OUT.test(b.url()) || !(await loggedIn(b))) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
     })
     await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      const u = await readUser(b)
-      if (!u) throw new Error(L(ctx, `读不到账号信息（${API.me} 的结构变了）`, `Couldn't read the account (${API.me} changed)`))
+      const u = await readUser(ctx, b)
+      if (!u) throw new Error(L(ctx, '读不到账号信息：打开 /in/me/ 没跳到自己的主页', "Couldn't read the account: /in/me/ didn't lead to your profile"))
       return `${u.name} @${u.handle}` + (u.followers != null ? L(ctx, ` · ${u.followers} 粉丝`, ` · ${u.followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
     })
     const posts = await t.step('posts', L(ctx, '读最近的帖子', 'Read recent posts'), async () => {
