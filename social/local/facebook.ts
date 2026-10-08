@@ -251,12 +251,18 @@ async function readHeader(b: any): Promise<{ handle: string; name: string; title
     .eval(`(() => {
       const u = new URL(location.href)
       const seg = u.pathname.split('/').filter(Boolean)[0] || ''
-      // 名字：主区域（[role="main"]）里的 h1，比如主页上的「Talizen」。不能写成 '[role="main"] h1, h1'：
+      // 名字：主区域（[role="main"]）里的 h1，比如主页上的「Talizen」；没有 h1 用字号最大的文字。不能写成 '[role="main"] h1, h1'：
       // querySelectorAll 按文档顺序返回，左边栏的「管理公共主页」会排在前面。网页标题常常只是「(14) Facebook」，只作最后的办法
       const generic = /^(管理公共主页|管理主页|管理專頁|管理粉絲專頁|专业面板|專業主控板|Manage Page|Professional dashboard|Facebook)$/i
       const firstLine = e => (e.innerText || '').trim().split('\\n')[0].trim()
       const main = document.querySelector('[role="main"]')
-      const h1 = [...(main ? main.querySelectorAll('h1') : []), ...document.querySelectorAll('h1')].map(firstLine).find(t => t && !generic.test(t))
+      // 个人主页上没有 h1（2026-10）：名字是主区域里字号最大的那段短文字（32px 的 span）
+      const biggest = () => [...(main || document).querySelectorAll('h1, h2, span, a, div')]
+        .filter(e => e.children.length <= 1)
+        .map(e => ({ t: firstLine(e), fs: parseFloat(getComputedStyle(e).fontSize) || 0 }))
+        .filter(x => x.t && x.t.length <= 80 && x.fs >= 20 && !generic.test(x.t))
+        .sort((a, b) => b.fs - a.fs)[0]
+      const h1 = [...(main ? main.querySelectorAll('h1') : [])].map(firstLine).find(t => t && !generic.test(t)) || (biggest() || {}).t || [...document.querySelectorAll('h1')].map(firstLine).find(t => t && !generic.test(t))
       const og = (document.querySelector('meta[property="og:title"]') || {}).content || ''
       const title = document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '').trim()
       const name = h1 || (og && !generic.test(og) ? og : '') || (generic.test(title) ? '' : title)
