@@ -10,7 +10,7 @@ import { Expired, runProbe } from './_health'
 //                                             存一篇写好的笔记（待审，social_posts），校验平台规格；笔记由助手按任务 tasks/write-xiaohongshu.md 写
 //   xhs.check({ post_id })                    按平台规格检查一篇笔记，返回问题列表
 //   xhs.login / xhs.checkLogin                本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   xhs.publish / xhs.publishDue / xhs.remove 发布、到点发布排期的、删除
+//   xhs.publish / xhs.remove 发布、删除
 //   xhs.collect                               采集笔记数据和粉丝数
 //   xhs.probe({ channel_id })                 自检：登录、读账号和笔记、删除按钮、打开发布页、上传图片 / 视频的入口，不真的发（local/_health.ts）
 //
@@ -401,27 +401,6 @@ export async function publish(input: { post_id: string; private?: boolean; force
     return { id: p.id, post_id: noteId, topics, private: !!input.private, video: !!video }
   } catch (e: any) {
     throw fail(e?.message ?? String(e))
-  }
-}
-
-/** 到点的排期笔记逐篇发布（定时任务调用）。一次最多发 1 篇，其余等下一轮 */
-export async function publishDue(input: {}, ctx: any) {
-  const now = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => p.scheduled_at && Date.parse(p.scheduled_at) <= now)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    // 频率限制不算失败：放回排期，下一轮再试
-    if (/至少隔|上限/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 

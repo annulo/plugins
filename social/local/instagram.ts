@@ -11,7 +11,7 @@ import { assist, ensure, markReady, readySel } from './_assist'
 //                                           存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-instagram.md 写
 //   instagram.check({ post_id })            按平台规格检查
 //   instagram.login / instagram.checkLogin  本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   instagram.publish / publishDue / remove 发布、到点发布排期的、删除
+//   instagram.publish / remove 发布、删除
 //   instagram.collect                       采集自己最近帖子的互动数据和粉丝数
 //   instagram.probe({ channel_id })         自检：登录、读账号、读帖子、帖子菜单、打开发帖窗口、找上传图片的入口，不真的发（local/_health.ts）
 //
@@ -710,28 +710,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const msg = e?.message ?? String(e)
     ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
     throw new Error(msg)
-  }
-}
-
-/** 到点的排期帖子逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮 */
-export async function publishDue(_input: {}, ctx: any) {
-  const igs = new Set(ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!igs.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => igs.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 

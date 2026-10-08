@@ -96,7 +96,8 @@
 
 ## 定时任务
 
-每个平台两个：`<平台>.publishDue`（到点的排期逐条发）、`<平台>.collect`（每 6 小时采集），再加 `probeAll`（每天自检一次）。没有这个平台的账号时什么都不做。
+排期发布一个：`publish.json` 用 Annulo 的 `due`（按 `social_posts.scheduled_at` 到点，对每条 `status = scheduled` 的帖子调一次 `social.publishScheduled`），不轮询。
+每个平台一个 `<平台>.collect`（每 6 小时采集），再加 `probeAll`（每天自检一次）。没有这个平台的账号时什么都不做。
 
 ## 平台改版了
 

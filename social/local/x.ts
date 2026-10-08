@@ -13,7 +13,7 @@ export { problems as draftProblems } from './_x_spec'
 //                                          存一条写好的推文（待审，social_posts）；推文由助手按任务 tasks/write-x.md 写
 //   x.check({ post_id })                   按平台规格检查一篇推文
 //   x.login / x.checkLogin                 本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   x.publish / x.publishDue / x.remove    发布（文字 + 图片，或文字 + 视频）、到点发布排期的、删除
+//   x.publish / x.remove    发布（文字 + 图片，或文字 + 视频）、删除
 //   x.collect                              采集推文的互动数据和粉丝数
 //   x.probe({ channel_id })                自检：登录、读账号、读推文、推文菜单、打开发推框、找发布按钮、上传入口收不收视频，不真的发（local/_health.ts）
 //
@@ -509,28 +509,6 @@ export async function publish(input: { post_id: string }, ctx: any) {
     const msg = e?.message ?? String(e)
     ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
     throw new Error(msg)
-  }
-}
-
-/** 到点的排期推文逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮 */
-export async function publishDue(input: {}, ctx: any) {
-  const xs = new Set(ctx.db.query('social_accounts', { where: { type: 'x' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!xs.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => xs.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/24 小时内|in 24 hours/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 

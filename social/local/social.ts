@@ -16,7 +16,7 @@ export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewh
 //   social.check / publish / remove({ post_id })
 //   social.login({ type, channel_id? })          添加账号 / 重新登录
 //   social.collect({ channel_id } | { type })     采集一个账号，或者某个平台的全部账号（定时任务）
-//   social.publishDue({ type })                  发布某个平台到点的排期（定时任务；一次一条）
+//   social.publishScheduled({ post_id })         发一条到点的排期（定时任务 schedules/publish.json 按 scheduled_at 调）
 //   social.probe({ channel_id })                 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发（各平台的 probe）
 //   social.probeAll()                            自检所有已登录的账号（定时任务，每天一次）
 //   social.health()                              各账号最近一次自检 / 发布 / 删除 / 采集成没成（social_health）
@@ -220,26 +220,24 @@ export function remove(input: { post_id: string; _show_browser?: boolean }, ctx:
   return track(ctx, ch, 'remove', (c) => m.remove(input, c), input.post_id)
 }
 
-/** 某个平台到点的排期逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮；频率限制不算失败，放回排期 */
-export async function publishDue(input: { type: string }, ctx: any) {
-  if (!PLATFORMS[input?.type ?? '']) return { due: 0 }
-  // 登录态在别的电脑上的账号，排期由那台电脑发
-  const ids = new Set(ctx.db.query('social_accounts', { where: { type: input.type }, limit: 100 }).list.filter((c: any) => !elsewhere(ctx, c)).map((c: any) => c.id))
-  if (!ids.size) return { due: 0 }
-  const t = Date.now()
-  const due = ctx.db
-    .query('social_posts', { where: { status: 'scheduled' }, limit: 500 })
-    .list.filter((p: any) => ids.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
+/**
+ * 发一条到点的排期（定时任务 schedules/publish.json 调用：Annulo 按 social_posts.scheduled_at 到点逐条调它）。
+ * 已经不是排期状态（发了、取消了）的跳过；登录态在别的电脑上的账号由那台电脑发；
+ * 撞上平台的频率限制不算失败：往后推 15 分钟再排（改了时间，Annulo 到点会再调）。
+ */
+export async function publishScheduled(input: { post_id: string }, ctx: any) {
+  const p = ctx.db.get('social_posts', input?.post_id)
+  if (!p || p.status !== 'scheduled') return { skipped: L(ctx, '已经不在排期里', 'No longer scheduled') }
+  const ch = ctx.db.get('social_accounts', p.channel_id)
+  const other = ch && elsewhere(ctx, ch)
+  if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
   try {
     const r: any = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r?.post_id }
+    return { published: r?.post_id }
   } catch (e: any) {
     if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
+      ctx.db.update('social_posts', p.id, { status: 'scheduled', scheduled_at: new Date(Date.now() + 15 * 60_000).toISOString(), error: e.message })
+      return { waiting: e.message }
     }
     throw e
   }

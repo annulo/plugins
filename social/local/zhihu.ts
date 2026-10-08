@@ -13,7 +13,7 @@ export { problems as draftProblems } from './_zhihu_spec'
 //                                       存一篇写好的文章（待审，social_posts）；由助手按任务 tasks/write-zhihu.md 写
 //   zhihu.check({ post_id })            按平台规格检查
 //   zhihu.login / zhihu.checkLogin      本机浏览器登录知乎（扫码或验证码，ctx.browser），登录态只在这台电脑上
-//   zhihu.publish / publishDue / remove 发布、到点发布排期的、删除
+//   zhihu.publish / remove 发布、删除
 //   zhihu.collect                       采集粉丝数和文章的阅读、赞同、评论、收藏
 //   zhihu.probe({ channel_id })         自检：登录、读文章、文章的删除菜单、打开写文章页，不真的发（local/_health.ts）
 //
@@ -568,28 +568,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (e instanceof Expired || e?.expired) err.expired = true
     if (e?.snapshot) err.snapshot = e.snapshot
     throw err
-  }
-}
-
-/** 到点的排期文章逐篇发布（定时任务调用）。一次最多发 1 篇，其余等下一轮 */
-export async function publishDue(_input: {}, ctx: any) {
-  const ids = new Set(ctx.db.query('social_accounts', { where: { type: 'zhihu' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!ids.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => ids.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 

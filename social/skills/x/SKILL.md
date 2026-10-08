@@ -31,12 +31,11 @@ X 的开放接口要付费申请，登录、发布、采集都用 Annulo 的本�
 | `social/x.save({ article_id, channel_id, title?, body, tags, post_id? })` | 存一条写好的推文（pending_review），返回 `problems`；文章有 `url` 会接在正文最后。写推文本身按任务 `plugins/social/tasks/write-x.md` |
 | `social/x.check({ post_id })` | 规格检查：正文 + 话题 ≤ 280（中日韩文字、emoji 算 2，链接算 23）、话题 ≤ 3、图片 ≤ 4 |
 | `social/x.publish({ post_id })` | 发布。检查规格和 24 小时最多 10 条（两条之间不设固定间隔，见 `plugins/social/local/_x_spec.ts`）；上次中断过的先去主页找有没有这条，避免重复发 |
-| `social/x.publishDue({})` | 定时任务：到点的排期推文逐条发布 |
 | `social/x.remove({ post_id })` | 从 X 删除一条已发布的推文（不可恢复，只在用户明确要求时调） |
 | `social/x.collect({ channel_id? })` | 采集主页最近的推文和粉丝数；在 X 上直接发的也收进来（source: platform） |
 | `social/x.probe({ channel_id })` | 自检：登录、读账号、读内容、删除菜单、打开发帖框、找发布按钮，不真的发；页面上的「自检」、每天的 `social/social.probeAll` 调它（经 `social/social.probe`，结果记进 `social_health`） |
 
-页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：`social/social.publishDue` / `social/social.collect`（`input: { type: 'x' }`）每 5 分钟 / 每 6 小时，`social/social.probeAll` 每天自检一次（`plugins/social/schedules/`）。
+页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：排期的到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`），`social/social.collect`（`input: { type: 'x' }`）每 6 小时采集，`social/social.probeAll` 每天自检一次（`plugins/social/schedules/`）。
 
 用户问数据（哪条浏览高、最近涨了多少）时**先读表**：定时任务每 6 小时采集一次，表里就是最新的。只有账号的 `collected_at` 超过 6 小时、或者用户明确要「现在的」数字时才调 `social/x.collect` 再读——采集要开浏览器跑半分钟，频繁刷主页还可能被平台限流。
 
