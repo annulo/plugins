@@ -41,6 +41,7 @@
 | `social.remove({ post_id })` | 从平台删除 |
 | `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
+| `social.publishScheduled({ post_id })` | 到点发一条排期（`schedules/publish.json` 调）：出自文章的先按文章现在的内容重新生成、检查，再发 |
 | `social.collect({ channel_id })` | 现在采集一个账号 |
 | `social.probe({ channel_id })` | 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发 |
 | `social.health()` | 各账号最近一次自检 / 发布 / 删除 / 采集成没成 |
@@ -51,6 +52,15 @@
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
 `social.collect`、`publish`、`probe`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
+
+## 内容怎么变成帖子（`local/_content.ts`）
+
+插件认一份通用的内容格式（`type` 长文 / 图文 / 视频、`title`、`body`、`tags`、`images`、`video`、`cover_text`、`category`，见文件开头），
+`fromContent(内容, 平台)` 按平台规格转成帖子字段，`supports` / `platformsFor` 说哪个平台收哪种类型，`lengthOn` 算字数和上限。
+模板的文章表就按这个格式存，发布、页面上的提示都 import 这里，不在模板里另写一份。
+帖子的 `article_id` 指向模板的 `articles`：排期到点时按文章当时的内容重新生成再发，所以排期之后改文章，发出去的是改过的。
+
+什么写插件、什么写模板：对外部平台的知识（规格、转换、发布、采集）写插件，业务的内容、流程和界面写模板。详见 Annulo 仓库 `docs/plugins.md`「插件和模板的分界」。
 
 ## 写帖子：模板给内容，插件写和存
 

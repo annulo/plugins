@@ -1,6 +1,7 @@
 import { L } from './_i18n'
 import { PLATFORMS } from './_platforms'
 import { isAssetUrl } from './_source'
+import { fromContent } from './_content'
 import { list as healthList, record, showBrowserIf, track } from './_health'
 
 // 手机上打开后台（不在 Annulo 里）时这几个也能用：shuttle push 会把它们打包成站点 Func，只用 ctx.db
@@ -223,6 +224,8 @@ export function remove(input: { post_id: string; _show_browser?: boolean }, ctx:
 /**
  * 发一条到点的排期（定时任务 schedules/publish.json 调用：Annulo 按 social_posts.scheduled_at 到点逐条调它）。
  * 已经不是排期状态（发了、取消了）的跳过；登录态在别的电脑上的账号由那台电脑发；
+ * 出自文章的（article_id，模板的 articles 表）按文章现在的内容重新生成一遍、过一遍规格检查再发：排期之后改了文章，发出去的是改过的；
+ * 文章删了、项目里没有 articles 表的，按帖子里存的发。
  * 撞上平台的频率限制不算失败：往后推 15 分钟再排（改了时间，Annulo 到点会再调）。
  */
 export async function publishScheduled(input: { post_id: string }, ctx: any) {
@@ -231,6 +234,19 @@ export async function publishScheduled(input: { post_id: string }, ctx: any) {
   const ch = ctx.db.get('social_accounts', p.channel_id)
   const other = ch && elsewhere(ctx, ch)
   if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
+  if (p.article_id && ch) {
+    let a: any = null
+    try { a = ctx.db.get('articles', p.article_id) } catch { /* 没有文章表 */ }
+    if (a) {
+      ctx.db.update('social_posts', p.id, { ...fromContent(a, ch.type), updated_at: new Date().toISOString() })
+      const found: string[] = check({ post_id: p.id }, ctx)?.problems ?? []
+      if (found.length) {
+        const msg = L(ctx, `文章现在的内容不符合平台要求，没发出去：${found.join('；')}`, `The article as it is now doesn't meet the platform's rules, so it wasn't published: ${found.join('; ')}`)
+        ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: new Date().toISOString() })
+        throw new Error(msg)
+      }
+    }
+  }
   try {
     const r: any = await publish({ post_id: p.id }, ctx)
     return { published: r?.post_id }
@@ -239,6 +255,8 @@ export async function publishScheduled(input: { post_id: string }, ctx: any) {
       ctx.db.update('social_posts', p.id, { status: 'scheduled', scheduled_at: new Date(Date.now() + 15 * 60_000).toISOString(), error: e.message })
       return { waiting: e.message }
     }
+    // 没开始发就出错的（比如没在这台电脑登录）帖子还停在排期：记成失败，页面上看得到原因、能重发（同一个时间 Annulo 不会再调）
+    if (ctx.db.get('social_posts', p.id)?.status === 'scheduled') ctx.db.update('social_posts', p.id, { status: 'failed', error: e?.message ?? String(e), updated_at: new Date().toISOString() })
     throw e
   }
 }

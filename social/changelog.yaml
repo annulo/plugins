@@ -3,8 +3,8 @@
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
 - version: 0.7.0
-  zh: 排期的帖子改由 Annulo 按排期时间准时发（到点一分钟内），不再每隔 5、15 分钟检查一次；撞上平台发布频率限制的往后推 15 分钟再发。需要 Annulo 新版本。
-  en: "Scheduled posts are now published by Annulo right at their scheduled time (within a minute) instead of a check every 5–15 minutes; a post that hits a platform's rate limit is pushed back 15 minutes. Needs the latest Annulo."
+  zh: 排期的帖子改由 Annulo 按排期时间准时发（到点一分钟内），不再每隔 5、15 分钟检查一次；出自文章的到点按文章那时的内容重新生成再发；撞上平台发布频率限制的往后推 15 分钟再发，没发起来的（比如没登录）记成失败、写明原因。内容怎么转成各平台的帖子（fromContent、字数）由插件提供，模板直接用。需要 Annulo 新版本。
+  en: "Scheduled posts are now published by Annulo right at their scheduled time (within a minute) instead of a check every 5–15 minutes; posts made from an article are regenerated from the article as it is then; a post that hits a platform's rate limit is pushed back 15 minutes, and one that can't start (e.g. not logged in) is marked failed with the reason. The plugin now provides how content becomes each platform's post (fromContent, lengths) for templates to use. Needs the latest Annulo."
 - version: 0.6.4
   zh: Instagram、Facebook 发帖卡在某一步时（找不到「下一步」、打不开发帖框），先请浏览器助手看页面帮这一步，碰到验证码会把浏览器弹出来请你处理；「分享 / 发布」仍由脚本点。需要 Annulo 新版本，老版本照原来报错。
   en: "When posting to Instagram or Facebook gets stuck (Next can't be found, the composer won't open), the browser assistant looks at the page and helps with that step, and brings the browser up for you on a CAPTCHA; Share / Post are still clicked by the script. Needs the latest Annulo; older versions report the error as before."
