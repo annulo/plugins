@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.6.4
+  zh: Instagram、Facebook 发帖卡在某一步时（找不到「下一步」、打不开发帖框），先请浏览器助手看页面帮这一步，碰到验证码会把浏览器弹出来请你处理；「分享 / 发布」仍由脚本点。需要 Annulo 新版本，老版本照原来报错。
+  en: "When posting to Instagram or Facebook gets stuck (Next can't be found, the composer won't open), the browser assistant looks at the page and helps with that step, and brings the browser up for you on a CAPTCHA; Share / Post are still clicked by the script. Needs the latest Annulo; older versions report the error as before."
 - version: 0.6.3
   zh: Instagram：有的账号发帖变成了整页（右上角「下一步」，没有弹窗），之前会报「选完图后没找到下一步」，现在两种发帖界面都能用。
   en: "Instagram: some accounts now get a full-page composer (\"Next\" at the top right, no dialog), which used to fail with \"Couldn't find Next after choosing images\"; both composers work now."
