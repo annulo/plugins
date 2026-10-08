@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.6.3
+  zh: Instagram：有的账号发帖变成了整页（右上角「下一步」，没有弹窗），之前会报「选完图后没找到下一步」，现在两种发帖界面都能用。
+  en: "Instagram: some accounts now get a full-page composer (\"Next\" at the top right, no dialog), which used to fail with \"Couldn't find Next after choosing images\"; both composers work now."
 - version: 0.6.2
   zh: Instagram：修了文案填进说明框时重复两遍、或者前面多出上次留下的文字：每次填之前先清空说明框。
   en: "Instagram: fixed the caption being filled in twice or after leftover text from an earlier attempt — the caption box is cleared before filling."
