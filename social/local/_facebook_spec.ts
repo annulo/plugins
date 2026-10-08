@@ -1,6 +1,7 @@
 // Facebook 的发帖规格。页面和本机函数都按这里检查，Facebook 改规则时只改这里。
 
 import { L } from './_i18n'
+import { withTags } from './_source'
 
 export const FB = {
   // 帖子正文上限很大（6 万多字符），但信息流里只显示前两三行，超过 5000 就不像帖子了
@@ -17,8 +18,7 @@ export const FB = {
 
 /** 发出去的完整文字：正文 + 话题（#话题接在最后） */
 export function postText(body: string, tags: string[]) {
-  const t = (tags ?? []).map((x) => '#' + String(x).replace(/^#/, '').replace(/\s+/g, '')).filter((x) => x.length > 1)
-  return [String(body ?? '').trim(), t.join(' ')].filter(Boolean).join('\n\n')
+  return withTags(body, tags) // 正文里已经有的话题不重复接（_source.ts）
 }
 
 /** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件 */
