@@ -19,3 +19,46 @@ export async function assist(ctx: any, b: any, goal: string, opts: { until?: str
     return false
   }
 }
+
+/**
+ * 走路的一步：脚本先快速试一次（attempt 出错也不要紧），然后看 until 出现没有；没有就按这一步的意图（goal）请浏览器助手帮一次。
+ * 返回最后达没达成。goal 写成固定的一句话（解法按「网站 + goal」记），不要拼帖子标题之类会变的东西。
+ */
+export async function ensure(ctx: any, b: any, goal: string, until: string, attempt: () => Promise<unknown>, opts: { avoid?: string[]; maxSteps?: number } = {}): Promise<boolean> {
+  await attempt().catch(() => {})
+  if (await b.exists(until).catch(() => false)) return true
+  return assist(ctx, b, goal, { ...opts, until })
+}
+
+/**
+ * 给「按钮露出来、能点了」做一个完成条件：页面里每 300 毫秒找一次文字是 texts 之一、没禁用、看得见、没被别的东西（弹窗、遮罩）盖住的按钮，
+ * 给它打上 data-annulo-ready="<name>"。浏览器助手的 until 写 readySel(name)：分享、删除这类按钮 AI 不许点，只帮着把挡在前面的东西弄走。
+ * 返回停掉定时器的函数（换页面后定时器自己就没了）。
+ */
+export async function markReady(b: any, name: string, texts: string[]): Promise<() => Promise<void>> {
+  await b
+    .eval(`(() => {
+      const name = ${JSON.stringify(name)}
+      const want = ${JSON.stringify(texts)}.map(t => t.replace(/\\s+/g, ''))
+      window.__annuloReady = window.__annuloReady || {}
+      clearInterval(window.__annuloReady[name])
+      const tick = () => {
+        document.querySelectorAll('[data-annulo-ready="' + name + '"]').forEach(e => e.removeAttribute('data-annulo-ready'))
+        for (const e of document.querySelectorAll('button, [role="button"], [role="menuitem"], div[tabindex], a[role="link"]')) {
+          if (!want.includes((e.innerText || '').replace(/\\s+/g, '')) || e.disabled || e.getAttribute('aria-disabled') === 'true') continue
+          const r = e.getBoundingClientRect()
+          if (r.width < 2 || r.height < 2) continue
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          if (top && (top === e || e.contains(top))) { e.setAttribute('data-annulo-ready', name); return }
+        }
+      }
+      tick()
+      window.__annuloReady[name] = setInterval(tick, 300)
+    })()`)
+    .catch(() => {})
+  return async () => {
+    await b.eval(`(() => { const w = window.__annuloReady || {}; clearInterval(w[${JSON.stringify(name)}]); document.querySelectorAll('[data-annulo-ready=${JSON.stringify(name)}]').forEach(e => e.removeAttribute('data-annulo-ready')) })()`).catch(() => {})
+  }
+}
+
+export const readySel = (name: string) => `[data-annulo-ready="${name}"]`

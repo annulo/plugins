@@ -3,7 +3,7 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired, runProbe } from './_health'
-import { assist } from './_assist'
+import { assist, ensure, markReady, readySel } from './_assist'
 
 // Instagram 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。支持个人 / 创作者账号的图片帖子（单图、多图）和视频帖（发成 Reel）。
 //
@@ -557,25 +557,20 @@ async function waitShared(ctx: any, b: any, timeoutMs: number, video = false): P
  * ch 暂时没用到，和 local/linkedin.ts、local/x.ts 的 openComposer 同一个签名。
  */
 async function openComposer(ctx: any, b: any, _ch: any) {
-  await b.waitFor(SEL.create, { timeout: 20000 }).catch(() => {
-    throw new Error(L(ctx, '没找到「新帖子」入口，Instagram 的页面可能改了', "Couldn't find \"New post\" — Instagram's page may have changed"))
-  })
-  // 页面出来后再关挡在前面的「打开通知」这类弹窗（关一个可能还有下一个，最多 3 次）
-  for (let i = 0; i < 3 && (await clickText(b, TEXT.notNow)); i++) await ctx.sleep(800)
-  await b.click(SEL.create)
-  await ctx.sleep(1500)
-  // 新版点开是子菜单（Post / Live video / Ad），点「Post」；老版直接是选图弹窗
-  if (!(await b.exists(SEL.fileInput).catch(() => false))) await clickText(b, TEXT.post, false)
-  // 选文件的 input 是隐藏的（界面上是「从电脑中选择」按钮），只等它出现，不等可见（2026-09 实测）
-  await b.waitFor(SEL.fileInput, { timeout: 15000, visible: false }).catch(() => {
-    throw new Error(L(ctx, '没打开选图窗口，Instagram 的页面可能改了', "Couldn't open the photo picker — Instagram's page may have changed"))
-  })
+  // 走路的一步：脚本先快速试一次（入口最多等 8 秒），没打开选图窗口就请浏览器助手（_assist.ts 的 ensure）
+  const ok = await ensure(ctx, b, '打开新建帖子（左栏的「创建 / Create / 新帖子」，子菜单里选「帖子 / Post」），出现选择电脑里文件的界面；有「打开通知」之类的弹窗先关掉', SEL.fileInput, async () => {
+    await b.waitFor(SEL.create, { timeout: 8000 })
+    // 页面出来后再关挡在前面的「打开通知」这类弹窗（关一个可能还有下一个，最多 3 次）
+    for (let i = 0; i < 3 && (await clickText(b, TEXT.notNow)); i++) await ctx.sleep(800)
+    await b.click(SEL.create)
+    await ctx.sleep(1500)
+    // 新版点开是子菜单（Post / Live video / Ad），点「Post」；老版直接是选图弹窗
+    if (!(await b.exists(SEL.fileInput).catch(() => false))) await clickText(b, TEXT.post, false)
+    // 选文件的 input 是隐藏的（界面上是「从电脑中选择」按钮），只等它出现，不等可见（2026-09 实测）
+    await b.waitFor(SEL.fileInput, { timeout: 8000, visible: false })
+  }, { avoid: TEXT.share })
+  if (!ok) throw new Error(L(ctx, '没打开选图窗口，Instagram 的页面可能改了', "Couldn't open the photo picker — Instagram's page may have changed"))
 }
-
-/**
- * 选了视频后可能弹「Video posts are now reels」：找文字里有 reel、有 OK 类按钮、又没有「Next」的弹窗（发帖窗口本身有 Next），
- * 点它的 OK。点了返回 true
- */
 async function dismissReelNotice(ctx: any, b: any): Promise<boolean> {
   const ok = await b
     .eval(
@@ -696,7 +691,13 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
     b.listen(API.configure)
-    if (!(await clickTextWait(ctx, b, TEXT.share, 15000))) throw new Error(L(ctx, '没找到「Share / 分享」按钮，Instagram 的页面可能改了', "Couldn't find the \"Share\" button — Instagram's page may have changed"))
+    if (!(await clickTextWait(ctx, b, TEXT.share, 8000))) {
+      // 「分享」找不到或被挡住（弹窗、提示）：请浏览器助手把挡着的东西弄走，AI 不许点分享；露出来以后还是脚本点
+      const stop = await markReady(b, 'share', TEXT.share)
+      const ok = await assist(ctx, b, '关掉挡在前面的弹窗或提示，让写说明页上的「分享 / Share」按钮露出来（不要点分享）', { until: readySel('share'), avoid: TEXT.share })
+      await stop()
+      if (!ok || !(await clickTextWait(ctx, b, TEXT.share, 5000))) throw new Error(L(ctx, '没找到「Share / 分享」按钮，Instagram 的页面可能改了', "Couldn't find the \"Share\" button — Instagram's page may have changed"))
+    }
     const r = await waitShared(ctx, b, video ? 10 * 60_000 : 120000, !!video)
     if (r.code) return done(r.code)
     // 没认出 shortcode：去自己的帖子里按文案找
@@ -750,7 +751,13 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
   })
   await b.click(SEL.moreOptions)
   await ctx.sleep(1000)
-  if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) throw new Error(L(ctx, '菜单里没有「删除」，这条可能不是这个账号发的', 'No "Delete" in the menu — this post may not be from this account'))
+  if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) {
+    // 菜单没打开、换了样子：请浏览器助手打开这条帖子的「…」菜单，让「删除」露出来；AI 不许点删除，还是脚本点
+    const stop = await markReady(b, 'del', TEXT.del)
+    const ok = await assist(ctx, b, '打开这条帖子的「…」更多选项菜单，让「删除 / Delete」出现（不要点删除）', { until: readySel('del'), avoid: TEXT.del })
+    await stop()
+    if (!ok || !(await clickTextWait(ctx, b, TEXT.del, 5000))) throw new Error(L(ctx, '菜单里没有「删除」，这条可能不是这个账号发的', 'No "Delete" in the menu — this post may not be from this account'))
+  }
   await ctx.sleep(1000)
   // 确认框里的「删除」按钮
   if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) throw new Error(L(ctx, '没出现删除确认框，Instagram 的页面可能改了', "The delete confirmation didn't appear — Instagram's page may have changed"))
