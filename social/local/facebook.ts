@@ -5,7 +5,8 @@ import { FB, postText, problems } from './_facebook_spec'
 import { Expired, runProbe } from './_health'
 
 // Facebook 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。个人主页和用户管理的公司主页（Page）都支持：
-// 一次登录添加个人号，并把他管理的每个主页各添加成一个渠道（fb_kind: 'profile' | 'page'），它们共用同一个浏览器 profile。
+// 一次登录后，个人号和他管理的每个主页列出来让用户勾选，勾上的各添加成一个渠道（fb_kind: 'profile' | 'page'，social.addChosen），
+// 它们共用同一个浏览器 profile。不同项目可以各勾一个主页（浏览器按项目分开，每个项目各登一次）。
 //
 //   facebook.save({ article_id, channel_id, title?, body, tags, post_id? })
 //                                          存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-facebook.md 写
@@ -399,6 +400,21 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     throw new Error(L(ctx, `登录的「${me.name}」不管理主页「${old.name}」（或者没读到主页列表）。重新登录时请登录管理这个主页的账号`, `${me.name} doesn't manage the Page "${old.name}" (or the Page list couldn't be read). Log in with an account that manages it`))
   }
 
+  // 新添加、这个人管理着主页：先不建账号，把个人号和每个主页列给用户勾选（social.addChosen 建勾上的）。
+  // 一个人管几个主页、不同项目各用一个时，在每个项目里只勾自己的那个
+  if (!old && pages.length) {
+    const exists = (id: string) => !!ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: id }, limit: 1 }).list[0]
+    return {
+      choose: {
+        type: 'facebook',
+        profile,
+        uid,
+        me: { name: me.name, handle: me.handle, avatar: me.avatar, ...(followers != null ? { followers } : {}), added: !!same },
+        pages: pages.map((pg) => ({ id: pg.id, name: pg.name, handle: pg.handle || pg.id, avatar: pg.avatar ?? '', added: exists(pg.id) })),
+      },
+    }
+  }
+
   const t = now()
   const base = { login_status: 'ok', last_checked_at: t }
   const meFields: any = { fb_kind: 'profile', platform_uid: uid, name: me.name, handle: me.handle, avatar: me.avatar, ...base }
@@ -414,6 +430,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     added = true
   }
 
+  // 重新登录：只更新这个项目已经有的主页，不再把没勾过的主页加进来
   const outPages: { id: string; name: string; added: boolean }[] = []
   for (const pg of pages) {
     const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...base }
@@ -421,12 +438,42 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     if (ex) {
       ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile) })
       outPages.push({ id: ex.id, name: pg.name, added: false })
-    } else {
-      outPages.push({ id: ctx.db.insert('social_accounts', { type: 'facebook', browser_profile: profile, ...f, created_at: t }).id, name: pg.name, added: true })
     }
   }
   if (old && isPage(old)) return { id: old.id, name: old.name, added: false, pages: outPages }
   return { id: meId, name: me.name, added, pages: outPages }
+}
+
+type Choice = { type: 'facebook'; profile: string; uid: string; me: { name: string; handle?: string; avatar?: string; followers?: number }; pages: { id: string; name: string; handle?: string; avatar?: string }[] }
+
+/**
+ * 建用户勾选的账号（login 返回的 choose 原样带回来，加上勾了哪些）：个人号 profile_selected，主页 page_ids。
+ * 都共用登录时的浏览器 profile；已经有的更新，没有的新建。返回建好、更新的账号 id
+ */
+export function addChosen(input: { choose: Choice; profile_selected?: boolean; page_ids?: string[] }, ctx: any) {
+  const c = input?.choose
+  if (!c?.profile || !c.uid) throw new Error(L(ctx, '缺登录信息：重新点「添加 Facebook 账号」', 'Missing login details: click "Add Facebook account" again'))
+  const picked = new Set(input.page_ids ?? [])
+  if (!input.profile_selected && !c.pages.some((p) => picked.has(p.id))) throw new Error(L(ctx, '至少勾一个', 'Pick at least one'))
+  const t = now()
+  const base = { login_status: 'ok', last_checked_at: t }
+  const upsert = (uid: string, f: any) => {
+    const ex = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: uid }, limit: 1 }).list[0]
+    if (ex) {
+      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, c.profile) })
+      return ex.id as string
+    }
+    return ctx.db.insert('social_accounts', { type: 'facebook', browser_profile: c.profile, ...f, created_at: t }).id as string
+  }
+  const ids: string[] = []
+  if (input.profile_selected) {
+    const { name, handle, avatar, followers } = c.me
+    ids.push(upsert(c.uid, { fb_kind: 'profile', platform_uid: c.uid, name, handle, avatar, ...(followers != null ? { followers } : {}), ...base }))
+  }
+  for (const pg of c.pages.filter((p) => picked.has(p.id))) {
+    ids.push(upsert(pg.id, { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...base }))
+  }
+  return { ids }
 }
 
 /** 检查登录是否还有效（后台打开，不弹窗），写回 login_status */

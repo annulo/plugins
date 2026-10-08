@@ -342,6 +342,18 @@ export function health(_input: {}, ctx: any) {
 }
 
 /** 添加账号 / 重新登录（在别的电脑上登录的账号，在这台登录后就归这台）：登录成功后记下是这台电脑 */
+/**
+ * 登录后让用户勾选要添加哪些（login 返回 { choose }，比如 Facebook 的个人号和管理的主页）：建勾上的，记下是在这台电脑登录的。
+ * 参数照平台脚本的 addChosen（choose 原样带回来，加上勾了哪些）
+ */
+export function addChosen(input: { choose: { type: string }; [k: string]: unknown }, ctx: any) {
+  const m = PLATFORMS[input?.choose?.type ?? '']
+  if (!m?.addChosen) throw new Error(L(ctx, '这个平台不用勾选：', "This platform doesn't need picking: ") + input?.choose?.type)
+  const r = m.addChosen(input, ctx)
+  for (const id of r.ids) ctx.db.update('social_accounts', id, machineFields(ctx, ctx.db.get('social_accounts', id)))
+  return r
+}
+
 export async function login(input: { type?: string; channel_id?: string }, ctx: any) {
   const m = input?.channel_id ? platformOf(ctx, input.channel_id) : PLATFORMS[input?.type ?? '']
   if (!m) throw new Error(L(ctx, '不支持的社媒类型：', 'Unsupported social platform: ') + input?.type)
