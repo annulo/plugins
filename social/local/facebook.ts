@@ -234,7 +234,7 @@ export function check(input: { post_id: string }, ctx: any) {
 
 // ---- 账号 ----
 
-type FbPage = { id: string; name: string; handle: string; avatar: string }
+type FbPage = { id: string; name: string; handle: string; avatar: string; followers?: number }
 
 /**
  * 登录了没有：没被带到登录 / 验证页，并且有 c_user cookie（登录的个人号 id）。
@@ -359,7 +359,30 @@ async function listPages(ctx: any, b: any, selfId: string): Promise<FbPage[]> {
       if (key && key !== selfId && !found.has(key)) found.set(key, { id: key, name: l.name, handle: id ? '' : seg, avatar: '' })
     }
   }
-  return [...found.values()]
+  // 列表里认出来的名字常常是头像链接的 aria-label（「XX的头像」），也没有头像：逐个打开主页读真的名字、头像和粉丝数
+  const pages = [...found.values()].map((p) => ({ ...p, name: cleanName(p.name) }))
+  for (const p of pages) {
+    if (p.avatar && p.name) continue
+    ctx.progress({ message: L(ctx, `读取主页「${p.name}」`, `Reading the Page "${p.name}"`) })
+    await b.goto(SITE + (/^\d+$/.test(p.id) ? `/profile.php?id=${p.id}` : `/${p.handle || p.id}`)).catch(() => {})
+    await ctx.sleep(3000)
+    const h = await readHeader(b)
+    if (h.name) p.name = cleanName(h.name)
+    if (h.avatar) p.avatar = h.avatar
+    if (h.handle && !p.handle) p.handle = h.handle
+    const f = await followersOnPage(b)
+    if (f != null) p.followers = f
+  }
+  return pages
+}
+
+/** 头像链接的 aria-label、图片说明里带的后缀去掉：「XX的头像」「XX's profile picture」「XX的個人檔案相片」 */
+function cleanName(name: string) {
+  return String(name ?? '')
+    .replace(/\s*(?:的头像|的頭像|的个人主页头像|的個人檔案相片|的大头贴照|的大頭貼照)\s*$/, '')
+    .replace(/[’']s\s+(?:profile\s+)?(?:picture|photo)\s*$/i, '')
+    .replace(/^(?:Profile picture of|Photo of)\s+/i, '')
+    .trim()
 }
 
 /**
@@ -410,7 +433,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
         profile,
         uid,
         me: { name: me.name, handle: me.handle, avatar: me.avatar, ...(followers != null ? { followers } : {}), added: !!same },
-        pages: pages.map((pg) => ({ id: pg.id, name: pg.name, handle: pg.handle || pg.id, avatar: pg.avatar ?? '', added: exists(pg.id) })),
+        pages: pages.map((pg) => ({ id: pg.id, name: pg.name, handle: pg.handle || pg.id, avatar: pg.avatar ?? '', ...(pg.followers != null ? { followers: pg.followers } : {}), added: exists(pg.id) })),
       },
     }
   }
@@ -433,7 +456,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   // 重新登录：只更新这个项目已经有的主页，不再把没勾过的主页加进来
   const outPages: { id: string; name: string; added: boolean }[] = []
   for (const pg of pages) {
-    const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...base }
+    const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...(pg.followers != null ? { followers: pg.followers } : {}), ...base }
     const ex = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: pg.id }, limit: 1 }).list[0]
     if (ex) {
       ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile) })
@@ -444,7 +467,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   return { id: meId, name: me.name, added, pages: outPages }
 }
 
-type Choice = { type: 'facebook'; profile: string; uid: string; me: { name: string; handle?: string; avatar?: string; followers?: number }; pages: { id: string; name: string; handle?: string; avatar?: string }[] }
+type Choice = { type: 'facebook'; profile: string; uid: string; me: { name: string; handle?: string; avatar?: string; followers?: number }; pages: { id: string; name: string; handle?: string; avatar?: string; followers?: number }[] }
 
 /**
  * 建用户勾选的账号（login 返回的 choose 原样带回来，加上勾了哪些）：个人号 profile_selected，主页 page_ids。
@@ -471,7 +494,7 @@ export function addChosen(input: { choose: Choice; profile_selected?: boolean; p
     ids.push(upsert(c.uid, { fb_kind: 'profile', platform_uid: c.uid, name, handle, avatar, ...(followers != null ? { followers } : {}), ...base }))
   }
   for (const pg of c.pages.filter((p) => picked.has(p.id))) {
-    ids.push(upsert(pg.id, { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...base }))
+    ids.push(upsert(pg.id, { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...(pg.followers != null ? { followers: pg.followers } : {}), ...base }))
   }
   return { ids }
 }
