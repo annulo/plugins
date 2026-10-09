@@ -50,7 +50,7 @@
 | `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站） |
 | `stats.summary({ channel_id, days })` | 一个账号近 N 天的概览：发布数、粉丝增量、互动增量、帖子列表 |
 
-Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。测试阶段用本机 Page token 连主页，操作见 [Facebook API 测试说明](docs/facebook-api.md)。完成 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api' })` 返回可选主页，页面用已有的 `ChooseAccounts` 调 `social.addChosen`；User/Page token 都不写进项目表。
+Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。操作见 [Facebook API 授权与测试说明](docs/facebook-api.md)。启用 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api', account: '<连接账号 ID>', channel_id?: '<已有主页账号 ID>' })` 返回可选主页，页面用 `ChooseAccounts` 调 `social.addChosen`。已有主页沿用 id，只重新绑定当前目标，原浏览器登录保留；其它 API 主页不被浏览器重登覆盖。User/Page token 都不写进项目表，绑定的 OAuth 账号断开时必须重连。
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
 `social.collect`、`publish`、`probe`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。

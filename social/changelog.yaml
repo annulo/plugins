@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.0
+  zh: Facebook 公共主页新增官方 API 通道，保留原有浏览器方式和个人号；授权后选择主页、绑定指定 Facebook 账号，可将已有主页从测试 Page Token 改为 OAuth，或重新登录浏览器切回原方式。凭据只保存在本机，不写入项目表。API 暂支持文字发布；完整互动采集仍受 Meta 权限限制。正式授权需要 Annulo 能力版本 39 并启用授权中转。
+  en: "Facebook Pages gain an official API channel alongside browser login and personal profiles. Select Pages from a specific connected account, replace a test Page Token with OAuth, or sign in through the browser to switch back. Credentials stay on this computer, outside project tables. API publishing currently supports text; full engagement collection still depends on Meta permissions. OAuth requires Annulo API 39 and an enabled broker."
 - version: 0.7.0
   zh: 排期的帖子改由 Annulo 按排期时间准时发（到点一分钟内），不再每隔 5、15 分钟检查一次；出自文章的到点按文章那时的内容重新生成再发；撞上平台发布频率限制的往后推 15 分钟再发，没发起来的（比如没登录）记成失败、写明原因。内容怎么转成各平台的帖子（fromContent、字数）由插件提供，模板直接用。需要 Annulo 新版本。
   en: "Scheduled posts are now published by Annulo right at their scheduled time (within a minute) instead of a check every 5–15 minutes; posts made from an article are regenerated from the article as it is then; a post that hits a platform's rate limit is pushed back 15 minutes, and one that can't start (e.g. not logged in) is marked failed with the reason. The plugin now provides how content becomes each platform's post (fromContent, lengths) for templates to use. Needs the latest Annulo."

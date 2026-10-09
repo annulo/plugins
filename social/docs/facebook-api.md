@@ -27,7 +27,31 @@ annulo run social/facebook.setMode --input '{"channel_id":"<账号 id>","mode":"
 
 这只切换该主页的发布通道，不影响其他社媒账号。没有浏览器登录记录的主页需要先按原方式登录，才能切回。
 
-测试 token 可能失效；这是验证插件 Graph API 路径的临时凭据。正式授权需要 Annulo 提供 `facebook` OAuth 连接，插件已经预留 `social.login({ type: 'facebook', mode: 'api' })` → 选择公共主页 → `social.addChosen` 的流程。届时插件按需从 `ctx.oauth('facebook', { account })` 获取 User token，再从 `/me/accounts` 获取 Page token，仍不把 token 写入项目表。
+测试 token 可能失效；这是验证插件 Graph API 路径的临时凭据。已有测试账号可以按下面的流程改用 OAuth，不用删账号或帖子。
+
+## 用官方授权连接（应用角色测试）
+
+需要 Annulo 能力版本 39、支持本流程的模板和 social 插件 0.8.0。Meta 应用尚未对外开放；联调版 Annulo 启动时设置 `ANNULO_FACEBOOK_OAUTH_BROKER_URL=https://creght.cn/api/annulo/oauth`，普通安装包暂不默认启用。
+
+1. 项目中进入 **账号 → 添加账号 → Facebook → 官方授权 → 授权 Facebook**。已有主页在账号详情点击 **连接方式**。
+2. 在 Meta 授权页确认 Facebook 账号和公共主页，完成后回到 Annulo，页面会自动更新，也可点「刷新授权状态」。
+3. 选择明确的 Facebook 账号，再点 **选择公共主页**，勾选项目要运营的主页并添加。只列出具有发布任务权限的主页。
+4. 已有主页重新绑定时只列出这个主页，沿用原账号 id 和帖子；原浏览器 profile 保留。其它主页的连接方式不随之改变。
+5. 点击 **自检**。通过后可按原审核流程发文字帖。图片、视频需要在「连接方式」中选择浏览器方式并登录。
+
+插件从指定的 `ctx.oauth('facebook', { account })` 取 User token，再从 `/me/accounts` 取 Page token；不将任一 token 写入项目表或主页选择结果。绑定时重新读取 Meta 权限和主页资料；断开指定账号后报重新授权，不自动改用其它账号或测试 Page Token。
+
+2026-10-09 已用 Creght AI（Page ID `1274376505755273`）在隔离项目完成真实 OAuth 授权、列主页、添加账号及自检，凭据来源确认是 `oauth`。本轮未用 OAuth 发布新帖子；完整互动采集仍有上文所述的 Meta 权限限制。
+
+## 自动化验证
+
+仓库根目录运行：
+
+```sh
+npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs'
+```
+
+10 项测试使用模拟 Graph API 和数据库，不发送真实帖子；覆盖多账号、目标主页限制、选择后权限撤回、已有账号和浏览器登录保留、凭据隔离和过期错误。
 
 ## 当前接口范围
 

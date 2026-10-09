@@ -35,7 +35,7 @@ async function request(ctx: any, path: string, token: string, init: { method?: s
   return body
 }
 
-function canPublish(page: ApiPage): boolean {
+export function canPublish(page: ApiPage): boolean {
   // Older and newer Page experiences use different task names.
   return (page.tasks ?? []).some((task) => task === 'CREATE_CONTENT' || task === 'PROFILE_PLUS_CREATE_CONTENT' || task === 'PROFILE_PLUS_FULL_CONTROL')
 }
@@ -77,7 +77,9 @@ function testToken(ctx: any, id: string): string {
 export async function pageToken(ctx: any, ch: any): Promise<string> {
   const id = pageId(ch.page_id || ch.platform_uid)
   if (ch.api_credential === 'page_token') return testToken(ctx, id)
-  const pages = await oauthPages(ctx, String(ch.oauth_account ?? ''))
+  const account = String(ch.oauth_account ?? '')
+  if (!account || !ctx.oauth?.accounts?.('facebook')?.includes(account)) throw new Expired(L(ctx, 'Facebook 授权账号已断开，请到 设置 → 连接 重新授权', 'The Facebook account is disconnected. Reauthorize in Settings → Connections.'))
+  const pages = await oauthPages(ctx, account)
   const page = pages.find((p) => p.id === id)
   if (!page?.access_token) throw new Expired(L(ctx, `授权账号已无法访问公共主页「${ch.name}」，请重新授权并选择该主页`, `The connected account can no longer access "${ch.name}"; reconnect and select the Page again`))
   if (!canPublish(page)) throw new Error(L(ctx, `当前账号没有「${ch.name}」的发布权限`, `The connected account cannot publish to "${ch.name}"`))

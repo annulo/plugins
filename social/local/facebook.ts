@@ -420,21 +420,23 @@ function cleanName(name: string) {
 export async function login(input: { channel_id?: string; mode?: 'api' | 'browser'; account?: string }, ctx: any) {
   const old = input?.channel_id ? fbChannel(ctx, input.channel_id) : null
   if (input?.mode === 'api' || (old && isApi(old) && input?.mode !== 'browser')) {
-    if (old && isApi(old)) {
+    if (old && isApi(old) && input?.mode !== 'api' && !input?.account) {
       await checkLogin({ channel_id: old.id }, ctx)
       return { id: old.id, name: old.name, added: false }
     }
     if (old && !isPage(old)) throw new Error(L(ctx, 'Facebook 个人主页只能用浏览器方式，官方 API 只支持公共主页', 'Facebook personal profiles use the browser channel; the official API supports Pages only'))
     if (!ctx.oauth?.accounts) throw new Error(L(ctx, '当前 Annulo 尚未提供 Facebook 授权连接；测试 API 请先用 facebook.connectPageToken', 'This Annulo build has no Facebook OAuth connection yet; use facebook.connectPageToken for API testing'))
     const accounts: string[] = ctx.oauth.accounts('facebook')
-    const account = input?.account || accounts[0]
+    const account = input?.account || old?.oauth_account || accounts[0]
     if (!account) throw new Error(L(ctx, '先到 Annulo 设置 → 连接中授权 Facebook', 'Connect Facebook in Annulo → Settings → Connections first'))
     if (!accounts.includes(account)) throw new Error(L(ctx, '指定的 Facebook 授权账号未连接', 'The selected Facebook account is not connected'))
     const pages = await pageApi.oauthPages(ctx, account)
+    const eligible = pages.filter((p) => pageApi.canPublish(p) && (!old || p.id === (old.page_id || old.platform_uid)))
+    if (old && !eligible.length) throw new Error(L(ctx, '这个授权账号不能向目标公共主页发布，请重新授权目标主页或选择其他账号', 'This account cannot publish to the selected Page. Authorize that Page or choose another account.'))
     return { choose: {
       type: 'facebook', profile: 'api', uid: account,
       desc: L(ctx, '选择要在这个项目中使用的 Facebook 公共主页。只有有发布权限的主页可以添加。', 'Choose the Facebook Pages to use in this project. Only Pages you can publish to can be added.'),
-      pages: pages.filter((p) => (p.tasks ?? []).some((t) => ['CREATE_CONTENT', 'PROFILE_PLUS_CREATE_CONTENT', 'PROFILE_PLUS_FULL_CONTROL'].includes(t))).map((p) => ({
+      pages: eligible.map((p) => ({
         id: p.id, name: p.name, label: L(ctx, '公共主页 · 官方 API', 'Page · official API'),
         added: !!ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: p.id }, limit: 1 }).list[0],
       })),
@@ -508,7 +510,9 @@ export async function login(input: { channel_id?: string; mode?: 'api' | 'browse
     const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...(pg.followers != null ? { followers: pg.followers } : {}), ...base }
     const ex = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: pg.id }, limit: 1 }).list[0]
     if (ex) {
-      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile) })
+      // 为一个账号登录浏览器时，其它已用 API 的主页仍保留原通道和授权状态。
+      const keepApi = isApi(ex) && ex.id !== old?.id ? { auth_mode: ex.auth_mode, login_status: ex.login_status, last_checked_at: ex.last_checked_at } : {}
+      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile), ...keepApi })
       outPages.push({ id: ex.id, name: pg.name, added: false })
     }
   }
@@ -572,7 +576,7 @@ async function addChosenApi(input: { choose: { profile: string; uid: string }; p
   if (!ids.length) throw new Error(L(ctx, '请至少选择一个公共主页', 'Choose at least one Page'))
   const pages = await pageApi.oauthPages(ctx, account)
   const selected = ids.map((id) => pages.find((p) => p.id === id))
-  if (selected.some((p) => !p?.access_token || !(p.tasks ?? []).some((t) => ['CREATE_CONTENT', 'PROFILE_PLUS_CREATE_CONTENT', 'PROFILE_PLUS_FULL_CONTROL'].includes(t)))) {
+  if (selected.some((p) => !p?.access_token || !pageApi.canPublish(p))) {
     throw new Error(L(ctx, '有主页已不在授权范围内，或没有发布权限，请重新授权后再选', 'A selected Page is no longer authorized or cannot publish; reconnect and choose again'))
   }
   const t = now()
