@@ -2,6 +2,6 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
-- version: 0.8.0
+- version: 0.1.0
   zh: 第一版：导入 Notion 页面（走你在 Annulo 里连的 Notion MCP），正文转成长文的富文本和图文笔记的纯文字，图片存进素材库；能查文档最后编辑时间，判断要不要再同步。需要 Annulo 新版本。
   en: "First version: import Notion pages (through the Notion MCP you connected in Annulo); the body becomes long-form rich text and plain text for image posts, and images are saved to your library. It can check when a document was last edited, to tell whether to sync again. Needs the latest Annulo."
