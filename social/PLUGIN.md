@@ -1,6 +1,6 @@
 # 社媒插件（social）
 
-管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎的账号和帖子：用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），
+管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎的账号和帖子：默认用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），Facebook 公共主页也可选官方 API 通道，
 把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版时自检、交给助手修。
 
 插件只管社媒这一段；**内容从哪来、页面怎么排是模板的事**。这份说明写给助手：项目要用社媒时照这里接。
@@ -49,6 +49,8 @@
 | `social.openProfile({ channel_id })` | 用账号自己的浏览器打开它的主页 |
 | `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站） |
 | `stats.summary({ channel_id, days })` | 一个账号近 N 天的概览：发布数、粉丝增量、互动增量、帖子列表 |
+
+Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。测试阶段用本机 Page token 连主页，操作见 [Facebook API 测试说明](docs/facebook-api.md)。完成 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api' })` 返回可选主页，页面用已有的 `ChooseAccounts` 调 `social.addChosen`；User/Page token 都不写进项目表。
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
 `social.collect`、`publish`、`probe`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。

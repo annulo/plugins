@@ -119,7 +119,7 @@ export function record(ctx: any, ch: { id: string; type: string }, op: Op, r: { 
  * 打开之前的是业务上的拒绝（没审核、频率限制、字数超了），不是平台的问题。
  * 失败时如果报错里没有现场，趁浏览器还开着补存一份。postId 是发布、删除的那条内容，页面的提示据此能点到它。
  */
-export async function track<T>(ctx: any, ch: { id: string; type: string; login_status?: string }, op: Op, fn: (c: any) => Promise<T>, postId?: string): Promise<T> {
+export async function track<T>(ctx: any, ch: { id: string; type: string; login_status?: string; auth_mode?: string }, op: Op, fn: (c: any) => Promise<T>, postId?: string): Promise<T> {
   const pages: any[] = []
   const open = ctx.browser?.open
   // 换一个只替换了 browser.open 的 ctx：记下平台代码打开的浏览器
@@ -129,14 +129,14 @@ export async function track<T>(ctx: any, ch: { id: string; type: string; login_s
     const out = await fn(c)
     // 浏览器助手帮过的步骤（_assist.ts）带进这次成功的记录：平台可能改了页面，提醒把新写法改进代码
     const assisted: any[] = c.__assisted ?? []
-    if (pages.length) record(ctx, ch, op, { ok: true, ...(assisted.length ? { steps: assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })) } : {}) })
+    if (pages.length || ch.auth_mode === 'api') record(ctx, ch, op, { ok: true, ...(assisted.length ? { steps: assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })) } : {}) })
     return out
   } catch (e: any) {
-    if (pages.length) {
+    if (pages.length || ch.auth_mode === 'api') {
       const fresh = ctx.db.get('social_accounts', ch.id)
       const expired = e instanceof Expired || e?.expired || fresh?.login_status === 'expired'
       let snapshot = e?.snapshot || /（现场：([^）]+)）|\(snapshot: ([^)]+)\)/.exec(String(e?.message ?? ''))?.slice(1).find(Boolean)
-      if (!snapshot && !expired) snapshot = (await pages[pages.length - 1].snapshot?.({ label: op }).catch(() => null))?.dir
+      if (!snapshot && !expired && pages.length) snapshot = (await pages[pages.length - 1].snapshot?.({ label: op }).catch(() => null))?.dir
       record(ctx, ch, op, { ok: false, kind: expired ? 'expired' : 'broken', step: op, error: String(e?.message ?? e), snapshot, post_id: postId })
     }
     throw e

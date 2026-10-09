@@ -66,6 +66,7 @@ function machineFields(ctx: any, ch: any) {
 
 /** 账号的登录态在别的电脑上：返回那台电脑的名字；在这里、没记过返回 '' */
 function elsewhere(ctx: any, ch: any): string {
+  if (ch?.auth_mode === 'api') return ''
   const m = here(ctx)
   const p = localProfile(ctx, ch)
   const other = () => String(ch.browser_machine_name || L(ctx, '另一台电脑', 'another computer'))
@@ -82,12 +83,14 @@ function elsewhere(ctx: any, ch: any): string {
 
 /** 手动操作前检查：登录态在别的电脑上就报错，说清楚去哪台操作 */
 function onThisMachine(ctx: any, ch: any) {
+  if (ch?.auth_mode === 'api') return
   const other = elsewhere(ctx, ch)
   if (other) throw new Error(L(ctx, `「${ch.name}」是在「${other}」上登录的，登录状态只在那台电脑上。到那台电脑上操作，或者在这台电脑上点「在这台电脑登录」`, `"${ch.name}" was logged in on "${other}", and the login only lives on that computer. Do this there, or click "Log in on this computer" here`))
 }
 
 /** 老账号没记过 profile 的：在这里跑成功了就记成这里 */
 function claim(ctx: any, ch: any) {
+  if (ch?.auth_mode === 'api') return
   if (ch && !ch.browser_profile_id && here(ctx)) ctx.db.update('social_accounts', ch.id, machineFields(ctx, ch))
 }
 
@@ -107,7 +110,7 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
   platformOf(ctx, input?.channel_id)
   const ch = ctx.db.get('social_accounts', input.channel_id)
   onThisMachine(ctx, ch)
-  if (!ch.browser_profile) throw new Error(L(ctx, '这个账号还没有本机登录记录，请先重新登录', 'This account has no local browser profile. Please log in again first.'))
+  if (!ch.browser_profile && ch.auth_mode !== 'api') throw new Error(L(ctx, '这个账号还没有本机登录记录，请先重新登录', 'This account has no local browser profile. Please log in again first.'))
   const handle = encodeURIComponent(String(ch.handle ?? '').replace(/^@/, ''))
   const uid = encodeURIComponent(String(ch.platform_uid ?? ''))
   const urls: Record<string, string> = {
@@ -118,12 +121,12 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
     x: handle ? `https://x.com/${handle}` : '',
     linkedin: handle ? `https://www.linkedin.com/in/${handle}/` : '',
     instagram: handle ? `https://www.instagram.com/${handle}/` : '',
-    facebook: handle ? `https://www.facebook.com/${handle}` : uid ? `https://www.facebook.com/profile.php?id=${uid}` : '',
+    facebook: ch.fb_kind === 'page' && uid ? `https://www.facebook.com/${uid}` : handle ? `https://www.facebook.com/${handle}` : uid ? `https://www.facebook.com/profile.php?id=${uid}` : '',
     youtube: handle ? `https://www.youtube.com/@${handle}` : uid ? `https://www.youtube.com/channel/${uid}` : '',
   }
   const url = urls[ch.type]
   if (!url) throw new Error(L(ctx, '这个账号还没有主页地址，请先采集账号信息', 'This account has no profile URL. Collect account details first.'))
-  await ctx.browser.open({ profile: ch.browser_profile, url, show: true, keep_open: true })
+  await ctx.browser.open({ profile: ch.browser_profile || 'facebook-api', url, show: true, keep_open: true })
   return { opened: true }
 }
 
@@ -330,11 +333,11 @@ export async function probe(input: { channel_id: string; _show_browser?: boolean
   const ch = ctx.db.get('social_accounts', input.channel_id)
   if (!m.probe) throw new Error(L(ctx, `${ch.type} 还没有自检`, `${ch.type} has no self-test yet`))
   onThisMachine(ctx, ch)
-  if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" first`))
+  if (ch.auth_mode !== 'api' && !ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" first`))
   const r = await m.probe({ channel_id: ch.id }, ctx)
   record(ctx, ch, 'probe', r)
   if (r.kind === 'expired') ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: new Date().toISOString() })
-  else if (r.ok) ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: new Date().toISOString(), ...(ch.browser_profile_id ? {} : machineFields(ctx, ch)) })
+  else if (r.ok) ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: new Date().toISOString(), ...(ch.auth_mode === 'api' || ch.browser_profile_id ? {} : machineFields(ctx, ch)) })
   return r
 }
 
@@ -342,7 +345,7 @@ export async function probe(input: { channel_id: string; _show_browser?: boolean
 export async function probeAll(_input: {}, ctx: any) {
   const out: any[] = []
   for (const ch of ctx.db.query('social_accounts', { limit: 200 }).list) {
-    if (!PLATFORMS[ch.type]?.probe || !ch.browser_profile || ch.login_status === 'expired' || elsewhere(ctx, ch)) continue
+    if (!PLATFORMS[ch.type]?.probe || (ch.auth_mode !== 'api' && !ch.browser_profile) || ch.login_status === 'expired' || elsewhere(ctx, ch)) continue
     try {
       const r = await probe({ channel_id: ch.id }, ctx)
       out.push({ channel: ch.name, ok: r.ok, step: r.step, error: r.error })
@@ -362,19 +365,25 @@ export function health(_input: {}, ctx: any) {
  * 登录后让用户勾选要添加哪些（login 返回 { choose }，比如 Facebook 的个人号和管理的主页）：建勾上的，记下是在这台电脑登录的。
  * 参数照平台脚本的 addChosen（choose 原样带回来，加上勾了哪些）
  */
-export function addChosen(input: { choose: { type: string }; [k: string]: unknown }, ctx: any) {
+export async function addChosen(input: { choose: { type: string }; [k: string]: unknown }, ctx: any) {
   const m = PLATFORMS[input?.choose?.type ?? '']
   if (!m?.addChosen) throw new Error(L(ctx, '这个平台不用勾选：', "This platform doesn't need picking: ") + input?.choose?.type)
-  const r = m.addChosen(input, ctx)
-  for (const id of r.ids) ctx.db.update('social_accounts', id, machineFields(ctx, ctx.db.get('social_accounts', id)))
+  const r = await m.addChosen(input, ctx)
+  for (const id of r.ids) {
+    const ch = ctx.db.get('social_accounts', id)
+    if (ch?.auth_mode !== 'api') ctx.db.update('social_accounts', id, machineFields(ctx, ch))
+  }
   return r
 }
 
-export async function login(input: { type?: string; channel_id?: string }, ctx: any) {
+export async function login(input: { type?: string; channel_id?: string; mode?: 'api' | 'browser'; account?: string }, ctx: any) {
   const m = input?.channel_id ? platformOf(ctx, input.channel_id) : PLATFORMS[input?.type ?? '']
   if (!m) throw new Error(L(ctx, '不支持的社媒类型：', 'Unsupported social platform: ') + input?.type)
-  const r = await m.login({ channel_id: input?.channel_id }, ctx)
+  const r = await m.login({ channel_id: input?.channel_id, mode: input?.mode, account: input?.account }, ctx)
   const id = r?.id ?? input?.channel_id
-  if (id) ctx.db.update('social_accounts', id, machineFields(ctx, ctx.db.get('social_accounts', id)))
+  if (id) {
+    const ch = ctx.db.get('social_accounts', id)
+    if (ch?.auth_mode !== 'api') ctx.db.update('social_accounts', id, machineFields(ctx, ch))
+  }
   return r
 }
