@@ -616,7 +616,7 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
   if (isApi(ch)) {
     try {
-      const page = await pageApi.pageInfo(ctx, ch)
+      const page = await pageApi.pageInfo(ctx, ch, false)
       ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: now(), name: page.name || ch.name })
       return { ok: true }
     } catch (e) {
@@ -635,7 +635,7 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
 
 // ---- 帖子列表（采集、查重共用）----
 
-type FbPost = { id: string; text: string; created: string; url: string; actor: string; views: number; likes: number; comments: number; shares: number; collects: number }
+type FbPost = { id: string; text: string; created: string; url: string; actor: string; views?: number; likes?: number; comments?: number; shares?: number; collects?: number }
 
 /**
  * 从 graphql / 内嵌 JSON 里认出帖子：带 post_id（数字）的对象是一条帖子，它下面找正文（message.text）、发布时间（creation_time）、
@@ -1049,11 +1049,13 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     }
     let posts: FbPost[]
     let followers: number | undefined
+    let apiMetrics: pageApi.MetricState | undefined
     if (isApi(ch)) {
       try {
-        const [page, recent] = await Promise.all([pageApi.pageInfo(ctx, ch), pageApi.recentPosts(ctx, ch, 25, true)])
-        followers = page.fan_count
-        posts = recent.map((p) => ({ id: p.id, text: p.message, created: p.created_time, url: p.permalink_url, actor: ch.page_id, views: 0, likes: p.likes, comments: p.comments, shares: p.shares, collects: 0 }))
+        const data = await pageApi.collectData(ctx, ch)
+        followers = data.followers
+        apiMetrics = data.state
+        posts = data.posts.map((p) => ({ id: p.id, text: p.message, created: p.created_time, url: p.permalink_url, actor: ch.page_id, likes: p.likes, comments: p.comments, shares: p.shares }))
       } catch (e) {
         if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
         throw e
@@ -1082,7 +1084,9 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     let updated = 0
     let added = 0
     for (const fp of posts) {
-      const metrics = { views: fp.views, likes: fp.likes, comments: fp.comments, collects: fp.collects, shares: fp.shares, metrics_at: t }
+      const values = Object.fromEntries(METRIC_KEYS.filter((k) => fp[k] != null).map((k) => [k, fp[k]]))
+      const available = Object.keys(values)
+      const metrics = { ...values, ...(available.length ? { metrics_at: t } : {}), ...(apiMetrics ? { facebook_api_metrics: JSON.stringify({ ...apiMetrics, available }) } : { facebook_api_metrics: null }) }
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: fp.id }, limit: 1 }).list[0]
       if (!hit) {
         const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(fp.text))
@@ -1092,11 +1096,11 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
         }
       }
       if (!hit || hit.status === 'published') {
-        for (const k of METRIC_KEYS) totals[k] += (fp[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
+        for (const k of METRIC_KEYS) if (fp[k] != null) totals[k] += fp[k]! - (hit ? Number(hit[k]) || 0 : 0)
         if (!hit) totals.posts++
       }
       if (hit) {
-        const moved = recordDay(ctx, ch.id, hit as any, day, metrics, today)
+        const moved = available.length ? recordDay(ctx, ch.id, hit as any, day, values, today) : false
         ctx.db.update('social_posts', hit.id, moved ? { ...metrics, history: null } : metrics)
         updated++
       } else {
@@ -1105,18 +1109,23 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
           channel_id: ch.id, title: [...(plain.split('\n')[0] || '')].slice(0, 30).join(''), body: fp.text, status: 'published', source: 'platform',
           post_id: fp.id, post_url: urlOf(fp), images: '[]', published_at: fp.created || t, created_at: t, ...metrics,
         })
-        recordDay(ctx, ch.id, saved, day, metrics, today)
+        if (available.length) recordDay(ctx, ch.id, saved, day, values, today)
         added++
       }
     }
     const patch: any = { collected_at: t, login_status: 'ok', last_checked_at: t, metric_totals: JSON.stringify(totals) }
+    patch.facebook_api_metrics = apiMetrics ? JSON.stringify(apiMetrics) : null
     if (followers != null) patch.followers = followers
     ctx.db.update('social_accounts', ch.id, patch)
-    const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, ...totals, updated_at: t }
+    const daily = { channel_id: ch.id, date: day, ...(!apiMetrics ? { followers: patch.followers ?? ch.followers ?? 0, ...totals } : {
+      posts: totals.posts,
+      ...(followers != null ? { followers } : {}),
+      ...Object.fromEntries(METRIC_KEYS.filter((k) => apiMetrics!.available.includes(k)).map((k) => [k, totals[k]])),
+    }), updated_at: t }
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)
     else ctx.db.insert('social_daily', daily)
-    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers })
+    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers, ...(apiMetrics ? { available_metrics: apiMetrics.available, warnings: apiMetrics.warnings } : {}) })
   }
   return { channels: out }
 }
@@ -1128,12 +1137,16 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
 export async function probe(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
   if (isApi(ch)) return runProbe(ctx, async (t) => {
-    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch))
+    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch, false))
     await t.step('posts', L(ctx, '读取公共主页帖子', 'Read Page posts'), () => pageApi.recentPosts(ctx, ch, 1))
     await t.step('publish_credential', L(ctx, '检查发帖凭据', 'Check publishing credential'), async () => {
-      await pageApi.pageToken(ctx, ch)
-      return L(ctx, '凭据已设置', 'Credential is set')
+      return pageApi.checkPublishAccess(ctx, ch)
     })
+    const data = await t.soft('metrics', L(ctx, '检查数据采集权限', 'Check data collection access'), () => pageApi.collectData(ctx, ch, 1))
+    if (data) {
+      // A read-only probe checks access without changing collection snapshots.
+      for (const warning of data.state.warnings) await t.soft('metrics_' + warning.key, warning.name, async () => { throw new Error(warning.message) })
+    }
   })
   return runProbe(ctx, async (t) => {
     const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => {

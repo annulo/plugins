@@ -20,7 +20,16 @@ function graphError(ctx: any, body: any, status: number, token: string): Error {
   const code = Number(e?.code) || 0
   const subcode = Number(e?.error_subcode) || 0
   const detail = `Facebook Graph API: ${message}${code ? ` (${code}${subcode ? `/${subcode}` : ''})` : ''}`
-  const error = code === 190 || status === 401 ? new Expired(L(ctx, 'Facebook 授权已失效，请重新连接。', 'Facebook authorization has expired; reconnect.') + ` ${detail}`) : new Error(detail)
+  const kind = code === 190 || status === 401 ? 'expired'
+    : code === 368 || /access blocked|temporarily blocked|restricted/i.test(message) ? 'restricted'
+    : status === 429 || status >= 500 || e?.is_transient || [4, 17, 32, 613].includes(code) ? 'network'
+    : [10, 200].includes(code) ? 'permission' : 'broken'
+  const hint = kind === 'expired' ? L(ctx, 'Facebook 授权已失效，请重新连接。', 'Facebook authorization has expired; reconnect.')
+    : kind === 'permission' ? L(ctx, 'Facebook 未允许读取或管理这项数据，请检查主页授权和应用权限。', 'Facebook has not allowed this operation. Check Page authorization and app permissions.')
+    : kind === 'restricted' ? L(ctx, 'Facebook 已限制当前账号或应用的 API 访问，请先在 Meta 后台处理限制，再重新自检。', 'Facebook has restricted API access. Resolve the restriction in Meta, then run the self-test again.')
+    : kind === 'network' ? L(ctx, 'Facebook 服务暂时不可用或请求过于频繁，请稍后重试。', 'Facebook is temporarily unavailable or rate-limiting requests; try again later.') : ''
+  const error = kind === 'expired' ? new Expired(`${hint} ${detail}`) : new Error(`${hint}${hint ? ' ' : ''}${detail}`)
+  ;(error as any).kind = kind
   // A definitive API rejection cannot have published a post. Transport failures
   // and 5xx responses still need reconciliation before another feed request.
   ;(error as any).graphRejected = !!e && status >= 400 && status < 500
@@ -34,8 +43,16 @@ async function request(ctx: any, path: string, token: string, init: { method?: s
     method: init.method ?? 'GET',
     headers: { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
     ...(init.body ? { body: Object.entries(init.body).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&') } : {}),
+  }).catch((e) => {
+    const error = new Error(L(ctx, '无法连接 Facebook，请检查网络后重试。', 'Could not connect to Facebook. Check your connection and try again.') + ' ' + String(e?.message ?? e).split(token).join('[redacted]').slice(0, 300))
+    ;(error as any).kind = 'network'
+    throw error
   })
-  const body = await response.json().catch(() => ({}))
+  const body = await response.json().catch(() => {
+    const error = new Error(L(ctx, 'Facebook 返回的数据无法解析，请稍后重试。', 'Facebook returned an unreadable response; try again later.'))
+    ;(error as any).kind = 'network'
+    throw error
+  })
   if (!response.ok || body?.error) throw graphError(ctx, body, response.status, token)
   return body
 }
@@ -87,14 +104,34 @@ export async function pageToken(ctx: any, ch: any): Promise<string> {
   const pages = await oauthPages(ctx, account)
   const page = pages.find((p) => p.id === id)
   if (!page?.access_token) throw new Expired(L(ctx, `授权账号已无法访问公共主页「${ch.name}」，请重新授权并选择该主页`, `The connected account can no longer access "${ch.name}"; reconnect and select the Page again`))
-  if (!canPublish(page)) throw new Error(L(ctx, `当前账号没有「${ch.name}」的发布权限`, `The connected account cannot publish to "${ch.name}"`))
+  if (!canPublish(page)) {
+    const error = new Error(L(ctx, `当前账号没有「${ch.name}」的发布权限`, `The connected account cannot publish to "${ch.name}"`))
+    ;(error as any).kind = 'permission'
+    throw error
+  }
   return page.access_token
 }
 
-export async function pageInfo(ctx: any, ch: any): Promise<{ id: string; name: string; fan_count?: number }> {
+export async function pageInfo(ctx: any, ch: any, includeFollowers = true): Promise<{ id: string; name: string; fan_count?: number }> {
   const token = await pageToken(ctx, ch)
-  const body = await request(ctx, `/${pageId(ch.page_id || ch.platform_uid)}`, token, { params: { fields: 'id,name,fan_count' } })
+  const body = await request(ctx, `/${pageId(ch.page_id || ch.platform_uid)}`, token, { params: { fields: includeFollowers ? 'id,name,fan_count' : 'id,name' } })
   return { id: String(body.id), name: String(body.name ?? ''), fan_count: typeof body.fan_count === 'number' ? body.fan_count : undefined }
+}
+
+export async function checkPublishAccess(ctx: any, ch: any): Promise<string> {
+  await pageToken(ctx, ch)
+  if (ch.api_credential === 'oauth') {
+    const token = await ctx.oauth('facebook', { account: ch.oauth_account })
+    const body = await request(ctx, '/me/permissions', token)
+    const granted = new Set((body.data ?? []).filter((p: any) => p.status === 'granted').map((p: any) => p.permission))
+    const missing = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts'].filter((p) => !granted.has(p))
+    if (missing.length) {
+      const error = new Error(L(ctx, '发帖授权缺少权限，请重新授权：', 'Publishing permissions are missing; reauthorize: ') + missing.join(', '))
+      ;(error as any).kind = 'permission'
+      throw error
+    }
+  }
+  return L(ctx, '发帖凭据和主页任务权限可用；自检不发布帖子。', 'Publishing credentials and Page tasks are available; the self-test does not publish a post.')
 }
 
 export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics = false, includePhotos = false): Promise<{ id: string; message: string; created_time: string; permalink_url: string; likes: number; comments: number; shares: number; photo_ids: string[] }[]> {
@@ -116,6 +153,52 @@ export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics 
     photo_ids: (p.attachments?.data ?? []).flatMap((a: any) => a.subattachments?.data?.length ? a.subattachments.data : [a])
       .filter((a: any) => a.type === 'photo' && /^\d+$/.test(String(a.target?.id ?? ''))).map((a: any) => String(a.target.id)),
   }))
+}
+
+export type MetricWarning = { key: string; name: string; message: string }
+export type MetricState = { checked_at: string; available: string[]; warnings: MetricWarning[] }
+export type CollectedPost = { id: string; message: string; created_time: string; permalink_url: string; likes?: number; comments?: number; shares?: number }
+
+/** Basic posts and each metric have separate requests. Only permission rejection
+ * is optional; expiry, API restrictions and transport errors must still fail. */
+export async function collectData(ctx: any, ch: any, limit = 25): Promise<{ posts: CollectedPost[]; followers?: number; state: MetricState }> {
+  const token = await pageToken(ctx, ch)
+  const id = pageId(ch.page_id || ch.platform_uid)
+  const basic = await request(ctx, `/${id}/posts`, token, { params: { fields: 'id,message,created_time,permalink_url', limit: String(limit) } })
+  const posts: CollectedPost[] = (basic.data ?? []).filter((p: any) => typeof p.id === 'string').map((p: any) => ({ id: p.id, message: String(p.message ?? ''), created_time: String(p.created_time ?? ''), permalink_url: String(p.permalink_url ?? '') }))
+  const state: MetricState = { checked_at: new Date().toISOString(), available: [], warnings: [] }
+  const labels: Record<string, string> = { followers: L(ctx, '粉丝数', 'Followers'), likes: L(ctx, '点赞', 'Likes'), comments: L(ctx, '评论', 'Comments'), shares: L(ctx, '分享', 'Shares') }
+  const warn = (key: string, message: string) => state.warnings.push({ key, name: labels[key], message })
+  const count = (v: any): number | undefined => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
+  let followers: number | undefined
+  await Promise.all(['followers', 'likes', 'comments', 'shares'].map(async (key) => {
+    try {
+      const fields = key === 'followers' ? 'fan_count' : key === 'shares' ? 'id,shares' : `id,${key}.limit(0).summary(true)`
+      const body = await request(ctx, key === 'followers' ? `/${id}` : `/${id}/posts`, token, { params: { fields, ...(key === 'followers' ? {} : { limit: String(limit) }) } })
+      if (key === 'followers') {
+        followers = count(body.fan_count)
+        if (followers !== undefined) state.available.push(key)
+        else warn(key, L(ctx, 'Facebook 未返回粉丝数，保留原有数据。', 'Facebook did not return a follower count; previous data is preserved.'))
+      } else {
+        const byId = new Map<string, any>((body.data ?? []).map((p: any) => [p.id, p]))
+        let missing = false
+        for (const p of posts) {
+          const item = byId.get(p.id)
+          const value = item ? count(key === 'shares' ? (item.shares?.count ?? 0) : item[key]?.summary?.total_count) : undefined
+          if (value !== undefined) (p as any)[key] = value
+          else missing = true
+        }
+        if (!missing) state.available.push(key)
+        else warn(key, L(ctx, '部分帖子未返回此项数据，保留原有数据。', 'Some posts did not return this metric; previous data is preserved.'))
+      }
+    } catch (e: any) {
+      if (e?.kind !== 'permission') throw e
+      warn(key, String(e.message))
+    }
+  }))
+  state.available.sort()
+  state.warnings.sort((a, b) => a.key.localeCompare(b.key))
+  return { posts, followers, state }
 }
 
 // Remote URLs go straight to Meta. Offline uploads must be sent as bytes: Meta

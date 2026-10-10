@@ -117,6 +117,10 @@
       "category": {
         "type": "string",
         "description": "分区 / 分类（B 站的分区名等，平台要选的时候用）"
+      },
+      "facebook_api_metrics": {
+        "type": "string",
+        "description": "Facebook API 采集能力 JSON {checked_at, available, warnings}；不可读取的指标保留旧值，不当作 0。账号记各项能力，帖子记实际取得的指标；不含凭据。"
       }
     },
     "required": [

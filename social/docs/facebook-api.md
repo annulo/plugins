@@ -57,10 +57,10 @@ annulo run social/facebook.setMode --input '{"channel_id":"<账号 id>","mode":"
 仓库根目录运行：
 
 ```sh
-npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/facebook-publishing.test.mjs'
+npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/facebook-publishing.test.mjs tests/facebook-collection.test.mjs'
 ```
 
-31 项测试使用模拟 Graph API 和数据库，不发送真实帖子；覆盖多账号、目标主页限制、权限撤回、浏览器登录保留、凭据隔离、单图/多图合成、部分上传恢复、发布结果丢失、重试去重、素材过期、图片校验及本机二进制上传。本机上传脚本另对本地 HTTP 测试服务验证 multipart 字节；Windows 路径经过模拟验证，尚未在 Windows 实机运行。
+49 项测试使用模拟 Graph API 和数据库，不发送真实帖子；覆盖多账号、目标主页限制、权限撤回、浏览器登录保留、凭据隔离、单图/多图合成、部分上传恢复、发布结果丢失、重试去重、素材过期、图片校验、本机二进制上传、分项采集、未知值保留、自检分类及未知基线。本机上传脚本另对本地 HTTP 测试服务验证 multipart 字节；Windows 路径经过模拟验证，尚未在 Windows 实机运行。
 
 ## 当前接口范围
 
@@ -68,3 +68,13 @@ npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/
 - 文字、单图、多图经官方 API 发布，返回帖子 ID 后写入原有 `social_posts`；分阶段保留上传状态，失败重试先核查上次结果。
 - 读取主页帖子及基础互动、删除已发布帖子、自检授权和读权限。
 - Graph API 固定为 `v26.0`。正式启用前应以 Meta 应用实际授权配置和 Graph API Explorer 再验证字段、权限与回调。
+
+## 分项采集与自检（social 0.8.2）
+
+帖子基本信息先读取，粉丝、点赞、评论、分享分别请求。Meta 缺权限（错误 10 或未受限的权限错误 200）只产生该指标的警告；授权失效、API 访问受限、网络失败仍报失败，不把它们伪装成采集成功。浏览数和收藏数未接入 API。
+
+`facebook_api_metrics` 保存 `{checked_at, available, warnings}`，不保存凭据。只更新成功读取的指标，未知项保留旧值，新记录不填 0；每天快照只写可读取的指标。账号表示整体可读能力，帖子表示该篇实际取得的指标；`stats.summary` 对未知指标返回 `null` 和 `unavailable_metrics`，避免界面及助手把未知值解释为零。
+
+自检先检查主页、读帖、OAuth 发帖权限，再单独检查数据读取；采集权限不足以次要警告呈现，不否定已验证的发帖授权。自检不发布、上传或删除内容。权限不足、API 限制和网络失败分别记录为 `permission`、`restricted`、`network`，失效授权仍为 `expired`。本轮没有新增授权范围，读取评论等仍需解决 Meta 的实际权限限制。
+
+2026-10-10 在当前 creator 联调项目通过 Annulo 实际运行器验收：同步 Creght AI 的 8 条帖子，粉丝及分享可读，点赞和评论分别返回权限警告；数据库未把未知指标填成 0。自检确认发帖授权可用并显示两项采集警告；统计对未知指标返回 `null`。本轮只读取 Meta 数据，没有发布、删除或上传内容。

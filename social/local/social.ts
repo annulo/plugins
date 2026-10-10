@@ -312,7 +312,7 @@ async function collectOne(ctx: any, channelId: string) {
   const m = platformOf(ctx, channelId)
   const ch = ctx.db.get('social_accounts', channelId)
   // 打开浏览器、翻主页要十几秒到一分钟：按钮上说清楚在做什么（各平台的 collect 自己没有进度）
-  ctx.progress({ message: L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
+  ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 Facebook API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the Facebook API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
   const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId }, c))
   ctx.progress({ message: L(ctx, '保存数据…', 'Saving…') })
   // 读到 0 条、但这个账号明明发过（有平台 id 的）：多半是平台的接口改名了，采集悄悄变成空的

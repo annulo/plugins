@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.2
+  zh: Facebook API 数据采集按指标分别读取，缺少点赞、评论或粉丝权限不再阻断可读数据同步；未知指标保留原值，不写成 0。自检分别检查发帖授权和互动读取，权限不足、API 受限及网络异常给出不同提示。需要支持指标状态展示的模板。
+  en: "Facebook API collection reads metrics independently so missing engagement or follower permissions no longer block available data. Unknown metrics preserve previous values instead of becoming zero. Self-tests distinguish publishing authorization from data access, with separate permission, restriction and network errors. Requires templates that display metric availability."
 - version: 0.8.1
   zh: Facebook 官方 API 通道支持单图和多图帖子，最多 10 张；公开图片地址和离线项目本机上传的图片均可发布。失败时保留已上传图片，重试继续完成；发帖结果不确定时先查原帖子，避免重复。单张本机图片最大 4 MB，视频继续使用浏览器方式。
   en: "Facebook's official API now publishes single-image and multi-image posts with up to 10 images, including public URLs and offline Library uploads. Partial uploads resume on retry; uncertain publishing results are reconciled before posting again. Local images may be up to 4 MB each. Videos still use the browser channel."
