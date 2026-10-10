@@ -10,7 +10,12 @@ import { L } from './_i18n'
 
 export type Op = 'probe' | 'publish' | 'remove' | 'collect'
 /** broken：页面 / 接口对不上了（要改代码）；expired：登录过期（重新登录就好） */
-export type Kind = 'broken' | 'expired'
+export type Kind = 'broken' | 'expired' | 'permission' | 'restricted' | 'network'
+
+export function errorKind(e: any): Kind {
+  if (e instanceof Expired || e?.expired) return 'expired'
+  return ['permission', 'restricted', 'network'].includes(e?.kind) ? e.kind : 'broken'
+}
 
 export type Step = { key: string; name: string; ok: boolean; ms: number; detail?: string; error?: string; snapshot?: string; soft?: boolean }
 export type ProbeResult = { ok: boolean; kind?: Kind; step?: string; error?: string; snapshot?: string; steps: Step[] }
@@ -71,7 +76,7 @@ export class Probe {
   async fail(key: string, name: string, e: any, ms: number, soft = false) {
     let snapshot = e?.snapshot as string | undefined
     if (!snapshot && this.page?.snapshot) snapshot = (await this.page.snapshot({ label: key }).catch(() => null))?.dir
-    if (e instanceof Expired || e?.expired) this.kind = 'expired'
+    if (!soft) this.kind = errorKind(e)
     this.steps.push({ key, name, ok: false, ms, error: String(e?.message ?? e), snapshot, soft: soft || undefined })
   }
 }
@@ -129,15 +134,19 @@ export async function track<T>(ctx: any, ch: { id: string; type: string; login_s
     const out = await fn(c)
     // 浏览器助手帮过的步骤（_assist.ts）带进这次成功的记录：平台可能改了页面，提醒把新写法改进代码
     const assisted: any[] = c.__assisted ?? []
-    if (pages.length || ch.auth_mode === 'api') record(ctx, ch, op, { ok: true, ...(assisted.length ? { steps: assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })) } : {}) })
+    const warnings: any[] = (out as any)?.channels?.flatMap((r: any) => r.warnings ?? []) ?? []
+    if (pages.length || ch.auth_mode === 'api') record(ctx, ch, op, { ok: true, steps: [
+      ...assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })),
+      ...warnings.map((w) => ({ key: w.key, name: w.name, ok: false, ms: 0, error: w.message, soft: true })),
+    ] })
     return out
   } catch (e: any) {
     if (pages.length || ch.auth_mode === 'api') {
       const fresh = ctx.db.get('social_accounts', ch.id)
-      const expired = e instanceof Expired || e?.expired || fresh?.login_status === 'expired'
+      const expired = e instanceof Expired || e?.expired || (!e?.kind && fresh?.login_status === 'expired')
       let snapshot = e?.snapshot || /（现场：([^）]+)）|\(snapshot: ([^)]+)\)/.exec(String(e?.message ?? ''))?.slice(1).find(Boolean)
       if (!snapshot && !expired && pages.length) snapshot = (await pages[pages.length - 1].snapshot?.({ label: op }).catch(() => null))?.dir
-      record(ctx, ch, op, { ok: false, kind: expired ? 'expired' : 'broken', step: op, error: String(e?.message ?? e), snapshot, post_id: postId })
+      record(ctx, ch, op, { ok: false, kind: expired ? 'expired' : errorKind(e), step: op, error: String(e?.message ?? e), snapshot, post_id: postId })
     }
     throw e
   }

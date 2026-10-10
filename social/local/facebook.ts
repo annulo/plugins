@@ -14,6 +14,7 @@ import * as pageApi from './_facebook_api'
 //   facebook.login / facebook.checkLogin   本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   facebook.publish / remove 发布、删除
 //   facebook.collect                       采集最近帖子的互动数据和粉丝数
+//   facebook.comments({ post_id, after? })  只读 API 公共主页帖子的评论正文和时间（post_id 是本机记录 id）
 //   facebook.probe({ channel_id })         自检：登录、读账号、读帖子、打开发帖框、找发布按钮，不真的发（local/_health.ts）
 //
 // 视频帖：social_posts.video 有值（素材的 http(s) 地址，或本机文件 local:<名字>）就发视频，不带图片；直接交给 b.upload，
@@ -47,6 +48,7 @@ type Post = {
   post_id?: string
   post_url?: string
   published_at?: string
+  facebook_api_state?: string
 }
 
 const parse = <T>(s: string | undefined, d: T): T => {
@@ -615,7 +617,7 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
   if (isApi(ch)) {
     try {
-      const page = await pageApi.pageInfo(ctx, ch)
+      const page = await pageApi.pageInfo(ctx, ch, false)
       ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: now(), name: page.name || ch.name })
       return { ok: true }
     } catch (e) {
@@ -632,9 +634,24 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   return { ok }
 }
 
+/** Comments are fetched on demand, never saved to project tables. */
+export async function comments(input: { post_id: string; after?: string }, ctx: any) {
+  const post = ctx.db.get('social_posts', input?.post_id)
+  if (!post) throw new Error(L(ctx, '帖子不存在，请重新打开帖子。', 'Post not found. Open the post again.'))
+  const ch = fbChannel(ctx, post.channel_id)
+  if (!isApi(ch) || !isPage(ch)) throw new Error(L(ctx, '查看评论需要通过官方 API 连接 Facebook 公共主页。', 'Connect a Facebook Page through the official API to view comments.'))
+  if (post.status !== 'published' || !post.post_id) throw new Error(L(ctx, '这条帖子尚无已发布记录，请先采集主页帖子。', 'This post has no published record. Collect the Page posts first.'))
+  try {
+    return await pageApi.postComments(ctx, ch, post.post_id, input.after ?? '')
+  } catch (e) {
+    if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+    throw e
+  }
+}
+
 // ---- 帖子列表（采集、查重共用）----
 
-type FbPost = { id: string; text: string; created: string; url: string; actor: string; views: number; likes: number; comments: number; shares: number; collects: number }
+type FbPost = { id: string; text: string; created: string; url: string; actor: string; views?: number; likes?: number; comments?: number; shares?: number; collects?: number }
 
 /**
  * 从 graphql / 内嵌 JSON 里认出帖子：带 post_id（数字）的对象是一条帖子，它下面找正文（message.text）、发布时间（creation_time）、
@@ -854,7 +871,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
  * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去主页上找有没有这条，避免重复发。主页渠道先切到主页身份再发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -862,6 +879,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = fbChannel(ctx, p.channel_id)
   if (isApi(ch)) return publishApi(input, ctx, p, ch)
+  if (input.check_only) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
   const video = String(p.video ?? '').trim()
@@ -934,33 +952,72 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/** 官方 Page API 目前只发文字；图片和视频仍可用已有浏览器通道。 */
-async function publishApi(_input: { post_id: string; force_interval?: boolean }, ctx: any, p: Post, ch: any) {
+type ApiPublishState = { content: string; photo_ids: string[]; uploaded_at: string; attempted_at?: string }
+
+/** 官方 Page API 发文字及图文；每张图片先上传，最后只创建一条帖子。 */
+async function publishApi(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any, p: Post, ch: any) {
   if (!isPage(ch)) throw new Error(L(ctx, 'Facebook 官方 API 只能发布到公共主页', 'The Facebook API can publish to Pages only'))
   const tags: string[] = parse(p.tags, [])
   const images: string[] = parse(p.images, [])
-  if (p.video || images.length) throw new Error(L(ctx, '当前 API 通道先支持文字帖；带图或视频请切换到浏览器通道', 'The API channel currently supports text posts; use the browser channel for images or video'))
+  if (p.video) throw new Error(L(ctx, '当前 API 通道支持文字和图片；视频请切换到浏览器通道', 'The API channel supports text and images; use the browser channel for video'))
+  pageApi.validatePhotos(ctx, images)
   const bad = problems({ body: p.body, tags, images }, ctx)
   if (bad.length) throw new Error(bad.join('; '))
   const text = postText(p.body, tags)
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const priorClaim = Date.parse(p.claimed_at || '') || 0
   const sameText = (value: string) => String(value ?? '').trim().replace(/\s+/g, ' ')
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  const content = JSON.stringify([ch.page_id || ch.platform_uid, text, images])
+  const saved = parse<ApiPublishState | null>(p.facebook_api_state, null)
+  const reuse = saved?.content === content && Array.isArray(saved.photo_ids) && saved.photo_ids.length <= images.length && saved.photo_ids.every((id) => /^\d+$/.test(id)) && !!Date.parse(saved.uploaded_at)
+  // An unresolved feed attempt belongs to the previous content. Editing a draft
+  // must not erase it or silently allow a second post with the edited caption.
+  const unresolved = !!Date.parse(saved?.attempted_at || '')
+  const previous = unresolved ? parse<any>(saved?.content, null) : null
+  const previousValid = Array.isArray(previous) && previous.length === 3 && typeof previous[0] === 'string' && typeof previous[1] === 'string' && Array.isArray(previous[2]) && previous[2].every((url: any) => typeof url === 'string')
+  if (input.check_only && !unresolved && !(!saved && !images.length && interrupted && priorClaim)) throw new Error(L(ctx, '没有待核对的 Facebook 发布记录', 'There is no unresolved Facebook publishing attempt'))
+  let state: ApiPublishState = unresolved || reuse ? saved! : { content, photo_ids: [], uploaded_at: now() }
+  const persist = () => ctx.db.update('social_posts', p.id, { facebook_api_state: JSON.stringify(state), updated_at: now() })
+  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null, facebook_api_state: JSON.stringify(state) })
+  let sendingFeed = false
   try {
-    if (interrupted && priorClaim) {
-      const recent = await pageApi.recentPosts(ctx, ch, 25)
-      const hit = recent.find((item) => sameText(item.message) === sameText(text) && Date.parse(item.created_time) >= priorClaim - 60_000)
+    // Partial uploads have not sent a feed request, so resume them directly.
+    // Legacy failed text posts have no saved API state; retain their recovery.
+    const attempted = Date.parse(state.attempted_at || '') || (!saved && !images.length && interrupted ? priorClaim : 0)
+    if (attempted) {
+      const checkText = previousValid ? previous[1] : text
+      const checkImages: string[] = previousValid ? previous[2] : images
+      const samePage = !unresolved || (previousValid && previous[0] === String(ch.page_id || ch.platform_uid))
+      const recent = samePage ? await pageApi.recentPosts(ctx, ch, 100, false, checkImages.length > 0) : []
+      const hit = recent.find((item) => sameText(item.message) === sameText(checkText) && Date.parse(item.created_time) >= attempted - 60_000 && (!checkImages.length || (Array.isArray(state.photo_ids) && state.photo_ids.length === checkImages.length && item.photo_ids.length === state.photo_ids.length && state.photo_ids.every((id) => item.photo_ids.includes(id)))))
       if (hit) {
-        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null })
+        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null, facebook_api_state: null, ...(saved?.content !== content && previousValid ? { body: hit.message, tags: '[]', images: JSON.stringify(checkImages) } : {}) })
         return { id: p.id, post_id: hit.id, already: true }
       }
+      if (input.check_only || (unresolved && input.confirm_unpublished !== true)) throw new Error(L(ctx, '上次 Facebook 发布结果尚未确认。请打开公共主页核对上次尝试的内容，确认未发布后再重试。', 'The previous Facebook publishing result is still uncertain. Open the Page and check the previous content, then confirm it was not published before retrying.'))
+      if (unresolved && !reuse) { state = { content, photo_ids: [], uploaded_at: now() }; persist() }
+    }
+    // Meta retains unpublished photos for about 24 hours. Keep a margin so old
+    // uploads are replaced rather than attached after their expiry.
+    if (images.length && Date.now() - Date.parse(state.uploaded_at) > 23 * 3600_000) {
+      state = { content, photo_ids: [], uploaded_at: now() }
+      persist()
+    }
+    for (let i = state.photo_ids.length; i < images.length; i++) {
+      ctx.progress({ done: i, total: images.length, message: L(ctx, `正在上传 Facebook 图片 ${i + 1}/${images.length}…`, `Uploading Facebook image ${i + 1}/${images.length}…`) })
+      const id = await pageApi.uploadPhoto(ctx, ch, images[i])
+      state.photo_ids.push(id)
+      persist()
     }
     ctx.progress({ message: L(ctx, `正在通过 Facebook 官方 API 发布到「${ch.name}」…`, `Publishing to "${ch.name}" through the Facebook API…`) })
-    const id = await pageApi.publishText(ctx, ch, text)
-    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: `https://www.facebook.com/${id}`, published_at: now(), updated_at: now(), error: null })
+    state.attempted_at = now()
+    persist()
+    sendingFeed = true
+    const id = images.length ? await pageApi.publishPhotos(ctx, ch, text, state.photo_ids) : await pageApi.publishText(ctx, ch, text)
+    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: `https://www.facebook.com/${id}`, published_at: now(), updated_at: now(), error: null, facebook_api_state: null })
     return { id: p.id, post_id: id }
   } catch (e: any) {
+    if (sendingFeed && e?.graphRejected) { state.attempted_at = ''; persist() }
     ctx.db.update('social_posts', p.id, { status: 'failed', error: String(e?.message ?? e).slice(0, 1000), updated_at: now() })
     if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
     throw e
@@ -1019,11 +1076,13 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     }
     let posts: FbPost[]
     let followers: number | undefined
+    let apiMetrics: pageApi.MetricState | undefined
     if (isApi(ch)) {
       try {
-        const [page, recent] = await Promise.all([pageApi.pageInfo(ctx, ch), pageApi.recentPosts(ctx, ch, 25, true)])
-        followers = page.fan_count
-        posts = recent.map((p) => ({ id: p.id, text: p.message, created: p.created_time, url: p.permalink_url, actor: ch.page_id, views: 0, likes: p.likes, comments: p.comments, shares: p.shares, collects: 0 }))
+        const data = await pageApi.collectData(ctx, ch)
+        followers = data.followers
+        apiMetrics = data.state
+        posts = data.posts.map((p) => ({ id: p.id, text: p.message, created: p.created_time, url: p.permalink_url, actor: ch.page_id, likes: p.likes, comments: p.comments, shares: p.shares }))
       } catch (e) {
         if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
         throw e
@@ -1052,7 +1111,9 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     let updated = 0
     let added = 0
     for (const fp of posts) {
-      const metrics = { views: fp.views, likes: fp.likes, comments: fp.comments, collects: fp.collects, shares: fp.shares, metrics_at: t }
+      const values = Object.fromEntries(METRIC_KEYS.filter((k) => fp[k] != null).map((k) => [k, fp[k]]))
+      const available = Object.keys(values)
+      const metrics = { ...values, ...(available.length ? { metrics_at: t } : {}), ...(apiMetrics ? { facebook_api_metrics: JSON.stringify({ ...apiMetrics, available }) } : { facebook_api_metrics: null }) }
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: fp.id }, limit: 1 }).list[0]
       if (!hit) {
         const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(fp.text))
@@ -1062,11 +1123,11 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
         }
       }
       if (!hit || hit.status === 'published') {
-        for (const k of METRIC_KEYS) totals[k] += (fp[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
+        for (const k of METRIC_KEYS) if (fp[k] != null) totals[k] += fp[k]! - (hit ? Number(hit[k]) || 0 : 0)
         if (!hit) totals.posts++
       }
       if (hit) {
-        const moved = recordDay(ctx, ch.id, hit as any, day, metrics, today)
+        const moved = available.length ? recordDay(ctx, ch.id, hit as any, day, values, today) : false
         ctx.db.update('social_posts', hit.id, moved ? { ...metrics, history: null } : metrics)
         updated++
       } else {
@@ -1075,18 +1136,23 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
           channel_id: ch.id, title: [...(plain.split('\n')[0] || '')].slice(0, 30).join(''), body: fp.text, status: 'published', source: 'platform',
           post_id: fp.id, post_url: urlOf(fp), images: '[]', published_at: fp.created || t, created_at: t, ...metrics,
         })
-        recordDay(ctx, ch.id, saved, day, metrics, today)
+        if (available.length) recordDay(ctx, ch.id, saved, day, values, today)
         added++
       }
     }
     const patch: any = { collected_at: t, login_status: 'ok', last_checked_at: t, metric_totals: JSON.stringify(totals) }
+    patch.facebook_api_metrics = apiMetrics ? JSON.stringify(apiMetrics) : null
     if (followers != null) patch.followers = followers
     ctx.db.update('social_accounts', ch.id, patch)
-    const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, ...totals, updated_at: t }
+    const daily = { channel_id: ch.id, date: day, ...(!apiMetrics ? { followers: patch.followers ?? ch.followers ?? 0, ...totals } : {
+      posts: totals.posts,
+      ...(followers != null ? { followers } : {}),
+      ...Object.fromEntries(METRIC_KEYS.filter((k) => apiMetrics!.available.includes(k)).map((k) => [k, totals[k]])),
+    }), updated_at: t }
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)
     else ctx.db.insert('social_daily', daily)
-    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers })
+    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers, ...(apiMetrics ? { available_metrics: apiMetrics.available, warnings: apiMetrics.warnings } : {}) })
   }
   return { channels: out }
 }
@@ -1098,12 +1164,16 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
 export async function probe(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
   if (isApi(ch)) return runProbe(ctx, async (t) => {
-    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch))
+    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch, false))
     await t.step('posts', L(ctx, '读取公共主页帖子', 'Read Page posts'), () => pageApi.recentPosts(ctx, ch, 1))
     await t.step('publish_credential', L(ctx, '检查发帖凭据', 'Check publishing credential'), async () => {
-      await pageApi.pageToken(ctx, ch)
-      return L(ctx, '凭据已设置', 'Credential is set')
+      return pageApi.checkPublishAccess(ctx, ch)
     })
+    const data = await t.soft('metrics', L(ctx, '检查数据采集权限', 'Check data collection access'), () => pageApi.collectData(ctx, ch, 1))
+    if (data) {
+      // A read-only probe checks access without changing collection snapshots.
+      for (const warning of data.state.warnings) await t.soft('metrics_' + warning.key, warning.name, async () => { throw new Error(warning.message) })
+    }
   })
   return runProbe(ctx, async (t) => {
     const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => {
