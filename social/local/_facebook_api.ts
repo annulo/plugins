@@ -1,5 +1,6 @@
 import { L } from './_i18n'
 import { Expired } from './_health'
+import { FB } from './_facebook_spec'
 
 // Page tokens are used only in memory. The test credential lives in Annulo's local
 // secrets; the OAuth route derives a Page token from the connected User token.
@@ -19,7 +20,11 @@ function graphError(ctx: any, body: any, status: number, token: string): Error {
   const code = Number(e?.code) || 0
   const subcode = Number(e?.error_subcode) || 0
   const detail = `Facebook Graph API: ${message}${code ? ` (${code}${subcode ? `/${subcode}` : ''})` : ''}`
-  return code === 190 || status === 401 ? new Expired(L(ctx, 'Facebook 授权已失效，请重新连接。', 'Facebook authorization has expired; reconnect.') + ` ${detail}`) : new Error(detail)
+  const error = code === 190 || status === 401 ? new Expired(L(ctx, 'Facebook 授权已失效，请重新连接。', 'Facebook authorization has expired; reconnect.') + ` ${detail}`) : new Error(detail)
+  // A definitive API rejection cannot have published a post. Transport failures
+  // and 5xx responses still need reconciliation before another feed request.
+  ;(error as any).graphRejected = !!e && status >= 400 && status < 500
+  return error
 }
 
 async function request(ctx: any, path: string, token: string, init: { method?: string; params?: Record<string, string>; body?: Record<string, string> } = {}): Promise<any> {
@@ -92,13 +97,13 @@ export async function pageInfo(ctx: any, ch: any): Promise<{ id: string; name: s
   return { id: String(body.id), name: String(body.name ?? ''), fan_count: typeof body.fan_count === 'number' ? body.fan_count : undefined }
 }
 
-export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics = false): Promise<{ id: string; message: string; created_time: string; permalink_url: string; likes: number; comments: number; shares: number }[]> {
+export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics = false, includePhotos = false): Promise<{ id: string; message: string; created_time: string; permalink_url: string; likes: number; comments: number; shares: number; photo_ids: string[] }[]> {
   const token = await pageToken(ctx, ch)
   const body = await request(ctx, `/${pageId(ch.page_id || ch.platform_uid)}/posts`, token, {
     // Meta can allow listing a Page's posts while rejecting engagement fields.
     // Connection checks and publish retries need only the post identity and text;
     // collection requests metrics explicitly so missing access cannot become zeros.
-    params: { fields: `id,message,created_time,permalink_url,shares${includeMetrics ? ',likes.limit(0).summary(true),comments.limit(0).summary(true)' : ''}`, limit: String(limit) },
+    params: { fields: `id,message,created_time,permalink_url${includeMetrics ? ',shares,likes.limit(0).summary(true),comments.limit(0).summary(true)' : ''}${includePhotos ? ',attachments{type,target{id},subattachments{type,target{id}}}' : ''}`, limit: String(limit) },
   })
   return (body.data ?? []).filter((p: any) => typeof p.id === 'string').map((p: any) => ({
     id: p.id,
@@ -108,7 +113,86 @@ export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics 
     likes: Number(p.likes?.summary?.total_count) || 0,
     comments: Number(p.comments?.summary?.total_count) || 0,
     shares: Number(p.shares?.count) || 0,
+    photo_ids: (p.attachments?.data ?? []).flatMap((a: any) => a.subattachments?.data?.length ? a.subattachments.data : [a])
+      .filter((a: any) => a.type === 'photo' && /^\d+$/.test(String(a.target?.id ?? ''))).map((a: any) => String(a.target.id)),
   }))
+}
+
+// Remote URLs go straight to Meta. Offline uploads must be sent as bytes: Meta
+// cannot fetch the computer's /_annulo/uploaded/ URLs.
+const LOCAL_PHOTO = /^(?:https?:\/\/(?:127\.0\.0\.1|localhost):\d+)?\/_(?:annulo|shuttle)\/uploaded\/[0-9a-f]{32}(?:\.[a-z0-9]{1,8})?$/
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/tiff']
+
+export function validatePhotos(ctx: any, images: string[]): void {
+  if (!Array.isArray(images)) throw new Error(L(ctx, '图片列表无效，请重新选择图片', 'Invalid image list; select the images again'))
+  if (images.length > FB.imagesMax) throw new Error(L(ctx, `最多 ${FB.imagesMax} 张图片`, `At most ${FB.imagesMax} images`))
+  for (const source of images) {
+    if (typeof source !== 'string' || source !== source.trim()) throw new Error(L(ctx, '图片地址无效', 'Invalid image URL'))
+    if (LOCAL_PHOTO.test(source)) continue
+    let url: URL
+    try { url = new URL(source) } catch { throw new Error(L(ctx, '图片须为资料库地址或公开的 HTTP / HTTPS 地址', 'Images must be Library uploads or public HTTP / HTTPS URLs')) }
+    if (!['http:', 'https:'].includes(url.protocol) || /^https?:\/\/[^/?#]*@/i.test(source) || /^(localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(url.hostname)) {
+      throw new Error(L(ctx, '图片须为资料库地址或公开的 HTTP / HTTPS 地址', 'Images must be Library uploads or public HTTP / HTTPS URLs'))
+    }
+  }
+}
+
+// Annulo's btoa encodes its string as UTF-8. Encode bytes directly so PNG/JPEG
+// bytes above 127 survive the handoff to the system multipart uploader.
+function base64(bytes: Uint8Array): string {
+  const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  const chunks: string[] = []
+  let chunk = ''
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0)
+    chunk += abc[(n >>> 18) & 63] + abc[(n >>> 12) & 63] + (i + 1 < bytes.length ? abc[(n >>> 6) & 63] : '=') + (i + 2 < bytes.length ? abc[n & 63] : '=')
+    if (chunk.length >= 32768) { chunks.push(chunk); chunk = '' }
+  }
+  return chunks.join('') + chunk
+}
+
+async function localPhoto(ctx: any, source: string, token: string, endpoint: string): Promise<any> {
+  const res = await fetch(source)
+  if (!res.ok) throw new Error(L(ctx, '本机图片无法读取，请重新上传图片', 'The local image cannot be read; upload it again'))
+  const bytes = new Uint8Array(await res.arrayBuffer())
+  if (res.truncated || !bytes.length || bytes.length > FB.apiPhotoMaxMB * 1024 * 1024) throw new Error(L(ctx, `Facebook API 图片须为非空文件，单张不超过 ${FB.apiPhotoMaxMB} MB`, `Facebook API images must be nonempty and at most ${FB.apiPhotoMaxMB} MB each`))
+  const contentType = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  if (!PHOTO_TYPES.includes(contentType)) throw new Error(L(ctx, 'Facebook API 图片支持 JPEG、PNG、GIF、BMP、TIFF，请转换格式后重试', 'Facebook API images support JPEG, PNG, GIF, BMP and TIFF; convert this image and retry'))
+  if (!ctx.exec) throw new Error(L(ctx, '本机图片上传需要支持 ctx.exec 的 Annulo 版本', 'Local image uploads require an Annulo version with ctx.exec'))
+  if (/[\r\n"\\]/.test(token)) throw new Error(L(ctx, 'Facebook 授权凭据格式无效，请重新连接', 'Invalid Facebook credential; reconnect'))
+  let unix = false
+  try { unix = (await ctx.exec('sh', ['-c', 'command -v curl >/dev/null && command -v base64 >/dev/null'])).code === 0 } catch {}
+  const script = 'plugins/social/scripts/facebook-upload-photo'
+  const result = await ctx.exec(unix ? 'sh' : 'powershell.exe', unix ? [script + '.sh', endpoint, contentType] : ['-NoProfile', '-NonInteractive', '-File', script + '.ps1', endpoint, contentType], {
+    input: base64(bytes), env: { ANNULO_FACEBOOK_PAGE_TOKEN: token }, timeout: 150_000,
+  })
+  if (result.code !== 0 || result.truncated) throw new Error(L(ctx, 'Facebook 图片上传未完成，请检查网络及本机上传工具后重试', 'Facebook image upload did not complete; check the network and local upload tools before retrying'))
+  const output = String(result.stdout ?? '').trim()
+  const at = output.lastIndexOf('\n')
+  const status = Number(output.slice(at + 1))
+  let body: any
+  try { body = JSON.parse(output.slice(0, at)) } catch { throw new Error(L(ctx, 'Facebook 图片上传没有返回有效结果，请重试', 'Facebook image upload returned no valid result; retry')) }
+  if (status < 200 || status >= 300 || body?.error) throw graphError(ctx, body, status, token)
+  return body
+}
+
+/** Upload without publishing a separate photo story; the feed request publishes the complete set. */
+export async function uploadPhoto(ctx: any, ch: any, source: string): Promise<string> {
+  validatePhotos(ctx, [source])
+  const token = await pageToken(ctx, ch)
+  const path = `/${pageId(ch.page_id || ch.platform_uid)}/photos`
+  const body = LOCAL_PHOTO.test(source) ? await localPhoto(ctx, source, token, GRAPH + path)
+    : await request(ctx, path, token, { method: 'POST', body: { url: source, published: 'false' } })
+  if (!/^\d+$/.test(String(body.id ?? ''))) throw new Error(L(ctx, 'Facebook 没有返回图片 ID，请重试上传', 'Facebook did not return a photo ID; retry the upload'))
+  return String(body.id)
+}
+
+export async function publishPhotos(ctx: any, ch: any, message: string, ids: string[]): Promise<string> {
+  if (!ids.length || ids.length > FB.imagesMax || ids.some((id) => !/^\d+$/.test(id))) throw new Error(L(ctx, 'Facebook 图片上传记录无效，请重新上传', 'Invalid Facebook photo upload state; upload the images again'))
+  const token = await pageToken(ctx, ch)
+  const body = await request(ctx, `/${pageId(ch.page_id || ch.platform_uid)}/feed`, token, { method: 'POST', body: { message, attached_media: JSON.stringify(ids.map((id) => ({ media_fbid: id }))) } })
+  if (typeof body.id !== 'string' || !body.id) throw new Error(L(ctx, 'Facebook 没有返回帖子 ID，请在主页核查后再重试', 'Facebook did not return a post ID; check the Page before retrying'))
+  return body.id
 }
 
 export async function publishText(ctx: any, ch: any, message: string): Promise<string> {

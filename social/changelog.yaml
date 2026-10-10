@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.1
+  zh: Facebook 官方 API 通道支持单图和多图帖子，最多 10 张；公开图片地址和离线项目本机上传的图片均可发布。失败时保留已上传图片，重试继续完成；发帖结果不确定时先查原帖子，避免重复。单张本机图片最大 4 MB，视频继续使用浏览器方式。
+  en: "Facebook's official API now publishes single-image and multi-image posts with up to 10 images, including public URLs and offline Library uploads. Partial uploads resume on retry; uncertain publishing results are reconciled before posting again. Local images may be up to 4 MB each. Videos still use the browser channel."
 - version: 0.8.0
   zh: Facebook 公共主页新增官方 API 通道，保留原有浏览器方式和个人号；授权后选择主页、绑定指定 Facebook 账号，可将已有主页从测试 Page Token 改为 OAuth，或重新登录浏览器切回原方式。凭据只保存在本机，不写入项目表。API 暂支持文字发布；完整互动采集仍受 Meta 权限限制。正式授权需要 Annulo 能力版本 39 并启用授权中转。
   en: "Facebook Pages gain an official API channel alongside browser login and personal profiles. Select Pages from a specific connected account, replace a test Page Token with OAuth, or sign in through the browser to switch back. Credentials stay on this computer, outside project tables. API publishing currently supports text; full engagement collection still depends on Meta permissions. OAuth requires Annulo API 39 and an enabled broker."

@@ -68,6 +68,10 @@
         "type": "string",
         "description": "发布失败的原因"
       },
+      "facebook_api_state": {
+        "type": "string",
+        "description": "Facebook API 发布恢复状态，JSON：本次内容、未发布图片 ID、上传及发帖尝试时间；不含授权凭据，成功后清除"
+      },
       "source": {
         "type": "string",
         "description": "shuttle：在后台写的；platform：采集时发现的、在平台上直接发的"

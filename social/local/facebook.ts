@@ -47,6 +47,7 @@ type Post = {
   post_id?: string
   post_url?: string
   published_at?: string
+  facebook_api_state?: string
 }
 
 const parse = <T>(s: string | undefined, d: T): T => {
@@ -854,7 +855,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
  * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去主页上找有没有这条，避免重复发。主页渠道先切到主页身份再发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -934,33 +935,62 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/** 官方 Page API 目前只发文字；图片和视频仍可用已有浏览器通道。 */
-async function publishApi(_input: { post_id: string; force_interval?: boolean }, ctx: any, p: Post, ch: any) {
+type ApiPublishState = { content: string; photo_ids: string[]; uploaded_at: string; attempted_at?: string }
+
+/** 官方 Page API 发文字及图文；每张图片先上传，最后只创建一条帖子。 */
+async function publishApi(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean }, ctx: any, p: Post, ch: any) {
   if (!isPage(ch)) throw new Error(L(ctx, 'Facebook 官方 API 只能发布到公共主页', 'The Facebook API can publish to Pages only'))
   const tags: string[] = parse(p.tags, [])
   const images: string[] = parse(p.images, [])
-  if (p.video || images.length) throw new Error(L(ctx, '当前 API 通道先支持文字帖；带图或视频请切换到浏览器通道', 'The API channel currently supports text posts; use the browser channel for images or video'))
+  if (p.video) throw new Error(L(ctx, '当前 API 通道支持文字和图片；视频请切换到浏览器通道', 'The API channel supports text and images; use the browser channel for video'))
+  pageApi.validatePhotos(ctx, images)
   const bad = problems({ body: p.body, tags, images }, ctx)
   if (bad.length) throw new Error(bad.join('; '))
   const text = postText(p.body, tags)
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const priorClaim = Date.parse(p.claimed_at || '') || 0
   const sameText = (value: string) => String(value ?? '').trim().replace(/\s+/g, ' ')
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  const content = JSON.stringify([ch.page_id || ch.platform_uid, text, images])
+  const saved = parse<ApiPublishState | null>(p.facebook_api_state, null)
+  const reuse = saved?.content === content && Array.isArray(saved.photo_ids) && saved.photo_ids.length <= images.length && saved.photo_ids.every((id) => /^\d+$/.test(id)) && !!Date.parse(saved.uploaded_at)
+  let state: ApiPublishState = reuse ? saved! : { content, photo_ids: [], uploaded_at: now() }
+  const persist = () => ctx.db.update('social_posts', p.id, { facebook_api_state: JSON.stringify(state), updated_at: now() })
+  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null, facebook_api_state: JSON.stringify(state) })
+  let sendingFeed = false
   try {
-    if (interrupted && priorClaim) {
-      const recent = await pageApi.recentPosts(ctx, ch, 25)
-      const hit = recent.find((item) => sameText(item.message) === sameText(text) && Date.parse(item.created_time) >= priorClaim - 60_000)
+    // Partial uploads have not sent a feed request, so resume them directly.
+    // Legacy failed text posts have no saved API state; retain their recovery.
+    const attempted = Date.parse(state.attempted_at || '') || (!saved && !images.length && interrupted ? priorClaim : 0)
+    if (attempted) {
+      const recent = await pageApi.recentPosts(ctx, ch, 100, false, images.length > 0)
+      const hit = recent.find((item) => sameText(item.message) === sameText(text) && Date.parse(item.created_time) >= attempted - 60_000 && (!images.length || (state.photo_ids.length === images.length && item.photo_ids.length === state.photo_ids.length && state.photo_ids.every((id) => item.photo_ids.includes(id)))))
       if (hit) {
-        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null })
+        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null, facebook_api_state: null })
         return { id: p.id, post_id: hit.id, already: true }
       }
+      if (state.attempted_at && input.confirm_unpublished !== true) throw new Error(L(ctx, '上次 Facebook 发布结果尚未确认，请先检查公共主页；确认没有发布后再使用 confirm_unpublished 重试，避免重复发帖', 'The previous Facebook publishing result is still uncertain. Check the Page; only retry with confirm_unpublished after confirming the post was not published'))
+    }
+    // Meta retains unpublished photos for about 24 hours. Keep a margin so old
+    // uploads are replaced rather than attached after their expiry.
+    if (images.length && Date.now() - Date.parse(state.uploaded_at) > 23 * 3600_000) {
+      state = { content, photo_ids: [], uploaded_at: now() }
+      persist()
+    }
+    for (let i = state.photo_ids.length; i < images.length; i++) {
+      ctx.progress({ done: i, total: images.length, message: L(ctx, `正在上传 Facebook 图片 ${i + 1}/${images.length}…`, `Uploading Facebook image ${i + 1}/${images.length}…`) })
+      const id = await pageApi.uploadPhoto(ctx, ch, images[i])
+      state.photo_ids.push(id)
+      persist()
     }
     ctx.progress({ message: L(ctx, `正在通过 Facebook 官方 API 发布到「${ch.name}」…`, `Publishing to "${ch.name}" through the Facebook API…`) })
-    const id = await pageApi.publishText(ctx, ch, text)
-    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: `https://www.facebook.com/${id}`, published_at: now(), updated_at: now(), error: null })
+    state.attempted_at = now()
+    persist()
+    sendingFeed = true
+    const id = images.length ? await pageApi.publishPhotos(ctx, ch, text, state.photo_ids) : await pageApi.publishText(ctx, ch, text)
+    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: `https://www.facebook.com/${id}`, published_at: now(), updated_at: now(), error: null, facebook_api_state: null })
     return { id: p.id, post_id: id }
   } catch (e: any) {
+    if (sendingFeed && e?.graphRejected) { state.attempted_at = ''; persist() }
     ctx.db.update('social_posts', p.id, { status: 'failed', error: String(e?.message ?? e).slice(0, 1000), updated_at: now() })
     if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
     throw e

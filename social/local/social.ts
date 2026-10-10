@@ -206,7 +206,7 @@ function channelOfPost(ctx: any, postId: string) {
 }
 
 // 发布、删除、采集、自检：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
-export async function publish(input: { post_id: string; force_interval?: boolean; _show_browser?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
