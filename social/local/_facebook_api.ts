@@ -159,6 +159,36 @@ export type MetricWarning = { key: string; name: string; message: string }
 export type MetricState = { checked_at: string; available: string[]; warnings: MetricWarning[] }
 export type CollectedPost = { id: string; message: string; created_time: string; permalink_url: string; likes?: number; comments?: number; shares?: number }
 
+export type PageComment = { id?: string; message: string; created_time: string }
+
+/** Read only the selected Page's post. Never follow paging.next: it can contain
+ * a credential or another URL. Continue through an opaque cursor on our endpoint. */
+export async function postComments(ctx: any, ch: any, postId: string, after = ''): Promise<{ comments: PageComment[]; next_cursor: string }> {
+  const id = pageId(ch.page_id || ch.platform_uid)
+  if (typeof postId !== 'string' || !/^\d+_\d+$/.test(postId) || !postId.startsWith(`${id}_`)) throw new Error(L(ctx, '帖子不属于所选公共主页，请重新采集帖子后再试。', 'This post does not belong to the selected Page. Collect posts again and retry.'))
+  const validCursor = (v: unknown): v is string => typeof v === 'string' && v.length <= 2048 && !/[\x00-\x1f\x7f]/.test(v)
+  if (!validCursor(after)) throw new Error(L(ctx, '评论分页信息无效，请刷新评论。', 'Invalid comment cursor. Refresh comments.'))
+  const token = await pageToken(ctx, ch)
+  let body: any
+  try {
+    body = await request(ctx, `/${postId}/comments`, token, { params: {
+      fields: 'id,message,created_time', filter: 'stream', order: 'reverse_chronological', limit: '25', ...(after ? { after } : {}),
+    } })
+  } catch (e: any) {
+    if (e?.kind === 'permission') e.message = L(ctx, '无法读取评论，请检查 pages_read_user_content、pages_read_engagement 和目标主页授权；更新应用权限后需重新授权。', 'Cannot read comments. Check pages_read_user_content, pages_read_engagement and access to this Page; reauthorize after updating app permissions.') + ' ' + e.message
+    throw e
+  }
+  if (!Array.isArray(body.data) || body.data.some((c: any) => !c || typeof c !== 'object' || Array.isArray(c) || (c.message != null && typeof c.message !== 'string') || (c.created_time != null && typeof c.created_time !== 'string'))) {
+    throw new Error(L(ctx, 'Facebook 返回的评论数据无效，请刷新后重试。', 'Facebook returned invalid comment data. Refresh and retry.'))
+  }
+  // Comment IDs can be absent when the Page task does not expose them. Text and
+  // time remain useful; do not request author profiles or store user content.
+  const comments = body.data.map((c: any) => ({ ...(typeof c.id === 'string' ? { id: c.id } : {}), message: c.message ?? '', created_time: c.created_time ?? '' }))
+  const cursor = body.paging?.cursors?.after
+  if (body.paging?.next && (!validCursor(cursor) || !cursor || cursor === after || cursor.includes(token))) throw new Error(L(ctx, 'Facebook 返回的评论分页信息无效，请刷新后重试。', 'Facebook returned invalid comment pagination. Refresh and retry.'))
+  return { comments, next_cursor: body.paging?.next ? cursor : '' }
+}
+
 /** Basic posts and each metric have separate requests. Only permission rejection
  * is optional; expiry, API restrictions and transport errors must still fail. */
 export async function collectData(ctx: any, ch: any, limit = 25): Promise<{ posts: CollectedPost[]; followers?: number; state: MetricState }> {

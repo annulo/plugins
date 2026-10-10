@@ -14,6 +14,7 @@ import * as pageApi from './_facebook_api'
 //   facebook.login / facebook.checkLogin   本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   facebook.publish / remove 发布、删除
 //   facebook.collect                       采集最近帖子的互动数据和粉丝数
+//   facebook.comments({ post_id, after? })  只读 API 公共主页帖子的评论正文和时间（post_id 是本机记录 id）
 //   facebook.probe({ channel_id })         自检：登录、读账号、读帖子、打开发帖框、找发布按钮，不真的发（local/_health.ts）
 //
 // 视频帖：social_posts.video 有值（素材的 http(s) 地址，或本机文件 local:<名字>）就发视频，不带图片；直接交给 b.upload，
@@ -631,6 +632,21 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ok = await loggedIn(b)
   ctx.db.update('social_accounts', ch.id, { login_status: ok ? 'ok' : 'expired', last_checked_at: now() })
   return { ok }
+}
+
+/** Comments are fetched on demand, never saved to project tables. */
+export async function comments(input: { post_id: string; after?: string }, ctx: any) {
+  const post = ctx.db.get('social_posts', input?.post_id)
+  if (!post) throw new Error(L(ctx, '帖子不存在，请重新打开帖子。', 'Post not found. Open the post again.'))
+  const ch = fbChannel(ctx, post.channel_id)
+  if (!isApi(ch) || !isPage(ch)) throw new Error(L(ctx, '查看评论需要通过官方 API 连接 Facebook 公共主页。', 'Connect a Facebook Page through the official API to view comments.'))
+  if (post.status !== 'published' || !post.post_id) throw new Error(L(ctx, '这条帖子尚无已发布记录，请先采集主页帖子。', 'This post has no published record. Collect the Page posts first.'))
+  try {
+    return await pageApi.postComments(ctx, ch, post.post_id, input.after ?? '')
+  } catch (e) {
+    if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+    throw e
+  }
 }
 
 // ---- 帖子列表（采集、查重共用）----

@@ -123,3 +123,5 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 3. 页面：账号列表（读 `social_accounts`，添加账号调 `social/social.login`）、待审和排期的帖子（读写 `social_posts`，发布调 `social/social.publish`）、数据（`social/stats.summary`）、失败提示（`social/social.health`）。
    插件现在不带页面组件，页面由模板自己写。
 4. 不要在模板里声明 `social_` 开头的表，也不要改 `plugins/social/` 下的默认写法：用户的定制放 `user/plugins/social/`。
+
+Facebook API comment reading: `social/facebook.comments({ post_id, after? })` reads a published local post record belonging to its connected Page. Returns `{ comments: [{ id?, message, created_time }], next_cursor }`, newest first (25 per page, including replies). Read only; no author profiles or persistent comment storage. Requires Page read permissions. Templates provide the comment dialog.
