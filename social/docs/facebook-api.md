@@ -2,9 +2,11 @@
 
 这是社媒插件的独立测试路径，不改变现有浏览器登录、个人主页和浏览器发帖。账号表的 `auth_mode` 为 `api` 时，只有这个公共主页走 Graph API；旧账号未设置该字段时仍走浏览器。
 
+**当前验收状态（2026-10-10）**：Creght AI 的 OAuth 互动采集已恢复。在 Meta 公共主页用例和现有 Business Login 配置中加入 `pages_read_user_content`，重新授权后，该权限为 `granted`；同一 Page token 已能读取原先报错的 `likes`、`comments` 字段。下文早期权限报错是补授权之前的记录。当前验证仅覆盖应用角色账号，未完成对外 Advanced Access 审核。
+
 ## 用已有 Page token 测试
 
-1. 在 Meta Graph API Explorer 中，用当前应用获取具有 `pages_show_list`、`pages_read_engagement`、`pages_manage_posts` 权限的 **User token**。调用 `GET /me/accounts`，确认目标主页有 `CREATE_CONTENT` 任务，并在 Explorer 中切换到该主页的 **Page Access Token**。只在本机使用，不要把 token 发到聊天或写入项目文件。
+1. 在 Meta Graph API Explorer 中，用当前应用获取具有 `pages_show_list`、`pages_read_engagement`、`pages_manage_posts` 权限的 **User token**；采集用户评论等互动数据还需 `pages_read_user_content`。调用 `GET /me/accounts`，确认目标主页有 `CREATE_CONTENT` 任务，并在 Explorer 中切换到该主页的 **Page Access Token**。只在本机使用，不要把 token 发到聊天或写入项目文件。
 2. 在 Annulo **设置 → 密钥**中新增 `FACEBOOK_PAGE_TOKEN_<Page ID>`，值填该主页的 Page Access Token。例如 Page ID 为 `1274376505755273` 时，密钥名是 `FACEBOOK_PAGE_TOKEN_1274376505755273`。
 3. 在已安装这版社媒插件的项目中运行：
 
@@ -40,6 +42,8 @@ annulo run social/facebook.setMode --input '{"channel_id":"<账号 id>","mode":"
 5. 点击 **自检**。通过后可按原审核流程发文字和图文帖（图片支持需 social 0.8.1）。视频需要在「连接方式」中选择浏览器方式并登录。
 
 插件从指定的 `ctx.oauth('facebook', { account })` 取 User token，再从 `/me/accounts` 取 Page token；不将任一 token 写入项目表或主页选择结果。绑定时重新读取 Meta 权限和主页资料；断开指定账号后报重新授权，不自动改用其它账号或测试 Page Token。
+
+采集用户评论等互动数据时，在 Meta 公共主页用例中添加 `pages_read_user_content`，并编辑现有企业版登录配置，将该权限加入原来的三项权限。保存配置不会自动更新已签发的 token；用户需从项目的「连接方式」再次授权同一账号及目标主页，再检查 `/me/permissions` 和实际字段读取。当前 Creght AI 实测补齐此权限也恢复了 `likes` 读取；不能仅凭错误文案中已有 `pages_read_engagement` 就认定必须申请 Page Public Content Access。该权限的完整范围以 [Meta 权限说明](https://developers.facebook.com/documentation/development/permissions#pages_read_user_content) 为准，包含读取用户内容及删除用户评论的能力；本次采集只读取汇总数量。
 
 2026-10-09 已用 Creght AI（Page ID `1274376505755273`）在隔离项目完成真实 OAuth 授权、列主页、添加账号及自检，凭据来源确认是 `oauth`。本轮未用 OAuth 发布新帖子；完整互动采集仍有上文所述的 Meta 权限限制。
 
@@ -78,3 +82,5 @@ npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/
 自检先检查主页、读帖、OAuth 发帖权限，再单独检查数据读取；采集权限不足以次要警告呈现，不否定已验证的发帖授权。自检不发布、上传或删除内容。权限不足、API 限制和网络失败分别记录为 `permission`、`restricted`、`network`，失效授权仍为 `expired`。本轮没有新增授权范围，读取评论等仍需解决 Meta 的实际权限限制。
 
 2026-10-10 在当前 creator 联调项目通过 Annulo 实际运行器验收：同步 Creght AI 的 8 条帖子，粉丝及分享可读，点赞和评论分别返回权限警告；数据库未把未知指标填成 0。自检确认发帖授权可用并显示两项采集警告；统计对未知指标返回 `null`。本轮只读取 Meta 数据，没有发布、删除或上传内容。
+
+同日补授权后再次验收：`pages_read_user_content` 已获授予，8 条帖子均返回明确的点赞、评论数量（当前均为 0），粉丝及分享继续可读。Annulo 页面「立即采集」已同步互动数据，能力状态的 `warnings` 清空；重新自检确认四项数据读取通过。此次授权配置调整未扩大到其它主页，未发布、删除或上传内容，插件代码无需修改。
