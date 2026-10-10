@@ -52,8 +52,8 @@ annulo run social/facebook.setMode --input '{"channel_id":"<账号 id>","mode":"
 - 正文和话题沿用 `body`、`tags`，配图沿用 `images` JSON 数组；最多 10 张，按数组顺序发布。每张先经 `POST /{page-id}/photos` 上传为 `published=false`，全部上传完成后一次 `POST /{page-id}/feed`，`attached_media` 包含图片 ID。
 - 公开 HTTP / HTTPS 地址交给 Meta 抓取。离线项目的 `/_annulo/uploaded/…`、旧 `/_shuttle/uploaded/…` 由 Annulo 读取本机图片，再通过系统 multipart 上传工具发送；不把本机地址交给 Meta。macOS / Linux 使用 `sh`、`base64`、`curl`；没有这些工具的 Windows 使用系统 PowerShell。
 - [Meta Photos API](https://developers.facebook.com/docs/graph-api/reference/page/photos/) 要求 JPEG、PNG、GIF、BMP、TIFF，单张不超过 4 MB。本机上传在发请求前校验类型和大小；公开地址由 Meta 校验。
-- `social_posts.facebook_api_state` 只保存本次内容、已上传图片 ID 和尝试时间，不保存 token。部分上传失败保留已上传图片；失败重试接着上传。修改正文、图片或目标主页后重新上传。超过 23 小时的未发布图片会重传（Meta 暂存约 24 小时）。
-- 发布请求的结果不确定时先查询帖子，同时比对正文和图片 ID，找到原帖子就恢复成功状态。未找到时保留失败，避免自动再发一条；到 Facebook 主页确认没有发布后，才可用 `social/social.publish` 的 `confirm_unpublished: true` 明确重试。普通 Meta 4xx 拒绝可直接重试，继续复用已上传图片。
+- `social_posts.facebook_api_state` 只保存本次内容、已上传图片 ID 和尝试时间，不保存 token。部分上传失败保留已上传图片；失败重试接着上传。尚未发送发布请求的记录，修改正文、图片或目标主页后重新上传；已有结果待确认的尝试始终保留原始内容，修改草稿不能绕过核对。超过 23 小时的未发布图片会重传（Meta 暂存约 24 小时）。
+- 发布请求的结果不确定时先查询帖子，同时比对正文和图片 ID，找到原帖子就恢复成功状态。未找到时保留失败，避免自动再发一条；`social/social.publish` 的 `check_only: true` 只核对上次结果，不上传或发布（即使同时传入确认参数也一样）。文章发布记录和社媒帖子列表显示上次尝试时间、正文、图片数量及原目标主页链接；点击「确认未发布后重试」，必须勾选已检查主页，才会传入 `confirm_unpublished: true`。未找到并不代表未发布，自动排期和普通重试仍不会重复发帖。草稿修改后若找到原帖，发布记录恢复实际已发内容；确认未发才按当前草稿重试。普通 Meta 4xx 拒绝可直接重试，继续复用已上传图片。
 - 排期仍由 Annulo 到点执行同一发布流程，不提前在 Meta 创建定时帖。视频继续使用浏览器通道。
 
 ## 自动化验证
@@ -64,7 +64,7 @@ annulo run social/facebook.setMode --input '{"channel_id":"<账号 id>","mode":"
 npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/facebook-publishing.test.mjs tests/facebook-collection.test.mjs'
 ```
 
-49 项测试使用模拟 Graph API 和数据库，不发送真实帖子；覆盖多账号、目标主页限制、权限撤回、浏览器登录保留、凭据隔离、单图/多图合成、部分上传恢复、发布结果丢失、重试去重、素材过期、图片校验、本机二进制上传、分项采集、未知值保留、自检分类及未知基线。本机上传脚本另对本地 HTTP 测试服务验证 multipart 字节；Windows 路径经过模拟验证，尚未在 Windows 实机运行。
+54 项插件测试使用模拟 Graph API 和数据库，不发送真实帖子；覆盖多账号、目标主页限制、权限撤回、浏览器登录保留、凭据隔离、单图/多图合成、部分上传恢复、发布结果丢失、重试去重、只读核对、草稿及目标变更后的原记录保留、素材过期、图片校验、本机二进制上传、分项采集、未知值保留、自检分类及未知基线。本机上传脚本另对本地 HTTP 测试服务验证 multipart 字节；Windows 路径经过模拟验证，尚未在 Windows 实机运行。
 
 ## 当前接口范围
 
@@ -84,3 +84,7 @@ npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/
 2026-10-10 在当前 creator 联调项目通过 Annulo 实际运行器验收：同步 Creght AI 的 8 条帖子，粉丝及分享可读，点赞和评论分别返回权限警告；数据库未把未知指标填成 0。自检确认发帖授权可用并显示两项采集警告；统计对未知指标返回 `null`。本轮只读取 Meta 数据，没有发布、删除或上传内容。
 
 同日补授权后再次验收：`pages_read_user_content` 已获授予，8 条帖子均返回明确的点赞、评论数量（当前均为 0），粉丝及分享继续可读。Annulo 页面「立即采集」已同步互动数据，能力状态的 `warnings` 清空；重新自检确认四项数据读取通过。此次授权配置调整未扩大到其它主页，未发布、删除或上传内容，插件代码无需修改。
+
+## 发布结果确认界面（2026-10-10）
+
+模板的文章发布记录与社媒帖子列表共用结果确认组件。`publish/tests/facebook-recovery.test.mjs` 的 4 项测试覆盖原始尝试展示、异常状态过滤、主页链接校验、队列核对/确认参数和重复任务去重。真实 Annulo 页面已完成验收：文章发布记录和独立社媒帖子均显示原始尝试；确认按钮在未勾选时禁用，失败后保留原记录并要求再次勾选；账号发布异常列表可进入核对页面。GUI 验收使用未授权的临时通道，确认重试在读取授权前失败，未向 Meta 发出发布或上传请求；临时文章、账号、帖子和健康记录已清理。

@@ -855,7 +855,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
  * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去主页上找有没有这条，避免重复发。主页渠道先切到主页身份再发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -863,6 +863,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = fbChannel(ctx, p.channel_id)
   if (isApi(ch)) return publishApi(input, ctx, p, ch)
+  if (input.check_only) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
   const video = String(p.video ?? '').trim()
@@ -938,7 +939,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 type ApiPublishState = { content: string; photo_ids: string[]; uploaded_at: string; attempted_at?: string }
 
 /** 官方 Page API 发文字及图文；每张图片先上传，最后只创建一条帖子。 */
-async function publishApi(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean }, ctx: any, p: Post, ch: any) {
+async function publishApi(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any, p: Post, ch: any) {
   if (!isPage(ch)) throw new Error(L(ctx, 'Facebook 官方 API 只能发布到公共主页', 'The Facebook API can publish to Pages only'))
   const tags: string[] = parse(p.tags, [])
   const images: string[] = parse(p.images, [])
@@ -953,7 +954,13 @@ async function publishApi(input: { post_id: string; force_interval?: boolean; co
   const content = JSON.stringify([ch.page_id || ch.platform_uid, text, images])
   const saved = parse<ApiPublishState | null>(p.facebook_api_state, null)
   const reuse = saved?.content === content && Array.isArray(saved.photo_ids) && saved.photo_ids.length <= images.length && saved.photo_ids.every((id) => /^\d+$/.test(id)) && !!Date.parse(saved.uploaded_at)
-  let state: ApiPublishState = reuse ? saved! : { content, photo_ids: [], uploaded_at: now() }
+  // An unresolved feed attempt belongs to the previous content. Editing a draft
+  // must not erase it or silently allow a second post with the edited caption.
+  const unresolved = !!Date.parse(saved?.attempted_at || '')
+  const previous = unresolved ? parse<any>(saved?.content, null) : null
+  const previousValid = Array.isArray(previous) && previous.length === 3 && typeof previous[0] === 'string' && typeof previous[1] === 'string' && Array.isArray(previous[2]) && previous[2].every((url: any) => typeof url === 'string')
+  if (input.check_only && !unresolved && !(!saved && !images.length && interrupted && priorClaim)) throw new Error(L(ctx, '没有待核对的 Facebook 发布记录', 'There is no unresolved Facebook publishing attempt'))
+  let state: ApiPublishState = unresolved || reuse ? saved! : { content, photo_ids: [], uploaded_at: now() }
   const persist = () => ctx.db.update('social_posts', p.id, { facebook_api_state: JSON.stringify(state), updated_at: now() })
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null, facebook_api_state: JSON.stringify(state) })
   let sendingFeed = false
@@ -962,13 +969,17 @@ async function publishApi(input: { post_id: string; force_interval?: boolean; co
     // Legacy failed text posts have no saved API state; retain their recovery.
     const attempted = Date.parse(state.attempted_at || '') || (!saved && !images.length && interrupted ? priorClaim : 0)
     if (attempted) {
-      const recent = await pageApi.recentPosts(ctx, ch, 100, false, images.length > 0)
-      const hit = recent.find((item) => sameText(item.message) === sameText(text) && Date.parse(item.created_time) >= attempted - 60_000 && (!images.length || (state.photo_ids.length === images.length && item.photo_ids.length === state.photo_ids.length && state.photo_ids.every((id) => item.photo_ids.includes(id)))))
+      const checkText = previousValid ? previous[1] : text
+      const checkImages: string[] = previousValid ? previous[2] : images
+      const samePage = !unresolved || (previousValid && previous[0] === String(ch.page_id || ch.platform_uid))
+      const recent = samePage ? await pageApi.recentPosts(ctx, ch, 100, false, checkImages.length > 0) : []
+      const hit = recent.find((item) => sameText(item.message) === sameText(checkText) && Date.parse(item.created_time) >= attempted - 60_000 && (!checkImages.length || (Array.isArray(state.photo_ids) && state.photo_ids.length === checkImages.length && item.photo_ids.length === state.photo_ids.length && state.photo_ids.every((id) => item.photo_ids.includes(id)))))
       if (hit) {
-        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null, facebook_api_state: null })
+        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null, facebook_api_state: null, ...(saved?.content !== content && previousValid ? { body: hit.message, tags: '[]', images: JSON.stringify(checkImages) } : {}) })
         return { id: p.id, post_id: hit.id, already: true }
       }
-      if (state.attempted_at && input.confirm_unpublished !== true) throw new Error(L(ctx, '上次 Facebook 发布结果尚未确认，请先检查公共主页；确认没有发布后再使用 confirm_unpublished 重试，避免重复发帖', 'The previous Facebook publishing result is still uncertain. Check the Page; only retry with confirm_unpublished after confirming the post was not published'))
+      if (input.check_only || (unresolved && input.confirm_unpublished !== true)) throw new Error(L(ctx, '上次 Facebook 发布结果尚未确认。请打开公共主页核对上次尝试的内容，确认未发布后再重试。', 'The previous Facebook publishing result is still uncertain. Open the Page and check the previous content, then confirm it was not published before retrying.'))
+      if (unresolved && !reuse) { state = { content, photo_ids: [], uploaded_at: now() }; persist() }
     }
     // Meta retains unpublished photos for about 24 hours. Keep a margin so old
     // uploads are replaced rather than attached after their expiry.

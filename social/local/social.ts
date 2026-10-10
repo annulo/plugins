@@ -206,10 +206,11 @@ function channelOfPost(ctx: any, postId: string) {
 }
 
 // 发布、删除、采集、自检：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
-export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; _show_browser?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
+  if (input.check_only && (ch?.type !== 'facebook' || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   onThisMachine(ctx, ch)
   const r = await track(ctx, ch, 'publish', (c) => m.publish(input, c), input.post_id)
   claim(ctx, ch)

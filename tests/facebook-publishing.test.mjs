@@ -184,6 +184,75 @@ test('editing the caption invalidates prior uploads', async () => {
   assert.equal(calls.length, 2)
 })
 
+test('checking an uncertain result never republishes, even with a confirmation flag', async () => {
+  const ctx = context([imageA])
+  graph(({ path }) => path.endsWith('/photos') ? response({ id: '201' }) : Promise.reject(new Error('Connection dropped')))
+  await assert.rejects(publish(ctx))
+  const previous = state(ctx)
+  const calls = graph(({ method }) => { assert.equal(method, 'GET'); return response({ data: [] }) })
+  await assert.rejects(fb.publish({ post_id: 'post', check_only: true, confirm_unpublished: true }, ctx), /result is still uncertain/)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(state(ctx), previous)
+})
+
+test('checking a record with no attempt cannot upload or publish', async () => {
+  globalThis.fetch = () => { throw new Error('Unexpected Meta request') }
+  const ctx = context([imageA])
+  await assert.rejects(fb.publish({ post_id: 'post', check_only: true }, ctx), /no unresolved/)
+  assert.equal(ctx.writes.length, 0)
+})
+
+test('editing an uncertain post preserves the original attempt until absence is confirmed', async () => {
+  const ctx = context([imageA])
+  graph(({ path }) => path.endsWith('/photos') ? response({ id: '201' }) : Promise.reject(new Error('Connection dropped')))
+  await assert.rejects(publish(ctx))
+  const previous = state(ctx)
+  ctx.rows.get('post').body = 'Changed caption'
+  ctx.rows.get('post').images = JSON.stringify([imageB])
+  const checks = graph(({ method }) => { assert.equal(method, 'GET'); return response({ data: [] }) })
+  await assert.rejects(publish(ctx), /result is still uncertain/)
+  assert.equal(checks.length, 1)
+  assert.deepEqual(state(ctx), previous)
+  const calls = graph(({ path, body }) => {
+    if (path.endsWith('/posts')) return response({ data: [] })
+    if (path.endsWith('/photos')) { assert.equal(body.get('url'), imageB); return response({ id: '202' }) }
+    assert.equal(body.get('message'), 'Changed caption\n\n#hello')
+    assert.deepEqual(JSON.parse(body.get('attached_media')), [{ media_fbid: '202' }])
+    return response({ id: '100_901' })
+  })
+  await fb.publish({ post_id: 'post', confirm_unpublished: true }, ctx)
+  assert.equal(calls.length, 3)
+})
+
+test('an edited draft reconciles the previous published version and restores its actual content', async () => {
+  const ctx = context([imageA])
+  graph(({ path }) => path.endsWith('/photos') ? response({ id: '201' }) : Promise.reject(new Error('Connection dropped')))
+  await assert.rejects(publish(ctx))
+  const previous = state(ctx)
+  ctx.rows.get('post').body = 'Changed caption'
+  ctx.rows.get('post').images = JSON.stringify([imageB])
+  const calls = graph(({ method }) => {
+    assert.equal(method, 'GET')
+    return response({ data: [{ id: '100_900', message: 'Hello world\n\n#hello', created_time: previous.attempted_at, attachments: { data: [{ type: 'photo', target: { id: '201' } }] } }] })
+  })
+  assert.equal((await fb.publish({ post_id: 'post', check_only: true }, ctx)).already, true)
+  assert.equal(calls.length, 1)
+  assert.equal(ctx.rows.get('post').body, 'Hello world\n\n#hello')
+  assert.equal(ctx.rows.get('post').tags, '[]')
+  assert.equal(ctx.rows.get('post').images, JSON.stringify([imageA]))
+})
+
+test('changing the target Page does not discard an unresolved attempt', async () => {
+  const ctx = context()
+  graph(() => Promise.reject(new Error('Connection dropped')))
+  await assert.rejects(publish(ctx))
+  const previous = state(ctx)
+  ctx.rows.get('channel').page_id = '101'
+  globalThis.fetch = () => { throw new Error('Unexpected Meta request') }
+  await assert.rejects(publish(ctx), /result is still uncertain/)
+  assert.deepEqual(state(ctx), previous)
+})
+
 test('expired unpublished photos are uploaded again', async () => {
   const ctx = context([imageA])
   ctx.rows.get('post').facebook_api_state = JSON.stringify({ content: JSON.stringify(['100', 'Hello world\n\n#hello', [imageA]]), photo_ids: ['201'], uploaded_at: new Date(Date.now() - 25 * 3600_000).toISOString() })
