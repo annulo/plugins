@@ -4,6 +4,8 @@
 
 **当前验收状态（2026-10-10）**：Creght AI 的 OAuth 互动采集已恢复。在 Meta 公共主页用例和现有 Business Login 配置中加入 `pages_read_user_content`，重新授权后，该权限为 `granted`；同一 Page token 已能读取原先报错的 `likes`、`comments` 字段。下文早期权限报错是补授权之前的记录。当前验证仅覆盖应用角色账号，未完成对外 Advanced Access 审核。
 
+对外审核准备见 [四项权限英文用途说明、审核员步骤](facebook-app-review.md) 和 [录屏脚本与字幕](facebook-review-recording.md)（2026-10-12）。材料明确区分已实现功能、待补录的真实证据和当前功能差距。
+
 ## 用已有 Page token 测试
 
 1. 在 Meta Graph API Explorer 中，用当前应用获取具有 `pages_show_list`、`pages_read_engagement`、`pages_manage_posts` 权限的 **User token**；采集用户评论等互动数据还需 `pages_read_user_content`。调用 `GET /me/accounts`，确认目标主页有 `CREATE_CONTENT` 任务，并在 Explorer 中切换到该主页的 **Page Access Token**。只在本机使用，不要把 token 发到聊天或写入项目文件。
