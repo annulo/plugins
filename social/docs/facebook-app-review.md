@@ -12,7 +12,7 @@
 | 审核员测试步骤 | 已准备；下载地址、安装包版本、支持邮箱需填入并验证 |
 | 真实评论演示 | 2026-10-10 最后一次实测成功但返回 0 条可见评论；录屏前重新读取含真实留言的帖子 |
 | 多主页绑定演示 | 用户于 2026-10-12 确认目前只有 Creght AI；需准备第二个具备发帖权限的真实测试主页 |
-| 发布代码 | 2026-10-12 核对时，[插件 PR #2](https://github.com/annulo/plugins/pull/2) 和 [模板 PR #1](https://github.com/annulo/templates/pull/1) 均未合并 |
+| 发布代码 | 2026-10-12：[插件 PR #2](https://github.com/annulo/plugins/pull/2) 已合并到 main；模板 Facebook 功能此前已进入 main（提交 `132a339`），重复的 [模板 PR #1](https://github.com/annulo/templates/pull/1) 已关闭。版本标签及审核安装包另行确认 |
 | 公司验证 | 用户已提交；通过状态需在 Meta 后台确认 |
 
 提交候选版本：social 0.8.2、Creator 0.13.0、Annulo API 39。当前普通安装包的 Facebook 授权中转未默认启用；审核包必须能直接走官方授权并包含本次模板和插件。不能把本机开发预览地址当作审核员的下载或访问地址。
