@@ -22,7 +22,7 @@
       },
       "kind": {
         "type": "string",
-        "description": "失败的类型：broken 页面或接口对不上了（要改平台文件）/ expired 登录过期"
+        "description": "失败类型：broken 页面/接口变化；expired 授权失效；permission 缺权限；restricted API 被限制；network 网络、临时服务错误或限流"
       },
       "step": {
         "type": "string",

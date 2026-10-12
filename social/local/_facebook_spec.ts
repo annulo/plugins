@@ -7,6 +7,7 @@ export const FB = {
   // 帖子正文上限很大（6 万多字符），但信息流里只显示前两三行，超过 5000 就不像帖子了
   textMax: 5000,
   imagesMax: 10,
+  apiPhotoMaxMB: 4, // 官方 Page Photos API；浏览器通道按网页实际要求处理
   tagsMax: 5,
   // 视频帖（social_posts.video）：Facebook 收最长 240 分钟、10GB；Annulo 的 b.upload 上限 2GB。时长函数里拿不到，只作提示
   videoMaxMinutes: 240,

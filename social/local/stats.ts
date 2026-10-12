@@ -48,6 +48,12 @@ export function summary(input: { channel_id: string; days?: number; start?: stri
   const start = input.start ?? localDay(new Date(Date.now() - (days - 1) * 86400_000))
   const where = { channel_id: input.channel_id }
   const channel = ctx.db.get('social_accounts', input.channel_id)
+  let available: string[] | null = null
+  if (channel?.auth_mode === 'api' && channel?.type === 'facebook') {
+    try { const value = JSON.parse(channel.facebook_api_metrics ?? '{}').available; available = Array.isArray(value) ? value : [] } catch { available = [] }
+  }
+  const unavailable = available ? KEYS.filter((k) => !available!.includes(k)) : []
+  const known = (key: string, value: number | null) => available && !available.includes(key) ? null : value
   const all: any[] = ctx.db.query('social_posts', { where, limit: 1000 }).list
   const daily: any[] = ctx.db.query('social_daily', { where, order_by: 'date asc', limit: 1000 }).list
   const stats = posts({ channel_id: input.channel_id, start }, ctx)
@@ -87,21 +93,18 @@ export function summary(input: { channel_id: string; days?: number; start?: stri
     note,
     published: rows.filter((r) => r.inRange).length,
     pending: all.filter((p) => PENDING.includes(p.status)).length,
-    followers: channel?.followers ?? null,
-    followers_gain: followersGain,
+    followers: known('followers', channel?.followers ?? null),
+    followers_gain: known('followers', available && hasBase && (last.followers == null || base.followers == null) ? null : followersGain),
     followers_since: followersSince,
-    totals,
+    totals: Object.fromEntries(KEYS.map((k) => [k, known(k, available && (hasBase ? last[k] == null || base[k] == null : rows.some((r) => r.inRange && r.p[k] == null)) ? null : totals[k])])),
+    unavailable_metrics: unavailable,
     top: top.slice(0, 100).map(({ p, gain }) => ({
       id: p.id,
       title: p.title,
       post_url: p.post_url,
       published_at: p.published_at,
-      views: p.views ?? 0,
-      likes: p.likes ?? 0,
-      comments: p.comments ?? 0,
-      collects: p.collects ?? 0,
-      shares: p.shares ?? 0,
-      gain,
+      ...Object.fromEntries(KEYS.map((k) => [k, known(k, p[k] ?? (available ? null : 0))])),
+      gain: gain ? Object.fromEntries(KEYS.map((k) => [k, known(k, available && (stats.last[p.id]?.[k] == null || (stats.base[p.id] && stats.base[p.id][k] == null)) ? null : gain[k])])) : null,
     })),
   }
 }

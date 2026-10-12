@@ -206,10 +206,11 @@ function channelOfPost(ctx: any, postId: string) {
 }
 
 // 发布、删除、采集、自检：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
-export async function publish(input: { post_id: string; force_interval?: boolean; _show_browser?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
+  if (input.check_only && (ch?.type !== 'facebook' || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   onThisMachine(ctx, ch)
   const r = await track(ctx, ch, 'publish', (c) => m.publish(input, c), input.post_id)
   claim(ctx, ch)
@@ -312,7 +313,7 @@ async function collectOne(ctx: any, channelId: string) {
   const m = platformOf(ctx, channelId)
   const ch = ctx.db.get('social_accounts', channelId)
   // 打开浏览器、翻主页要十几秒到一分钟：按钮上说清楚在做什么（各平台的 collect 自己没有进度）
-  ctx.progress({ message: L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
+  ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 Facebook API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the Facebook API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
   const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId }, c))
   ctx.progress({ message: L(ctx, '保存数据…', 'Saving…') })
   // 读到 0 条、但这个账号明明发过（有平台 id 的）：多半是平台的接口改名了，采集悄悄变成空的

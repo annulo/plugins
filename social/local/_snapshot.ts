@@ -30,7 +30,7 @@ export function todayRows(ctx: any, channelId: string, day: string): Map<string,
  * 它还带着老版本的 history（{ 日期: [浏览, 点赞, 评论, 收藏, 分享] }）时，先把那些天搬进 social_post_daily，
  * 返回 true 表示调用方要把 post.history 清掉（写 null）。
  */
-export function recordDay(ctx: any, channelId: string, post: { id: string; history?: string }, day: string, m: Metrics, today: Map<string, string>): boolean {
+export function recordDay(ctx: any, channelId: string, post: { id: string; history?: string }, day: string, m: Partial<Metrics>, today: Map<string, string>): boolean {
   const now = new Date().toISOString()
   const row = { channel_id: channelId, post_id: post.id, date: day, ...pick(m), collected_at: now }
   const id = today.get(post.id)
@@ -50,8 +50,8 @@ export function recordDay(ctx: any, channelId: string, post: { id: string; histo
   return true
 }
 
-function pick(m: Metrics): Metrics {
-  return Object.fromEntries(KEYS.map((k) => [k, Number(m[k]) || 0])) as Metrics
+function pick(m: Partial<Metrics>): Partial<Metrics> {
+  return Object.fromEntries(KEYS.filter((k) => m[k] != null).map((k) => [k, Number(m[k]) || 0])) as Partial<Metrics>
 }
 
 /**

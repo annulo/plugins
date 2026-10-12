@@ -87,6 +87,10 @@
       "spare_profiles": {
         "type": "string",
         "description": "这个账号也登着的别的浏览器 profile（逗号分隔）：添加账号时登的是已有账号，那个 profile 不能再给新账号用"
+      },
+      "facebook_api_metrics": {
+        "type": "string",
+        "description": "Facebook API 采集能力 JSON {checked_at, available, warnings}；不可读取的指标保留旧值，不当作 0。账号记各项能力，帖子记实际取得的指标；不含凭据。"
       }
     }
   }
