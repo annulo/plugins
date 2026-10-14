@@ -1,16 +1,17 @@
 import { L } from './_i18n'
-import { sourceOf } from './_source'
+import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
 import { Expired, runProbe } from './_health'
+import { selectUpload, waitImages } from './_douyin_upload'
 
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_douyin_spec'
 
 // 抖音渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个抖音账号，发的是素材库里的视频。
 //
-//   douyin.save({ article_id?, channel_id, title, body, tags, video, post_id? })
-//                                        存一条写好的视频作品（待审，social_posts）；由助手按任务 tasks/write-douyin.md 写
+//   douyin.save({ article_id?, channel_id, title, body, tags, video?, post_images?, post_id? })
+//                                        存一条写好的图文或视频作品（待审，social_posts）
 //   douyin.check({ post_id })            按平台规格检查
 //   douyin.login / douyin.checkLogin     本机浏览器登录抖音创作者中心（扫码，ctx.browser），登录态只在这台电脑上
 //   douyin.publish / remove 发布、删除作品
@@ -24,8 +25,8 @@ export { problems as draftProblems } from './_douyin_spec'
 // 账号和作品数据都读创作者中心自己的 JSON 接口（在登录着的页面里 fetch，带 cookie），不解析页面文字。
 // 页面结构和接口（2026-09）写成常量，抖音改版时只改这里。
 //
-// 这一版是照抖音创作者中心的结构写的，还没用真实账号跑过。最可能要对着页面改的：
-//   1. 发布页的选择器（SEL.fileInput / title / desc / submit），尤其简介框（contenteditable 编辑器）和话题（输 #话题 再按空格）；
+// 两种上传入口及图文填写已在真实账号核对；平台改版时重点检查：
+//   1. 上传入口（_douyin_upload.ts）与标题、简介框（SEL.title / desc），正文和话题整段粘贴后核对；
 //   2. 等上传完成的判断（TEXT.uploaded：上传完后出现「重新上传」）；
 //   3. 点发布后要验证身份时（TEXT.verify）：换成可见窗口重发一遍，等用户输短信验证码或扫码；要求设置封面时（TEXT.needCover）怎么选封面（SEL.coverBtn、TEXT.coverDone）；
 //   4. 发布结果：监听 API.create（/web/api/media/aweme/create…）的响应拿作品 id；没拿到再看是否跳到作品管理页 / TEXT.success；
@@ -41,6 +42,7 @@ type Post = {
   body: string
   tags?: string
   video?: string
+  images?: string
   status: string
   scheduled_at?: string
   claimed_at?: string
@@ -73,7 +75,6 @@ const API = {
   create: 'aweme/create', // 发布接口 /web/api/media/aweme/create/、create_v2/：{ status_code, status_msg, item_id / aweme_id }
 }
 const SEL = {
-  fileInput: 'input[type="file"][accept*="video"], input[type="file"][accept*="mp4"], input[type="file"]',
   progress: '[class*="long-card"], [class*="upload-progress"], [class*="progress"], [class*="upload-status"]', // 上传进度那一块（读文字）
   title: 'input[placeholder*="作品标题"], input[placeholder*="填写标题"], input[placeholder*="标题"]',
   desc: '.zone-container[contenteditable="true"], [data-placeholder*="简介"][contenteditable="true"], .editor-kit-container [contenteditable="true"], div[contenteditable="true"]',
@@ -100,6 +101,7 @@ const TEXT = {
 const loggedOut = (url: string) => !/creator\.douyin\.com\/creator-micro\//.test(String(url ?? ''))
 
 const videoUrl = (id: string) => `${SITE}/video/${id}`
+const postUrl = (id: string, p: Pick<Post, 'images' | 'video'>) => parse<string[]>(p.images, []).length && !p.video ? `${SITE}/note/${id}` : videoUrl(id)
 
 function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，抖音功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Douyin"))
@@ -152,40 +154,43 @@ function existing(ctx: any, articleId: string, channelId: string) {
 const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t).replace(/^#/, '').replace(/[\s,，#]/g, '').trim()).filter(Boolean))]
 
 /**
- * 存一条写好的视频作品（待审）。这里校验再存：视频不是地址 / 本机文件报错；超字数、话题太多这类问题存下来并在 problems 里返回，
+ * 存一条写好的图文或视频作品（待审）。这里校验再存：视频不是地址 / 本机文件报错；超字数、话题太多这类问题存下来并在 problems 里返回，
  * 让助手改了带 post_id 再存。article_id 可选（从文章改写来的才有）；抖音简介里的链接点不开，不自动接文章链接。
  */
-export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const ch = dyChannel(ctx, input?.channel_id)
-  const video = String(input.video ?? '').trim()
+  const old = input.post_id ? ctx.db.get('social_posts', input.post_id) : null
+  if (input.post_id && (!old || old.channel_id !== ch.id || (a && old.article_id !== a.id))) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
+  const picked = pickImages(input, DOUYIN.imagesMax)
+  const video = String(input.video === undefined ? (picked ? '' : old?.video || '') : input.video).trim()
+  const images: string[] = picked ?? (video ? [] : old ? parse(old.images, []) : input.video !== undefined ? [] : (a?.images ?? []).slice(0, DOUYIN.imagesMax))
   if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); leave it empty if none fits'))
   const post: Partial<Post> = {
-    title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, DOUYIN.titleMax).join(''),
+    title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, images.length && !video ? DOUYIN.imageTitleMax : DOUYIN.titleMax).join(''),
     body: String(input.body ?? '').trim(),
     tags: JSON.stringify(cleanTags(input.tags ?? [])),
     video,
+    images: JSON.stringify(images),
   }
   let id = input.post_id
   if (id) {
-    const old = ctx.db.get('social_posts', id)
-    if (!old || old.channel_id !== ch.id || (a && old.article_id !== a.id)) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
     ctx.db.update('social_posts', id, { ...post, updated_at: now() })
   } else {
     { const dup = a && existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的视频了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished video for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
-    const row: any = { ...post, channel_id: ch.id, images: '[]', status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }
+    const row: any = { ...post, channel_id: ch.id, status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }
     if (a) row.article_id = a.id
     id = ctx.db.insert('social_posts', row).id
   }
   const saved = ctx.db.get('social_posts', id)
-  return { post_id: id, channel: ch.name, problems: problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video }, ctx) }
+  return { post_id: id, channel: ch.name, problems: problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video, images: parse(saved.images, []) }, ctx) }
 }
 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
-  if (!p) throw new Error(L(ctx, '没有这条视频：', 'No such video post: ') + input?.post_id)
+  if (!p) throw new Error(L(ctx, '没有这条作品：', 'No such post: ') + input?.post_id)
   const tags: string[] = parse(p.tags, [])
-  return { problems: problems({ title: p.title, body: p.body, tags, video: p.video }, ctx), length: [...descText(p.body, tags)].length, max: DOUYIN.descMax }
+  return { problems: problems({ title: p.title, body: p.body, tags, video: p.video, images: parse(p.images, []) }, ctx), length: [...descText(p.body, tags)].length, max: DOUYIN.descMax }
 }
 
 // ---- 账号 ----
@@ -406,8 +411,18 @@ const valueOf = (b: any, sel: string) => b.eval(`(() => { const e = document.que
 
 /** 填一个框（input 或 contenteditable）：先 clear + 打字；没进去再在页面里 insertText；都不对就报错 */
 async function fill(ctx: any, b: any, sel: string, text: string, what: string) {
-  const same = async () => (await valueOf(b, sel)).replace(/\s+/g, '') === text.replace(/\s+/g, '')
-  await b.type(sel, text, { clear: true }).catch(() => {})
+  const normText = (v: string) => v.replace(/[\s\u200B-\u200D\uFEFF]+/g, '')
+  const same = async () => normText(await valueOf(b, sel)) === normText(text)
+  const slate = await b.eval(`!!document.querySelector(${JSON.stringify(sel)})?.hasAttribute('data-slate-editor')`)
+  if (slate) {
+    // Slate 的 DOM Range 和内部光标可能不同步；先清空选中的编辑区，再整段粘贴，避免重复正文或话题丢失。
+    await b.click(sel)
+    await b.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); e.focus(); const r=document.createRange();r.selectNodeContents(e);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.dispatchEvent(new Event('selectionchange')) })()`)
+    await ctx.sleep(150)
+    await b.press('Backspace')
+    await ctx.sleep(150)
+    await b.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)});e.focus();const data=new DataTransfer();data.setData('text/plain',${JSON.stringify(text)});e.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true})) })()`)
+  } else await b.type(sel, text, { clear: true }).catch(() => {})
   await ctx.sleep(600)
   if (await same()) return
   await b.eval(`(() => {
@@ -420,26 +435,14 @@ async function fill(ctx: any, b: any, sel: string, text: string, what: string) {
       el.dispatchEvent(new Event('input', { bubbles: true }))
       el.dispatchEvent(new Event('change', { bubbles: true }))
     } else {
-      document.execCommand('selectAll', false)
+      const range = document.createRange(); range.selectNodeContents(el)
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range)
       document.execCommand('insertText', false, ${JSON.stringify(text)})
     }
     return true
   })()`).catch(() => {})
   await ctx.sleep(600)
   if (!(await same())) throw new Error(L(ctx, `${what}没填进去，抖音的发布页可能改了`, `Couldn't fill in the ${what} — Douyin's publish page may have changed`))
-}
-
-/** 话题：接在简介后面输「#话题」再按空格，抖音把它变成话题；最后核对简介里有没有这些话题 */
-async function fillTags(ctx: any, b: any, tags: string[]) {
-  for (const t of tags) {
-    await b.type(SEL.desc, ` #${t}`)
-    await ctx.sleep(800)
-    await b.press('Space').catch(() => {})
-    await ctx.sleep(400)
-  }
-  const text = (await valueOf(b, SEL.desc)).replace(/\s+/g, '')
-  const missing = tags.filter((t) => !text.includes(t.replace(/\s+/g, '')))
-  if (missing.length) throw new Error(L(ctx, `这些话题没加上：${missing.join('、')}（可能是敏感词，或者简介框换了）`, `These hashtags weren't added: ${missing.join(', ')} (possibly blocked, or the description box changed)`))
 }
 
 /** 上传进度：返回 { done, failed, pct }（pct 读不到是 -1） */
@@ -451,19 +454,14 @@ async function uploadState(b: any): Promise<{ done: boolean; failed: boolean; pc
 }
 
 /** 打开上传页，等到选文件的 input 出来，并确认登录的是这个账号（发布和自检共用） */
-async function openUpload(ctx: any, b: any, ch: any) {
+async function openUpload(ctx: any, b: any, ch: any, kind: 'image' | 'video' = 'video') {
   await b.goto(UPLOAD)
   if (loggedOut(b.url())) throw expired(ctx, ch)
-  if (!(await b.waitFor(SEL.fileInput, { timeout: 30000, visible: false }).then(() => true, () => false))) {
-    if (loggedOut(b.url())) throw expired(ctx, ch)
-    await dismissPopups(ctx, b)
-    await b.waitFor(SEL.fileInput, { timeout: 10000, visible: false }).catch(() => {
-      throw new Error(L(ctx, '上传页里没找到选视频文件的入口（SEL.fileInput），抖音的页面可能改了', "Couldn't find the video file input on the upload page (SEL.fileInput) — Douyin's page may have changed"))
-    })
-  }
+  const selector = await selectUpload(ctx, b, kind)
   const who = await whoami(b, ch)
   if (!who) throw expired(ctx, ch)
   if (who.other) throw new Expired(L(ctx, `浏览器里登录的是另一个抖音账号（${who.name}），不是「${ch.name}」，请重新登录`, `The browser is logged in to another Douyin account (${who.name}), not "${ch.name}" — log in again`))
+  return selector
 }
 
 /** 抖音要求设置封面时：打开选封面，直接用默认的那一帧点「完成」 */
@@ -500,13 +498,13 @@ async function createResult(b: any): Promise<{ code: number; message: string; id
 }
 
 /**
- * 发布一条视频作品。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
+ * 发布一条图文或视频作品。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去作品列表里找有没有同标题的作品（含审核中），避免重复发。
  * 发布后抖音要审核：拿到作品 id 就记成已发布，采集会继续更新它的数据。
  */
 export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
-  if (!p) throw new Error(L(ctx, '没有这条视频：', 'No such video post: ') + input?.post_id)
+  if (!p) throw new Error(L(ctx, '没有这条作品：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   // 视频上传要十几分钟：认领 60 分钟内的不重复发
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < 60 * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
@@ -514,7 +512,9 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const ch = dyChannel(ctx, p.channel_id)
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
-  const bad = problems({ title: p.title, body: p.body, tags, video: p.video }, ctx)
+  const images: string[] = parse(p.images, [])
+  const video = String(p.video ?? '').trim()
+  const bad = problems({ title: p.title, body: p.body, tags, video, images }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合抖音的规格：', "Doesn't meet Douyin's limits: ") + bad.join('; '))
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
@@ -528,7 +528,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const claimedBefore = p.claimed_at
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (id: string, extra: object = {}) => {
-    const url = id ? videoUrl(id) : MANAGE
+    const url = id ? postUrl(id, p) : MANAGE
     ctx.db.update('social_posts', p.id, { status: 'published', post_id: id || null, post_url: url, published_at: now(), updated_at: now(), error: null })
     return { id: p.id, post_id: id, ...extra }
   }
@@ -546,29 +546,29 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const attempt = async (show: boolean): Promise<'verify' | { b: any; res: Awaited<ReturnType<typeof createResult>>; okPage: boolean }> => {
     const b = await openBrowser(ctx, { profile: ch.browser_profile, show })
     ctx.progress({ message: L(ctx, '打开上传页…', 'Opening the upload page…') })
-    await openUpload(ctx, b, ch)
+    const selector = await openUpload(ctx, b, ch, video ? 'video' : 'image')
     b.listen(API.create)
-    ctx.progress({ message: L(ctx, '读取视频并上传…', 'Reading the video and uploading…') })
-    await b.upload(SEL.fileInput, [p.video], { timeout: 10 * 60_000 }).catch((e: any) => {
-      throw new Error(L(ctx, '视频没传上去（素材下载失败、本机文件找不到，或者超过 2GB）：', "The video didn't upload (couldn't fetch the asset, local file not found, or it's over 2GB): ") + (e?.message ?? e))
+    ctx.progress({ message: video ? L(ctx, '读取视频并上传…', 'Reading the video and uploading…') : L(ctx, `上传 ${images.length} 张图片…`, `Uploading ${images.length} images…`) })
+    await b.upload(selector, video ? [video] : images, { timeout: 10 * 60_000 }).catch((e: any) => {
+      throw new Error(L(ctx, '素材没传上去（下载失败、本机文件找不到，或者文件太大）：', "The media didn't upload (download failed, local file missing, or the file is too large): ") + (e?.message ?? e))
     })
     await b.waitFor(SEL.title, { timeout: 120000 }).catch(() => {
-      throw new Error(L(ctx, '选了视频，但没出现填写标题的表单（视频格式抖音不认，或者页面改了）', "Picked the video, but the details form didn't appear (Douyin may not accept the format, or the page changed)"))
+      throw new Error(L(ctx, '选了素材，但没出现填写标题的表单（格式抖音不认，或者页面改了）', "Picked media, but the details form didn't appear (Douyin may not accept the format, or the page changed)"))
     })
     await ctx.sleep(1500)
     await dismissPopups(ctx, b)
+    if (!video) await waitImages(ctx, b, images.length)
 
     ctx.progress({ message: L(ctx, '填写标题、简介、话题…', 'Filling in title, description and hashtags…') })
     await fill(ctx, b, SEL.title, p.title, L(ctx, '标题', 'title'))
-    const body = String(p.body ?? '').trim()
-    if (body) await fill(ctx, b, SEL.desc, body, L(ctx, '简介', 'description'))
-    if (tags.length) await fillTags(ctx, b, tags)
+    const body = descText(String(p.body ?? '').trim(), tags)
+    if (body) await fill(ctx, b, SEL.desc, body, L(ctx, '简介和话题', 'description and hashtags'))
 
     // 等上传完：大视频要十几分钟，每半分钟报一次进度
     const deadline = Date.now() + 30 * 60_000
     let told = 0
-    let up = await uploadState(b)
-    while (!up.done && Date.now() < deadline) {
+    let up = video ? await uploadState(b) : { done: true, failed: false, pct: 100 }
+    while (video && !up.done && Date.now() < deadline) {
       if (up.failed) throw new Error(L(ctx, '抖音提示视频上传失败：到上传页看一眼（网络、格式或文件太大）', 'Douyin says the upload failed: check the upload page (network, format or file size)'))
       if (Date.now() - told > 30000) {
         told = Date.now()
@@ -638,7 +638,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     if (r === 'verify') throw new Error('unreachable')
     const { b, res, okPage } = r
-    if (res && res.code !== 0) throw new Error(L(ctx, `抖音没收下这条作品：${res.message || res.code}`, `Douyin rejected the video: ${res.message || res.code}`))
+    if (res && res.code !== 0) throw new Error(L(ctx, `抖音没收下这条作品：${res.message || res.code}`, `Douyin rejected the post: ${res.message || res.code}`))
     if (res?.id) return done(res.id, { reviewing: true })
     if (res || okPage) {
       // 发上了但没拿到作品 id：去作品列表里按标题找
@@ -780,7 +780,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       if (!hit) {
         const u = unlinked.find((x) => sameTitle(v, x.title))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: v.id, post_url: videoUrl(v.id) })
+          ctx.db.update('social_posts', u.id, { post_id: v.id, post_url: postUrl(v.id, u) })
           hit = { ...u, post_id: v.id }
         }
       }
@@ -861,7 +861,9 @@ export async function probe(input: { channel_id: string }, ctx: any) {
     })
     await t.step('upload', L(ctx, '打开上传页、找到选视频文件的入口', 'Open the upload page and find the file input'), async () => {
       await openUpload(ctx, b, ch)
-      if (!(await b.exists(SEL.fileInput).catch(() => false))) throw new Error(L(ctx, '上传页里没找到选文件的 input（SEL.fileInput）', 'No file input on the upload page (SEL.fileInput)'))
+    })
+    await t.step('image_upload', L(ctx, '打开图文上传入口', 'Open image-post upload'), async () => {
+      await openUpload(ctx, b, ch, 'image')
     })
   })
 }

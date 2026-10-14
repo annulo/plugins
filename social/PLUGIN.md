@@ -7,6 +7,8 @@
 
 ## 名字
 
+抖音支持图文笔记和视频：图文使用 `images`（1–35 张）、标题（最多 20 字）、正文和话题；视频使用 `video`。发布、排期和检查走同一组 `social/social.*` 函数，内容中心根据 `FIELDS.douyin` 启用对应账号，详见 `docs/douyin.md`。
+
 装在项目的 `plugins/social/`，项目里的名字都带插件 id：
 
 | 插件里 | 项目里 |
