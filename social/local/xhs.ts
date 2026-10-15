@@ -3,6 +3,7 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
 import { Expired, runProbe } from './_health'
+import { selectUpload, waitImages } from './_xhs_upload'
 
 // 小红书渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。
 //
@@ -16,8 +17,7 @@ import { Expired, runProbe } from './_health'
 //
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用，封面由小红书自动选。
-// video 为空照旧发图文笔记。视频笔记这部分还没在真实账号上跑过，页面结构（SEL.videoTab / videoInput / VIDEO_TEXT）按推测写的，
-// 第一次发视频失败多半是这里要改。
+// video 为空照旧发图文笔记。视频上传入口已在真实账号自检，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
 
 type Post = {
   id: string
@@ -196,11 +196,6 @@ const PERSONAL = '/api/galaxy/creator/home/personal_info'
 const POSTED = '/api/galaxy/v2/creator/note/user/posted'
 const NOTE_API = '/web_api/sns/v2/note' // 发布成功返回 { data: { id } }
 const SEL = {
-  imageTab: '上传图文', // 发布页的标签（按文字点；页面外有一个同名的陷阱元素，原语会跳过）
-  imageInput: 'input.upload-input',
-  videoTab: '上传视频', // 视频笔记的标签（和 imageTab 同一排）
-  // 视频的文件框：按 accept 认出收视频的那个；都没对上时 publish 退回 imageInput（切到视频标签后页面上只剩一个 upload-input）
-  videoInput: 'input.upload-input[accept*="mp4"], input.upload-input[accept*="video"], input[type="file"][accept*="video"], input[type="file"][accept*="mp4"]',
   title: 'input[placeholder*="标题"]',
   body: '.tiptap.ProseMirror',
   topicItem: '.items .item', // 输入 #话题 后的联想列表，.name 是「#话题」
@@ -220,13 +215,6 @@ const VIDEO_TEXT = {
   failed: /上传失败|转码失败|处理失败|格式不支持|不支持该格式|视频时长超|文件过大/,
 }
 const VIDEO_WAIT_MS = 10 * 60_000
-
-/** 找到收视频的文件框：先按 accept 认，认不出就用图文那个选择器（切到视频标签后通常只剩一个） */
-async function videoInput(b: any): Promise<string | null> {
-  if (await b.exists(SEL.videoInput).catch(() => false)) return SEL.videoInput
-  if (await b.exists(SEL.imageInput).catch(() => false)) return SEL.imageInput
-  return null
-}
 
 /** 发布页上视频的状态：从页面文字认，百分比取「上传中 45%」里的数字 */
 async function videoState(b: any): Promise<{ state: 'uploading' | 'processing' | 'done' | 'failed' | 'unknown'; pct: number; text: string }> {
@@ -358,20 +346,20 @@ export async function publish(input: { post_id: string; private?: boolean; force
     }
     if (video) {
       // 视频笔记：切到「上传视频」，传视频，等上传和处理完；配图、封面大字不用，封面让小红书自动选
-      await b.click({ text: SEL.videoTab })
-      await ctx.sleep(1000)
-      const sel = await videoInput(b)
-      if (!sel) throw new Error(L(ctx, '「上传视频」里没找到选视频的文件框（SEL.videoInput），小红书的页面可能改了', "No video file input under \"上传视频\" (SEL.videoInput) — Xiaohongshu's page may have changed"))
+      ctx.progress({ message: L(ctx, '切换到上传视频…', 'Switching to video upload…') })
+      const sel = await selectUpload(ctx, b, 'video')
       ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
       await b.upload(sel, [video], { timeout: VIDEO_WAIT_MS })
       await waitVideo(ctx, b)
       await b.waitFor(SEL.title, { timeout: 60000 })
     } else {
-      await b.click({ text: SEL.imageTab })
+      ctx.progress({ message: L(ctx, '切换到上传图文…', 'Switching to image upload…') })
+      const sel = await selectUpload(ctx, b, 'image')
       ctx.progress({ message: L(ctx, '上传图片…', 'Uploading images…') })
       const files = images.length ? images : [await textCard(ctx, p.cover_text || p.title)]
-      await b.upload(SEL.imageInput, files)
+      await b.upload(sel, files)
       await b.waitFor(SEL.title, { timeout: 90000 })
+      await waitImages(ctx, b, files.length)
     }
     ctx.progress({ message: L(ctx, '填写标题和正文…', 'Filling in the title and text…') })
     await b.type(SEL.title, p.title)
@@ -518,16 +506,6 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
   return { channels: out }
 }
 
-/** 每秒看一次选择器在不在，最多等 ms（文件框常是隐藏的，不用 waitFor 等可见） */
-async function present(ctx: any, b: any, sel: string, ms: number) {
-  const end = Date.now() + ms
-  while (Date.now() < end) {
-    if (await b.exists(sel).catch(() => false)) return true
-    await ctx.sleep(1000)
-  }
-  return false
-}
-
 /**
  * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，用和它们同一份选择器，
  * 不上传、不填字、不点发布、不点删除。
@@ -569,15 +547,10 @@ export async function probe(input: { channel_id: string }, ctx: any) {
     await t.step('publish_page', L(ctx, '打开发布页、上传图片的入口', 'Open the publish page and image upload'), async () => {
       await b.goto(PUBLISH_URL)
       if (/\/login/.test(b.url())) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      await b.click({ text: SEL.imageTab })
-      if (!(await present(ctx, b, SEL.imageInput, 15000))) throw new Error(L(ctx, '「上传图文」里没找到选图片的文件框（SEL.imageInput）', 'No image file input under "上传图文" (SEL.imageInput)'))
+      await selectUpload(ctx, b, 'image')
     })
     await t.soft('video_tab', L(ctx, '上传视频的入口（视频笔记）', 'Video upload (video notes)'), async () => {
-      await b.click({ text: SEL.videoTab })
-      if (!(await present(ctx, b, SEL.videoInput, 15000))) {
-        const accept = await b.eval(`[...document.querySelectorAll('input[type="file"]')].map(e => e.getAttribute('accept') || '').join(' | ')`).catch(() => '')
-        throw new Error(L(ctx, `「上传视频」里没找到选视频的文件框（SEL.videoInput）；页面上的文件框 accept：${accept || '无'}`, `No video file input under "上传视频" (SEL.videoInput); file inputs on the page accept: ${accept || 'none'}`))
-      }
+      await selectUpload(ctx, b, 'video')
       return L(ctx, '有视频文件框', 'Video file input found')
     })
   })
