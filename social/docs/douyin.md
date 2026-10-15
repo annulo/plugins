@@ -16,3 +16,11 @@ The upload page has both file inputs in its DOM, including the inactive panel. `
 The description editor uses Slate and can retain zero-width paragraph markers. Clear the bounded editor selection and paste the full description and hashtags as one block. Compare normalized visible text before continuing; a mismatch stops before Publish. Self-tests verify both upload modes without uploading files.
 
 Publishing, retry checks, scheduling and metrics continue through `douyin.ts`. Validate with browser fixtures and a logged-in account, stopping before the final Publish action when testing. Regression tests require `esbuild` on PATH and the `playwright` Node package; set `CHROME_PATH` to use installed Chrome and run `node --test tests/douyin-publishing.test.mjs`.
+
+## Custom video covers (pending live validation)
+
+`video_cover` stores a Library URL or local uploaded-image URL, separately from image-post media and `cover_text`. Omitting it on edits preserves the previous value; an empty string removes it. `_content.fromContent` passes it only to supported video destinations, and scheduling reads the latest source value.
+
+`_video_cover_upload.ts` locates an unambiguous cover editor, uploads only to its image input, waits for a changed, loaded preview, and confirms inside that editor. Missing/ambiguous controls, rejected uploads or unchanged previews stop before publication. An explicitly selected cover never falls back to a default frame. Empty covers retain the existing publication flow.
+
+Local browser fixtures cover these safeguards. **The live Xiaohongshu and Douyin cover selectors have not yet been verified**: Chrome extension file access blocked the attempt, and the user requested code and local tests first. Before releasing, validate each platform with a disposable video and cover and stop before the final Publish button; adapt the scoped selectors to the observed UI if needed.

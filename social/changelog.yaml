@@ -1,3 +1,6 @@
+- version: 0.8.5
+  zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。
+  en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover."
 # 升级说明，新的在最上面：每条一个 version 加各语言一段（zh、en……，可以再加别的语言）。
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.

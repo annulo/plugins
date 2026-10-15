@@ -1,4 +1,6 @@
 import { L } from './_i18n'
+import { videoCoverPatch } from './_video_cover'
+import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
@@ -42,6 +44,7 @@ type Post = {
   body: string
   tags?: string
   video?: string
+  video_cover?: string
   images?: string
   status: string
   scheduled_at?: string
@@ -157,7 +160,7 @@ const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t)
  * 存一条写好的图文或视频作品（待审）。这里校验再存：视频不是地址 / 本机文件报错；超字数、话题太多这类问题存下来并在 problems 里返回，
  * 让助手改了带 post_id 再存。article_id 可选（从文章改写来的才有）；抖音简介里的链接点不开，不自动接文章链接。
  */
-export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const ch = dyChannel(ctx, input?.channel_id)
   const old = input.post_id ? ctx.db.get('social_posts', input.post_id) : null
@@ -167,6 +170,7 @@ export function save(input: { article_id?: string; article_title?: string; url?:
   const images: string[] = picked ?? (video ? [] : old ? parse(old.images, []) : input.video !== undefined ? [] : (a?.images ?? []).slice(0, DOUYIN.imagesMax))
   if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); leave it empty if none fits'))
   const post: Partial<Post> = {
+    ...videoCoverPatch(input, ctx),
     title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, images.length && !video ? DOUYIN.imageTitleMax : DOUYIN.titleMax).join(''),
     body: String(input.body ?? '').trim(),
     tags: JSON.stringify(cleanTags(input.tags ?? [])),
@@ -183,14 +187,14 @@ export function save(input: { article_id?: string; article_title?: string; url?:
     id = ctx.db.insert('social_posts', row).id
   }
   const saved = ctx.db.get('social_posts', id)
-  return { post_id: id, channel: ch.name, problems: problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video, images: parse(saved.images, []) }, ctx) }
+  return { post_id: id, channel: ch.name, problems: problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video, video_cover: saved.video_cover, images: parse(saved.images, []) }, ctx) }
 }
 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条作品：', 'No such post: ') + input?.post_id)
   const tags: string[] = parse(p.tags, [])
-  return { problems: problems({ title: p.title, body: p.body, tags, video: p.video, images: parse(p.images, []) }, ctx), length: [...descText(p.body, tags)].length, max: DOUYIN.descMax }
+  return { problems: problems({ title: p.title, body: p.body, tags, video: p.video, video_cover: p.video_cover, images: parse(p.images, []) }, ctx), length: [...descText(p.body, tags)].length, max: DOUYIN.descMax }
 }
 
 // ---- 账号 ----
@@ -514,7 +518,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const tags: string[] = parse(p.tags, [])
   const images: string[] = parse(p.images, [])
   const video = String(p.video ?? '').trim()
-  const bad = problems({ title: p.title, body: p.body, tags, video, images }, ctx)
+  const bad = problems({ title: p.title, body: p.body, tags, video, images, video_cover: p.video_cover }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合抖音的规格：', "Doesn't meet Douyin's limits: ") + bad.join('; '))
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
@@ -579,6 +583,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     if (!up.done) throw new Error(L(ctx, '等了 30 分钟视频还没传完（或者没认出「重新上传」）：到抖音上传页看一眼', "Waited 30 minutes and the upload isn't done (or \"重新上传\" wasn't recognized): check Douyin's upload page"))
 
+    if (video && p.video_cover) await uploadVideoCover(ctx, b, p.video_cover, '抖音')
+
     ctx.progress({ message: L(ctx, '发布…', 'Publishing…') })
     if (!(await clickSubmit(b))) throw new Error(L(ctx, '没找到「发布」按钮（TEXT.submit），抖音的页面可能改了', "Couldn't find the \"发布\" (Publish) button (TEXT.submit) — Douyin's page may have changed"))
     // 等发布接口的响应（拿作品 id），或者跳到作品管理页 / 出现「发布成功」；要封面时补选一次再点发布；要验证身份时等用户验证
@@ -606,6 +612,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       }
       if (!coverTried && TEXT.needCover.test(text)) {
         coverTried = true
+        if (p.video_cover) throw new Error(L(ctx, '抖音没有接受自定义封面，已停止发布；请检查封面后重试', 'Douyin did not accept the custom cover; publishing stopped. Check the cover and retry'))
         ctx.progress({ message: L(ctx, '抖音要求设置封面，用默认封面…', 'Douyin requires a cover; using the default frame…') })
         await ensureCover(ctx, b)
         if (!(await clickSubmit(b))) throw new Error(L(ctx, '设置封面后没找到「发布」按钮（TEXT.submit）', "Couldn't find the \"发布\" (Publish) button after setting the cover (TEXT.submit)"))

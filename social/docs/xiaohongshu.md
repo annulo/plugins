@@ -11,3 +11,11 @@ The editor appears while image uploads are still in progress. Wait for all expec
 To validate against a logged-in account, run the self-test, then prepare an approved post through image upload and title/body entry while stopping before the final Publish action. A successful self-test alone does not verify that media was uploaded.
 
 Browser regression tests require `esbuild` on PATH and the `playwright` Node package. Run `node --test tests/xhs-upload.test.mjs`; set `CHROME_PATH` to use an installed Chrome instead of Playwright's Chromium.
+
+## Custom video covers (pending live validation)
+
+`video_cover` stores a Library URL or local uploaded-image URL, separately from image-post media and `cover_text`. Omitting it on edits preserves the previous value; an empty string removes it. `_content.fromContent` passes it only to supported video destinations, and scheduling reads the latest source value.
+
+`_video_cover_upload.ts` locates an unambiguous cover editor, uploads only to its image input, waits for a changed, loaded preview, and confirms inside that editor. Missing/ambiguous controls, rejected uploads or unchanged previews stop before publication. An explicitly selected cover never falls back to a default frame. Empty covers retain the existing publication flow.
+
+Local browser fixtures cover these safeguards. **The live Xiaohongshu and Douyin cover selectors have not yet been verified**: Chrome extension file access blocked the attempt, and the user requested code and local tests first. Before releasing, validate each platform with a disposable video and cover and stop before the final Publish button; adapt the scoped selectors to the observed UI if needed.

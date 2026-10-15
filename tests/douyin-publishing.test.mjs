@@ -157,3 +157,14 @@ test('a wrong active tab cannot select the hidden image file input', async () =>
     assert.deepEqual(await page.evaluate(()=>window.uploads),[])
   } finally { await page.close() }
 })
+
+test('a requested video cover failure stops the real publisher before final submission', async () => {
+  const ctx = context({video:'local:fixture.mp4',images:'[]',video_cover:'/_annulo/uploaded/cover.png'})
+  const {page}=await fixture(ctx)
+  try {
+    await assert.rejects(dy.publish({post_id:'post'},ctx),/cover.*nothing was published/)
+    assert.equal(ctx.rows.get('post').status,'failed')
+    assert.equal(ctx.rows.get('post').video_cover,'/_annulo/uploaded/cover.png')
+    assert.equal(await page.evaluate(()=>window.submitted),false)
+  } finally {await page.close()}
+})

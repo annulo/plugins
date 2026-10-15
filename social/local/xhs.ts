@@ -1,4 +1,6 @@
 import { L } from './_i18n'
+import { videoCoverPatch } from './_video_cover'
+import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
@@ -16,7 +18,7 @@ import { selectUpload, waitImages } from './_xhs_upload'
 //   xhs.probe({ channel_id })                 自检：登录、读账号和笔记、删除按钮、打开发布页、上传图片 / 视频的入口，不真的发（local/_health.ts）
 //
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
-// 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用，封面由小红书自动选。
+// 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
 // video 为空照旧发图文笔记。视频上传入口已在真实账号自检，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
 
 type Post = {
@@ -29,6 +31,7 @@ type Post = {
   images?: string
   cover_text?: string
   video?: string
+  video_cover?: string
   status: string
   scheduled_at?: string
   post_id?: string
@@ -62,7 +65,7 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 标题超长、正文为空直接报错；别的不合规格的（字数偏多、标签太多…）存下来并在 problems 里返回，让助手改了再存。
  * 配图用文章正文里的图片。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; video_cover?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const picked = pickImages(input, XHS.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
@@ -73,6 +76,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (!title || !body) throw new Error(L(ctx, '标题和正文都要写', 'Both title and body are required'))
   if (len(title) > XHS.titleMax) throw new Error(L(ctx, `标题 ${len(title)} 个字，超过了 ${XHS.titleMax} 个字：改短再存`, `The title is ${len(title)} characters, over ${XHS.titleMax}: shorten it and save again`))
   const post: Partial<Post> = {
+    ...videoCoverPatch(input, ctx),
     title,
     body,
     tags: JSON.stringify((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean)),
@@ -102,7 +106,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这篇笔记：', 'No such note: ') + input?.post_id)
-  return { problems: problems({ title: p.title, body: p.body, tags: parse(p.tags, []), images: parse(p.images, []), video: p.video }, ctx) }
+  return { problems: problems({ title: p.title, body: p.body, tags: parse(p.tags, []), images: parse(p.images, []), video: p.video, video_cover: p.video_cover }, ctx) }
 }
 
 // ---- 登录（本机浏览器，ctx.browser）----
@@ -307,7 +311,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social page first`))
   const tags: string[] = parse(p.tags, [])
   let images: string[] = parse(p.images, [])
-  const bad = problems({ title: p.title, body: p.body, tags, images, video }, ctx)
+  const bad = problems({ title: p.title, body: p.body, tags, images, video, video_cover: p.video_cover }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合小红书的规格：', "Doesn't meet Xiaohongshu's limits: ") + bad.join('; '))
 
   if (!input.private) {
@@ -345,13 +349,14 @@ export async function publish(input: { post_id: string; private?: boolean; force
       throw new Error(L(ctx, `「${ch.name}」的登录过期了，到「社媒」里点「重新登录」`, `The login for "${ch.name}" expired: click "Log in again" on the Social page`))
     }
     if (video) {
-      // 视频笔记：切到「上传视频」，传视频，等上传和处理完；配图、封面大字不用，封面让小红书自动选
+      // 视频笔记：切到「上传视频」，传视频，等上传和处理完；配图、封面大字不用；自定义封面必须上传成功再继续
       ctx.progress({ message: L(ctx, '切换到上传视频…', 'Switching to video upload…') })
       const sel = await selectUpload(ctx, b, 'video')
       ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
       await b.upload(sel, [video], { timeout: VIDEO_WAIT_MS })
       await waitVideo(ctx, b)
       await b.waitFor(SEL.title, { timeout: 60000 })
+      if (p.video_cover) await uploadVideoCover(ctx, b, p.video_cover, '小红书')
     } else {
       ctx.progress({ message: L(ctx, '切换到上传图文…', 'Switching to image upload…') })
       const sel = await selectUpload(ctx, b, 'image')
