@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.3
+  zh: "排期的帖子到点按帖子里存的内容发，不再按文章现在的内容重新生成：排期后改了文章，要发新版就重新排一次。同一篇内容在同一个账号可以有好几条帖子。"
+  en: "Scheduled posts are published exactly as saved instead of being regenerated from the article at publish time: if you edit the article after scheduling, schedule it again to send the new version. One piece of content can have several posts on the same account."
 - version: 0.8.2
   zh: Facebook 官方 API 支持单图和多图帖子，最多 10 张，可复用部分上传结果；数据采集按指标分别读取，缺少点赞、评论或粉丝权限不再阻断可读数据同步；未知指标保留原值，不写成 0。自检分别检查发帖授权和互动读取，权限不足、API 受限及网络异常给出不同提示。发布结果不确定时可只核对、确认未发布后重试；修改草稿保留上次尝试，防止重复发帖。新增公共主页帖子的评论及回复正文读取，按时间倒序分页，不保存用户评论或泄露分页凭据。需要支持指标、发布结果确认和评论展示的模板。
   en: "Facebook API publishes up to 10 images in one post and resumes partial uploads. Collection reads metrics independently so missing engagement or follower permissions no longer block available data. Unknown metrics preserve previous values instead of becoming zero. Self-tests distinguish publishing authorization from data access, with separate permission, restriction and network errors. Uncertain publishing results support check-only recovery and an explicitly confirmed retry; editing drafts preserves the previous attempt to prevent duplicates. Read Page comment and reply text newest first with pagination, without persisting user comments or exposing pagination credentials. Requires templates that display metrics, publishing recovery and comments."

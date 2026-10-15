@@ -2,7 +2,7 @@
 //
 // 插件只认这份通用格式，不认识模板的表：模板把自己的内容（外贸、自媒体模板的 articles 表就是这个格式）交给这里，
 // 支不支持、转成什么样、字数多少都按 _fields.ts 的平台规格算。帖子的 article_id 指向模板的 articles 表，
-// 排期到点时（social.publishScheduled）按文章当时的内容重新生成一遍再发。
+// 帖子存下来就是要发的内容，排期到点（social.publishScheduled）照帖子发。
 //
 //   type        article 长文（标题 + 富文本正文，图片插在正文里）/ post 图文笔记（标题 + 纯文字正文 + 一组配图）/ video 视频（标题 + 简介 + 一个视频）
 //   title       标题
