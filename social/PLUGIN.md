@@ -43,7 +43,7 @@
 | `social.remove({ post_id })` | 从平台删除 |
 | `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
-| `social.publishScheduled({ post_id })` | 到点发一条排期（`schedules/publish.json` 调）：出自文章的先按文章现在的内容重新生成、检查，再发 |
+| `social.publishScheduled({ post_id })` | 到点发一条排期（`schedules/publish.json` 调）：按帖子里存的内容发 |
 | `social.collect({ channel_id })` | 现在采集一个账号 |
 | `social.probe({ channel_id })` | 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发 |
 | `social.health()` | 各账号最近一次自检 / 发布 / 删除 / 采集成没成 |
@@ -62,7 +62,7 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 插件认一份通用的内容格式（`type` 长文 / 图文 / 视频、`title`、`body`、`tags`、`images`、`video`、`cover_text`、`category`，见文件开头），
 `fromContent(内容, 平台)` 按平台规格转成帖子字段，`supports` / `platformsFor` 说哪个平台收哪种类型，`lengthOn` 算字数和上限。
 模板的文章表就按这个格式存，发布、页面上的提示都 import 这里，不在模板里另写一份。
-帖子的 `article_id` 指向模板的 `articles`：排期到点时按文章当时的内容重新生成再发，所以排期之后改文章，发出去的是改过的。
+帖子的 `article_id` 指向模板的 `articles`。帖子存的就是要发的内容，排期到点照它发；排期之后改了文章不影响这条帖子，要发新版就重新排一次。
 
 什么写插件、什么写模板：对外部平台的知识（规格、转换、发布、采集）写插件，业务的内容、流程和界面写模板。详见 Annulo 仓库 `docs/plugins.md`「插件和模板的分界」。
 
@@ -128,4 +128,4 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 
 Facebook API comment reading: `social/facebook.comments({ post_id, after? })` reads a published local post record belonging to its connected Page. Returns `{ comments: [{ id?, message, created_time }], next_cursor }`, newest first (25 per page, including replies). Read only; no author profiles or persistent comment storage. Requires Page read permissions. Templates provide the comment dialog.
 
-视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音使用（`FIELDS.videoCover`）；其他平台不传。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；定时发布重新读取来源内容当前封面。上传失败停止发布，不静默回退默认封面。
+视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音使用（`FIELDS.videoCover`）；其他平台不传。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。
