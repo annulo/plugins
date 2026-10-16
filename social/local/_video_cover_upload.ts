@@ -5,7 +5,7 @@ import { L } from './_i18n'
 // Live verification is still required when either platform changes its editor.
 const INPUT = '[data-annulo-cover-input="true"]'
 
-function inspect(action: string) {
+function inspect(action: string, entry = '') {
   const visible = (e: Element) => {
     if (e.closest('[aria-hidden="true"]')) return false
     for (let p: Element | null = e; p; p = p.parentElement) {
@@ -22,7 +22,10 @@ function inspect(action: string) {
     document.querySelectorAll('[data-annulo-cover-editor],[data-annulo-cover-input]').forEach(e => {
       e.removeAttribute('data-annulo-cover-editor'); e.removeAttribute('data-annulo-cover-input')
     })
-    const buttons = exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面']).filter(e => {
+    // 平台脚本可以先标出要点的入口（比如抖音有横、竖两个「选择封面」）；没标就按文字找，必须只有一个
+    const buttons = (entry ? [...document.querySelectorAll<HTMLElement>(entry)].filter(visible) : exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面'])).filter(e => {
+      // 后台窗口小，封面区常在屏幕外，elementFromPoint 只认看得见的地方：先滚到中间
+      e.scrollIntoView({ block: 'center' })
       const r = e.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
       return !!hit && e.contains(hit)
     })
@@ -43,6 +46,8 @@ function inspect(action: string) {
   if (action === 'locate') {
     const inputs = [...root.querySelectorAll<HTMLInputElement>('input[type="file"]')]
       .filter(e => /image|\.png|\.jpe?g/i.test(e.accept) && !e.disabled)
+      // 抖音的上传组件一组两个 input，带 replace 的是替换已有图片用的
+      .filter((e, _, all) => all.length === 1 || !/replace/i.test(e.className))
     if (inputs.length === 1) inputs[0].setAttribute('data-annulo-cover-input', 'true')
     else {
       const upload = exact(root, ['上传封面', '上传图片', '本地上传', '自定义封面'])
@@ -63,10 +68,13 @@ function inspect(action: string) {
   return { images, busy, error, closed: false }
 }
 
-/** Stop before Publish if the requested cover cannot be verified. No default-cover fallback. */
-export async function uploadVideoCover(ctx: any, b: any, cover: string, platform: string, timeoutMs = 60000) {
+/**
+ * Stop before Publish if the requested cover cannot be verified. No default-cover fallback.
+ * opts.entry: CSS selector of the one cover entry to click, when the page has several (the platform script marks it).
+ */
+export async function uploadVideoCover(ctx: any, b: any, cover: string, platform: string, timeoutMs = 60000, opts: { entry?: string } = {}) {
   if (!cover) return
-  const read = (action: string): Promise<any> => b.eval(`(${inspect.toString()})(${JSON.stringify(action)})`)
+  const read = (action: string): Promise<any> => b.eval(`(${inspect.toString()})(${JSON.stringify(action)}, ${JSON.stringify(opts.entry ?? '')})`)
   const fail = (zh: string, en: string) => new Error(L(ctx, `${platform}视频封面${zh}，没有发布`, `${platform} video cover ${en}; nothing was published`))
   ctx.progress({ message: L(ctx, `上传${platform}视频封面…`, `Uploading the ${platform} video cover…`) })
   if (!(await read('open')).opened) throw fail('编辑入口不明确或未找到', 'editor was not found or was ambiguous')

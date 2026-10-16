@@ -83,6 +83,7 @@ const SEL = {
   desc: '.zone-container[contenteditable="true"], [data-placeholder*="简介"][contenteditable="true"], .editor-kit-container [contenteditable="true"], div[contenteditable="true"]',
   submit: 'button', // 发布按钮按文字认（TEXT.submit），抖音的 class 是哈希
   coverBtn: '[class*="cover"] [class*="upload"], [class*="coverControl"], [class*="cover-select"]',
+  coverControl: '[class*="coverControl"]', // 发布页上横、竖封面各一块，里面写着「横封面4:3」「竖封面3:4」和「选择封面」
   card: '[class*="video-card"], [class*="card-container"], [class*="work-card"]', // 作品管理里的一张作品卡片
 }
 const TEXT = {
@@ -483,6 +484,25 @@ async function ensureCover(ctx: any, b: any) {
   throw new Error(L(ctx, '封面弹窗里没找到「完成」（TEXT.coverDone），抖音的页面可能改了', 'No "完成" (Done) in the cover dialog (TEXT.coverDone) — Douyin\'s page may have changed'))
 }
 
+/**
+ * 自定义封面从哪进：发布页上横封面（4:3）、竖封面（3:4）各有一个「选择封面」（2026-10），点竖封面那个，弹窗先设竖封面。
+ * 标上 data-annulo-cover-open 返回选择器；没认出来返回空，交给 uploadVideoCover 按文字找。
+ */
+async function markCoverEntry(b: any): Promise<string> {
+  const ok = await b
+    .eval(`(() => {
+      document.querySelectorAll('[data-annulo-cover-open]').forEach(e => e.removeAttribute('data-annulo-cover-open'))
+      const hit = [...document.querySelectorAll(${JSON.stringify(SEL.coverControl)})]
+        .filter(c => /竖封面/.test(c.innerText || ''))
+        .flatMap(c => [...c.querySelectorAll('*')].filter(e => e.children.length === 0 && (e.innerText || '').trim() === '选择封面'))
+      if (hit.length !== 1) return false
+      hit[0].setAttribute('data-annulo-cover-open', 'true')
+      return true
+    })()`)
+    .catch(() => false)
+  return ok ? '[data-annulo-cover-open="true"]' : ''
+}
+
 /** 点「发布」：按钮的 class 是哈希，按文字认 */
 async function clickSubmit(b: any) {
   for (const t of TEXT.submit) if ((await markByText(b, SEL.submit, t, 'submit')) && (await b.click('[data-shuttle-mark="submit"]').then(() => true, () => false))) return true
@@ -583,7 +603,12 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     if (!up.done) throw new Error(L(ctx, '等了 30 分钟视频还没传完（或者没认出「重新上传」）：到抖音上传页看一眼', "Waited 30 minutes and the upload isn't done (or \"重新上传\" wasn't recognized): check Douyin's upload page"))
 
-    if (video && p.video_cover) await uploadVideoCover(ctx, b, p.video_cover, '抖音')
+    if (video && p.video_cover) {
+      // 填完话题，联想下拉还开着，会挡住下面的封面区：先收起
+      await b.press('Escape').catch(() => {})
+      await ctx.sleep(300)
+      await uploadVideoCover(ctx, b, p.video_cover, '抖音', 60000, { entry: await markCoverEntry(b) })
+    }
 
     ctx.progress({ message: L(ctx, '发布…', 'Publishing…') })
     if (!(await clickSubmit(b))) throw new Error(L(ctx, '没找到「发布」按钮（TEXT.submit），抖音的页面可能改了', "Couldn't find the \"发布\" (Publish) button (TEXT.submit) — Douyin's page may have changed"))
