@@ -46,15 +46,13 @@ for(const [platform,name] of [['xiaohongshu','xhs'],['douyin','douyin']]) {
     assert.equal(tables.social_posts[0].video_cover,'https://assets.test/new.png')
     m.save({...input,post_id:id,video_cover:''},ctx);assert.equal(tables.social_posts[0].video_cover,'')
   })
-  test(`${platform}: scheduled publishing reads the latest cover and removal`,async()=>{
+  test(`${platform}: scheduled publishing sends the cover saved on the post`,async()=>{
     const {ctx,tables}=fixture(platform)
+    // 排期后改了文章的封面不影响已经排好的帖子（插件 0.8.3 起排期按帖子里存的发）
     tables.articles.push({id:'article',type:'video',title:'Title',body:'Body',video,video_cover:'https://assets.test/latest.png'})
     tables.social_posts.push({id:'post',article_id:'article',channel_id:'account',status:'scheduled',video_cover:cover})
     await modules.social.publishScheduled({post_id:'post'},ctx)
-    assert.equal(ctx.sent[0].video_cover,'https://assets.test/latest.png')
-    tables.articles[0].video_cover=''
-    await modules.social.publishScheduled({post_id:'post'},ctx)
-    assert.equal(ctx.sent[1].video_cover,'')
+    assert.equal(ctx.sent[0].video_cover,cover)
   })
 }
 let browser
