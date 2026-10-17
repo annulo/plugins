@@ -72,6 +72,18 @@
         "type": "string",
         "description": "Facebook 公司主页的 id（fb_kind=page）"
       },
+      "auth_mode": {
+        "type": "string",
+        "description": "Facebook 渠道：browser（原浏览器方式）/ api（官方公共主页 API）；旧账号未填写时按 browser 处理"
+      },
+      "api_credential": {
+        "type": "string",
+        "description": "Facebook API 凭据来源：page_token（本机密钥，仅测试）/ oauth（Annulo 设置 → 连接）"
+      },
+      "oauth_account": {
+        "type": "string",
+        "description": "Facebook API OAuth：连接的 Facebook 用户账号 id；只存 id，不存 User/Page access token"
+      },
       "spare_profiles": {
         "type": "string",
         "description": "这个账号也登着的别的浏览器 profile（逗号分隔）：添加账号时登的是已有账号，那个 profile 不能再给新账号用"
