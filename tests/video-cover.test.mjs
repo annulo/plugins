@@ -104,3 +104,62 @@ test('missing cover entry never uploads into the main input',async()=>{
     assert.deepEqual(await page.evaluate(()=>window.uploads),[])
   } finally {await page.close()}
 })
+// 2026-10 抖音的封面弹窗：左边「生成参考图」也收图片，「上传封面」点了才出现封面自己的 input
+async function douyinFixture() {
+  const page=await browser.newPage()
+  await page.setContent(`<button id="open">选择封面</button>
+    <div role="dialog" id="cover" hidden><h2>设置竖封面</h2>
+      <div id="ref"><span>生成参考图</span><input id="ref-input" type="file" accept="image/png"></div>
+      <img id="preview" src="${svg('blue')}"><div id="slot"><button id="upload">上传封面</button></div><button id="done">完成</button></div>`)
+  await page.evaluate(src=>{
+    window.confirmed=false;window.uploads=[];window.nudges=0
+    document.querySelector('#open').onclick=()=>document.querySelector('#cover').hidden=false
+    document.querySelector('#done').onclick=()=>{window.confirmed=true;document.querySelector('#cover').hidden=true}
+    document.querySelector('#upload').onclick=()=>{
+      window.nudges++
+      const i=document.createElement('input');i.type='file';i.accept='image/png';i.id='cover-input'
+      i.onchange=()=>document.querySelector('#preview').src=src
+      document.querySelector('#slot').append(i)
+    }
+  },svg('red'))
+  const ctx={locale:'en',log:()=>{},progress:()=>{},sleep:ms=>new Promise(r=>setTimeout(r,ms))}
+  const b={eval:code=>page.evaluate(code),snapshot:async()=>({dir:'/snap/cover'}),upload:async(selector,files)=>{
+    await page.locator(selector).setInputFiles({name:'cover.png',mimeType:'image/png',buffer:Buffer.from('fixture')})
+    await page.evaluate(({selector,files})=>window.uploads.push({id:document.querySelector(selector).id,files}),{selector,files})
+  }}
+  return {page,ctx,b}
+}
+test('picks the input next to 上传封面, not the reference-image input, and clicks it once',async()=>{
+  const {page,ctx,b}=await douyinFixture()
+  try {
+    await modules._video_cover_upload.uploadVideoCover(ctx,b,cover,'Fixture',3000)
+    assert.deepEqual(await page.evaluate(()=>window.uploads),[{id:'cover-input',files:[cover]}])
+    assert.equal(await page.evaluate(()=>window.nudges),1)
+    assert.equal(await page.evaluate(()=>window.confirmed),true)
+  } finally {await page.close()}
+})
+test('an ambiguous editor asks the browser assistant, never clicks Done, and keeps a snapshot when it fails',async()=>{
+  const {page,ctx,b}=await douyinFixture()
+  const asked=[]
+  b.act=async(goal,opts)=>{asked.push({goal,until:opts.until,avoid:opts.avoid});throw new Error('could not help')}
+  try {
+    await page.evaluate(()=>{document.querySelector('#upload').onclick=()=>window.nudges++})
+    const e=await modules._video_cover_upload.uploadVideoCover(ctx,b,cover,'Fixture',1500).then(()=>null,e=>e)
+    assert.match(e.message,/upload input was not found/)
+    assert.equal(e.snapshot,'/snap/cover')
+    assert.equal(asked.length,1);assert.equal(asked[0].until,'[data-annulo-cover-input="true"]')
+    assert.ok(asked[0].avoid.includes('完成')&&asked[0].avoid.includes('发布'))
+    assert.deepEqual(await page.evaluate(()=>window.uploads),[])
+    assert.equal(await page.evaluate(()=>window.confirmed),false)
+    assert.equal(await page.evaluate(()=>window.nudges),1)
+  } finally {await page.close()}
+})
+test('the browser assistant can open the editor when the script cannot find the entry',async()=>{
+  const {page,ctx,b}=await douyinFixture()
+  b.act=async()=>{await page.evaluate(()=>document.querySelector('#cover').hidden=false);await page.waitForSelector('[data-annulo-cover-editor="true"]');return {actions:[]}}
+  try {
+    await page.locator('#open').evaluate(e=>e.textContent='封面')
+    await modules._video_cover_upload.uploadVideoCover(ctx,b,cover,'Fixture',3000)
+    assert.deepEqual(await page.evaluate(()=>window.uploads),[{id:'cover-input',files:[cover]}])
+  } finally {await page.close()}
+})

@@ -3,8 +3,8 @@
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
 - version: 0.8.6
-  zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；抖音设在竖封面（3:4）上。上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。
-  en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Douyin's cover goes on the vertical (3:4) slot. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover."
+  zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；抖音设在竖封面（3:4）上。上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。封面弹窗里有多个图片入口（如抖音的「生成参考图」）时只认「上传封面」旁边那个，「上传封面」只点一次；脚本认不出弹窗或上传入口时请浏览器助手帮一步（不会替你点完成或发布）；失败时保存现场，方便「交给助手修」。
+  en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Douyin's cover goes on the vertical (3:4) slot. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover. When the editor has several image inputs (such as Douyin's reference-image picker), use only the one next to \"上传封面\" and click it at most once; if the script can't find the editor or upload input, the browser assistant helps with that step (it never clicks Done or Publish); failures keep a snapshot for \"Fix with assistant\"."
 - version: 0.8.5
   zh: 抖音新增图文发布，支持 1–35 张配图及标题、正文、话题，内容发布弹窗可直接选择抖音账号，支持立即发布和排期。图文标题按 20 字校验，视频发布流程继续保留；修复新版编辑器重复正文、话题丢失的问题，自检同时检查图文与视频入口。
   en: "Douyin now publishes image posts with 1–35 images, title, caption and hashtags, directly from content publishing with immediate or scheduled posting. Image titles are checked against the 20-character limit; video publishing remains supported. Fixed duplicated captions and lost hashtags in the new editor. Self-tests verify both image and video upload modes."
