@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.5
+  zh: "X：发视频推文时，不会再明明发出去了却报「发布确认失败」：之前会把页面上别的请求当成发推结果，提前离开页面。"
+  en: "X: video posts that went out are no longer reported as \"Post confirmation failed\" — another request on the page was mistaken for the post result and the page was left too early."
 - version: 0.8.4
   zh: "B 站投稿页改版后又能发了：视频选上没反应、标签互相覆盖或被自动标签占满、新的必填项（创作声明、封面）都修好了；分区现在只有一级，写了两级也照样投。"
   en: "Bilibili publishing works again after its upload page redesign: fixed videos not being picked up, tags overwriting each other or being crowded out by auto-added tags, and the new required fields (creation declaration, cover); categories are now top-level only, and a two-level category still goes through."
