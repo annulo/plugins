@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.4
+  zh: "B 站投稿页改版后又能发了：视频选上没反应、标签互相覆盖或被自动标签占满、新的必填项（创作声明、封面）都修好了；分区现在只有一级，写了两级也照样投。"
+  en: "Bilibili publishing works again after its upload page redesign: fixed videos not being picked up, tags overwriting each other or being crowded out by auto-added tags, and the new required fields (creation declaration, cover); categories are now top-level only, and a two-level category still goes through."
 - version: 0.8.3
   zh: "排期的帖子到点按帖子里存的内容发，不再按文章现在的内容重新生成：排期后改了文章，要发新版就重新排一次。同一篇内容在同一个账号可以有好几条帖子。"
   en: "Scheduled posts are published exactly as saved instead of being regenerated from the article at publish time: if you edit the article after scheduling, schedule it again to send the new version. One piece of content can have several posts on the same account."

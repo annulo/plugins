@@ -24,7 +24,8 @@ export { problems as draftProblems } from './_bilibili_spec'
 // 账号和稿件数据都读 B站 自己的 JSON 接口（在登录着的页面里 fetch，带 cookie），不解析页面文字。
 // 页面结构和接口（2026-09）写成常量，B站 改版时只改这里。
 //
-// 这一版是照 B站 创作中心的结构写的，还没用真实账号跑过。最可能要对着页面改的：
+// 2026-10-17 用真实账号投稿跑通过（投稿页 2026-10 改版后：子应用后加载、标签要逐个校验、创作声明和封面必填、分区只剩一级）。
+// B站 再改版时最可能要对着页面改的（这次的经过见 docs/publish-breakage.md）：
 //   1. 投稿页的选择器（SEL.fileInput / title / desc / tagInput / tagChip / submit），尤其简介框（新版是 Quill 编辑器）；
 //   2. 等上传完成的判断（TEXT.uploaded / uploading 的进度文字）；
 //   3. 选「自制」和选分区（SEL.categoryBtn / categoryItem；分区是一级还是两级、下拉的 class），没给 category 时不动；
@@ -456,7 +457,43 @@ async function openUpload(ctx: any, b: any, ch: any) {
   if (ch.platform_uid && String(who.mid) !== String(ch.platform_uid)) throw new Expired(L(ctx, `浏览器里登录的是另一个 B站 账号（${who.uname}），不是「${ch.name}」，请重新登录`, `The browser is logged in to another Bilibili account (${who.uname}), not "${ch.name}" — log in again`))
 }
 
-/** 选分区：category 可以是「科技」，也可以是两级「知识 / 科学科普」「知识 > 科学科普」，按层依次点 */
+/**
+ * 封面（2026-10 起必填）：还空着就选 B站 推荐的第一张（从视频里截的画面），弹出裁剪框就点「完成」。
+ * 推荐封面要等视频传上去一部分才出来，所以放在上传完之后。选不上就停下，不投稿。
+ */
+async function chooseCover(ctx: any, b: any) {
+  const empty = () => b.exists('.cover-slot .cover-empty').catch(() => false)
+  if (!(await empty())) return
+  ctx.progress({ message: L(ctx, '选封面…', 'Choosing a cover…') })
+  for (let i = 0; i < 20 && !(await b.exists('.img-item-cover').catch(() => false)); i++) await ctx.sleep(1500)
+  await b.click('.img-item-cover', { timeout: 5000 }).catch(() => {})
+  await ctx.sleep(1500)
+  for (const t of ['完成', '确定', '确认']) {
+    if ((await markByText(b, 'button, .bcc-button, [class*="btn"]', t, 'cover')) && (await b.click('[data-shuttle-mark="cover"]').then(() => true, () => false))) break
+  }
+  await ctx.sleep(1500)
+  if (await empty()) throw new Error(L(ctx, '封面没选上（B站 现在要求必须有封面）：推荐封面 .img-item-cover 点了没反应，页面可能改了', "Couldn't set a cover (Bilibili now requires one): clicking the suggested cover (.img-item-cover) did nothing — the page may have changed"))
+}
+
+/**
+ * 创作声明（2026-10 起投稿页必填）：选「使用 AI 生成 / 合成」的那项（我们的视频都是 AI 辅助做的，平台要求如实声明）。
+ * 没有这个下拉就跳过；有但认不出选项，就停下把可选项报回来，不投稿。
+ */
+async function chooseDeclaration(ctx: any, b: any) {
+  const box = 'input[placeholder*="创作声明"]'
+  if (!(await b.click(box, { timeout: 3000 }).then(() => true, () => false))) return
+  await ctx.sleep(1000)
+  const opts: string[] = await b.eval(`[...document.querySelectorAll('.bcc-option')].filter(e => e.offsetParent !== null && !e.querySelector('li')).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 40)`).catch(() => [])
+  const pick = opts.find((t) => /AI|人工智能/.test(t)) // 2026-10 的选项：含AI生成内容 / 含虚构演绎内容 / 个人观点，仅供参考 / 内容为转载
+  if (!pick || !(await markByText(b, '.bcc-option', pick, 'decl')) || !(await b.click('[data-shuttle-mark="decl"]').then(() => true, () => false))) {
+    throw new Error(L(ctx, `创作声明里没认出「含AI生成内容」那项，可选的有：${[...new Set(opts)].slice(0, 20).join('、') || '（没读到）'}`, `Couldn't find the AI-generated option in 创作声明; options: ${[...new Set(opts)].slice(0, 20).join(', ') || '(none)'}`))
+  }
+  await ctx.sleep(600)
+  await b.press('Escape').catch(() => {}) // 下拉可以多选，选完收起来
+  await ctx.sleep(300)
+}
+
+/** 选分区：category 可以是「科技」，也可以是两级「知识 / 科学科普」「知识 > 科学科普」，按层依次点；页面上没有第二级（2026-10 起只有一级）就停在第一级 */
 async function chooseCategory(ctx: any, b: any, category: string) {
   const levels = category.split(/\s*[/>›→·]\s*/).map((x) => x.trim()).filter(Boolean)
   if (!levels.length) return
@@ -464,8 +501,14 @@ async function chooseCategory(ctx: any, b: any, category: string) {
     throw new Error(L(ctx, '没找到选分区的下拉（SEL.categoryBtn），B站 的页面可能改了', "Couldn't find the category dropdown (SEL.categoryBtn) — Bilibili's page may have changed"))
   }
   await ctx.sleep(800)
-  for (const name of levels) {
+  for (const [i, name] of levels.entries()) {
     if (!(await markByText(b, SEL.categoryItem, name, 'cat'))) {
+      // 2026-10 起投稿页只有一级分区：第一级选上了、第二级找不到，就停在第一级（「知识 / 财经商业」投到「知识」）
+      if (i > 0) {
+        await b.press('Escape').catch(() => {})
+        ctx.progress({ message: L(ctx, `B站 现在只有一级分区，投到「${levels.slice(0, i).join(' / ')}」`, `Bilibili only has top-level categories now; using "${levels.slice(0, i).join(' / ')}"`) })
+        return
+      }
       const opts: string[] = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.categoryItem)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 12).slice(0, 40)`).catch(() => [])
       await b.press('Escape').catch(() => {})
       throw new Error(L(ctx, `分区里没有「${name}」，可选的有：${opts.join('、') || '（没读到，SEL.categoryItem）'}`, `No category "${name}"; options: ${opts.join(', ') || '(none found, SEL.categoryItem)'}`))
@@ -479,37 +522,49 @@ async function chooseCategory(ctx: any, b: any, category: string) {
 const chipTexts = (b: any): Promise<string[]> =>
   b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.tagChip)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(Boolean)`).then((v: any) => (Array.isArray(v) ? v : []), () => [])
 
-/** 填标签：已有的不重复加；加不下时删掉 B站 自动加的（不在我们列表里的），从后往前删 */
+/** 删掉一个不在我们列表里的标签块（B站 自动加的「短片」「搞笑」「原创」这类），删成了返回 true */
+async function dropForeignChip(b: any, want: Set<string>) {
+  return b.eval(`(() => {
+    const want = new Set(${JSON.stringify([...want])})
+    const chips = [...document.querySelectorAll(${JSON.stringify(SEL.tagChip)})].filter(e => e.offsetParent !== null)
+    const chip = chips.reverse().find(e => !want.has((e.innerText || '').replace(/\\s+/g, '')))
+    const x = chip && chip.querySelector(${JSON.stringify(SEL.tagClose)})
+    if (!x) return false
+    // 关闭按钮是 <svg class="close">，SVG 元素没有 click()，要派发点击事件（2026-10 实测）
+    x.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+    return true
+  })()`).catch(() => false)
+}
+
+/**
+ * 填标签：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
+ * 先删掉所有不在我们列表里的，加之前名额满了再删；每个标签要等 B站「请求校验」完、变成标签块，再打下一个。
+ */
 async function fillTags(ctx: any, b: any, tags: string[]) {
   await b.waitFor(SEL.tagInput, { timeout: 10000 }).catch(() => {
     throw new Error(L(ctx, '没找到填标签的输入框（SEL.tagInput），B站 的页面可能改了', "Couldn't find the tag input (SEL.tagInput) — Bilibili's page may have changed"))
   })
-  const want = new Set(tags.map((t) => t.replace(/\s+/g, '')))
-  let chips = await chipTexts(b)
-  const have = new Set(chips.map((t) => t.replace(/\s+/g, '')))
-  const todo = tags.filter((t) => !have.has(t.replace(/\s+/g, '')))
-  let over = chips.length + todo.length - BILI.tagsMax
-  for (let i = chips.length - 1; i >= 0 && over > 0; i--) {
-    if (want.has(chips[i].replace(/\s+/g, ''))) continue
-    const removed = await b.eval(`(() => {
-      const chip = [...document.querySelectorAll(${JSON.stringify(SEL.tagChip)})].filter(e => e.offsetParent !== null)[${i}]
-      const x = chip && chip.querySelector(${JSON.stringify(SEL.tagClose)})
-      if (!x) return false
-      x.click()
-      return true
-    })()`).catch(() => false)
-    if (removed) over--
-    await ctx.sleep(300)
-  }
-  for (const t of todo) {
-    await b.type(SEL.tagInput, t, { clear: true })
+  const key = (t: string) => t.replace(/\s+/g, '')
+  const want = new Set(tags.map(key))
+  await ctx.sleep(2500) // 自动标签是陆续加上的，先等一会儿
+  for (let i = 0; i < 12 && (await dropForeignChip(b, want)); i++) await ctx.sleep(400)
+  for (const t of tags) {
+    if ((await chipTexts(b)).map(key).includes(key(t))) continue
+    for (let i = 0; i < 6 && (await chipTexts(b)).length >= BILI.tagsMax && (await dropForeignChip(b, want)); i++) await ctx.sleep(400)
+    // 不要 clear：输入框是空的时候「清空」会按退格，把上一个刚加上的标签块删掉（2026-10 实测）
+    await b.type(SEL.tagInput, t)
     await b.press('Enter')
-    await ctx.sleep(600)
+    for (let i = 0; i < 16; i++) {
+      await ctx.sleep(400)
+      const busy = /标签正在请求校验/.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
+      if ((await chipTexts(b)).map(key).includes(key(t)) && !busy) break
+    }
   }
-  chips = await chipTexts(b)
-  const now2 = new Set(chips.map((t) => t.replace(/\s+/g, '')))
-  const missing = tags.filter((t) => !now2.has(t.replace(/\s+/g, '')))
-  if (missing.length && chips.length) throw new Error(L(ctx, `这些标签没加上：${missing.join('、')}（可能是敏感词或 B站 不认）`, `These tags weren't added: ${missing.join(', ')} (possibly blocked by Bilibili)`))
+  await ctx.sleep(1500)
+  for (let i = 0; i < 12 && (await dropForeignChip(b, want)); i++) await ctx.sleep(400) // 填的过程中又自动加上的
+  const now2 = new Set((await chipTexts(b)).map(key))
+  const missing = tags.filter((t) => !now2.has(key(t)))
+  if (missing.length) throw new Error(L(ctx, `这些标签没加上：${missing.join('、')}（可能是敏感词或 B站 不认）`, `These tags weren't added: ${missing.join(', ')} (possibly blocked by Bilibili)`))
 }
 
 /** 投稿接口的响应：{ code, message, data: { aid, bvid } }；没等到返回 null */
@@ -577,9 +632,16 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     await openUpload(ctx, b, ch)
     b.listen(API.add)
     ctx.progress({ message: L(ctx, '读取视频并上传…', 'Reading the video and uploading…') })
-    await b.upload(SEL.fileInput, [p.video], { timeout: 10 * 60_000 }).catch((e: any) => {
+    // 投稿页是后加载的子应用（micro-app）：文件塞得太早，页面还没挂上监听，选了也没反应（2026-10 实测）。等一会儿再塞，20 秒没出表单就再塞一次
+    await ctx.sleep(4000)
+    const send = () => b.upload(SEL.fileInput, [p.video], { timeout: 10 * 60_000 }).catch((e: any) => {
       throw new Error(L(ctx, '视频没传上去（素材下载失败、本机文件找不到，或者超过 2GB）：', "The video didn't upload (couldn't fetch the asset, local file not found, or it's over 2GB): ") + (e?.message ?? e))
     })
+    await send()
+    if (!(await b.waitFor(SEL.title, { timeout: 20000 }).then(() => true, () => false))) {
+      await dismissPopups(ctx, b)
+      await send()
+    }
     await b.waitFor(SEL.title, { timeout: 120000 }).catch(() => {
       throw new Error(L(ctx, '选了视频，但没出现填写标题的表单（视频格式 B站 不认，或者页面改了）', "Picked the video, but the details form didn't appear (Bilibili may not accept the format, or the page changed)"))
     })
@@ -593,6 +655,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (!typed && !(await clickText(b, TEXT.original))) throw new Error(L(ctx, '没找到类型「自制」，B站 的页面可能改了（SEL.typeRadio）', "Couldn't find the \"自制\" (original) type — Bilibili's page may have changed (SEL.typeRadio)"))
     await ctx.sleep(500)
     if (p.category?.trim()) await chooseCategory(ctx, b, p.category.trim())
+    await chooseDeclaration(ctx, b)
     await fillTags(ctx, b, tags)
     if (desc) await fill(ctx, b, SEL.desc, desc, L(ctx, '简介', 'description'))
 
@@ -610,6 +673,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       up = await uploadState(b)
     }
     if (!up.done) throw new Error(L(ctx, '等了 30 分钟视频还没传完（或者没认出「上传完成」）：到 B站 投稿页看一眼', "Waited 30 minutes and the upload isn't done (or \"上传完成\" wasn't recognized): check Bilibili's upload page"))
+
+    await chooseCover(ctx, b)
 
     ctx.progress({ message: L(ctx, '投稿…', 'Submitting…') })
     if (!(await b.click(SEL.submit, { timeout: 5000 }).then(() => true, () => false)) && !(await clickText(b, TEXT.submit))) {
