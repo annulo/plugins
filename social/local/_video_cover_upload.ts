@@ -86,7 +86,11 @@ function inspect(action: string, entry = '') {
   }
   const text = (root as HTMLElement).innerText
   const error = text.match(/[^\n]*(上传失败|格式不支持|图片过大|上传出错)[^\n]*/)?.[0] || ''
-  const images = [...root.querySelectorAll<HTMLImageElement>('img')].filter(e => visible(e) && e.complete && e.naturalWidth > 0).map(e => e.currentSrc || e.src).filter(Boolean)
+  // 预览可能是 <img>，也可能是背景图（2026-10 抖音的「竖封面预览」是 background-image: url(blob:…)，中间是 canvas）。
+  // 背景图只认页面自己生成的 blob: / data:：AI 封面、模板这类网络图片过一会儿自己会变，不能当成封面换好了
+  const backgrounds = [...root.querySelectorAll<HTMLElement>('*')].filter(visible)
+    .map(e => /url\(["']?((?:blob|data):[^"')]+)/.exec(getComputedStyle(e).backgroundImage)?.[1] || '').filter(Boolean)
+  const images = [...root.querySelectorAll<HTMLImageElement>('img')].filter(e => visible(e) && e.complete && e.naturalWidth > 0).map(e => e.currentSrc || e.src).filter(Boolean).concat(backgrounds)
   const busy = /上传中|正在上传|处理中/.test(text) || !!root.querySelector('[aria-busy="true"]')
   if (action === 'confirm') {
     const done = exact(root, ['完成', '确定', '确认']).filter(e => !(e as HTMLButtonElement).disabled && e.getAttribute('aria-disabled') !== 'true')

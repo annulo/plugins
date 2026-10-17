@@ -110,15 +110,18 @@ async function douyinFixture() {
   await page.setContent(`<button id="open">选择封面</button>
     <div role="dialog" id="cover" hidden><h2>设置竖封面</h2>
       <div id="ref"><span>生成参考图</span><input id="ref-input" type="file" accept="image/png"></div>
-      <img id="preview" src="${svg('blue')}"><div id="slot"><button id="upload">上传封面</button></div><button id="done">完成</button></div>`)
+      <div id="preview" style="width:30px;height:40px"></div><img class="ai" src="${svg('green')}"><div id="slot"><button id="upload">上传封面</button></div><button id="done">完成</button></div>`)
   await page.evaluate(src=>{
     window.confirmed=false;window.uploads=[];window.nudges=0
+    // 网络来的背景图（AI 封面生成完这类）自己会变，不能当成封面换好了
+    setTimeout(()=>document.querySelector('.ai').style.backgroundImage='url(https://ai.test/done.jpg)',50)
     document.querySelector('#open').onclick=()=>document.querySelector('#cover').hidden=false
     document.querySelector('#done').onclick=()=>{window.confirmed=true;document.querySelector('#cover').hidden=true}
     document.querySelector('#upload').onclick=()=>{
       window.nudges++
       const i=document.createElement('input');i.type='file';i.accept='image/png';i.id='cover-input'
-      i.onchange=()=>document.querySelector('#preview').src=src
+      // 抖音的预览是 background-image: url(blob:…)，不是 <img>
+      i.onchange=()=>document.querySelector('#preview').style.backgroundImage=`url(${URL.createObjectURL(new Blob(['x']))})`
       document.querySelector('#slot').append(i)
     }
   },svg('red'))
