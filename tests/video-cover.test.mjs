@@ -190,7 +190,7 @@ test('a hover-only entry marked by the platform script is still clicked (Xiaohon
   try {
     await page.evaluate(()=>{
       const o=document.querySelector('#open');o.textContent='';o.id='thumb'
-      const e=document.createElement('div');e.className='cover-edit-entry';e.style.opacity='0';e.textContent='编辑封面'
+      const e=document.createElement('div');e.className='cover-edit-entry';e.style.display='none';e.textContent='编辑封面'
       e.onclick=()=>document.querySelector('#cover').hidden=false
       o.append(e)
     })

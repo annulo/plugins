@@ -33,11 +33,12 @@ function inspect(action: string, entry = '') {
     })
     ;(window as any).__annuloCoverNudged = false
     // 平台脚本可以先标出要点的入口（比如抖音有横、竖两个「选择封面」）；没标就按文字找，必须只有一个
-    // 平台脚本标出的入口可能是悬停才显示的（小红书的「编辑封面」透明度是 0）：只要占着位置就直接点，不要求看得见
+    // 平台脚本标出的入口可能是悬停才显示的（2026-10 小红书的「编辑封面」平时 display: none，宽高是 0）：
+    // 不要求看得见，在页面里直接点（element.click() 点得到藏起来的元素）
     if (entry) {
-      const marked = [...document.querySelectorAll<HTMLElement>(entry)].filter(e => e.getBoundingClientRect().width > 0)
+      const marked = [...document.querySelectorAll<HTMLElement>(entry)]
       if (marked.length !== 1) return { opened: false }
-      marked[0].scrollIntoView({ block: 'center' })
+      ;(marked[0].parentElement ?? marked[0]).scrollIntoView({ block: 'center' })
       marked[0].click()
       return { opened: true }
     }

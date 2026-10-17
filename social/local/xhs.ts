@@ -201,7 +201,7 @@ const POSTED = '/api/galaxy/v2/creator/note/user/posted'
 const NOTE_API = '/web_api/sns/v2/note' // 发布成功返回 { data: { id } }
 const SEL = {
   title: 'input[placeholder*="标题"]',
-  // 视频封面的入口：「设置封面」缩略图上的「编辑封面」，鼠标移上去才显示（2026-10）
+  // 视频封面的入口：「设置封面」缩略图上的「编辑封面」，平时 display: none、鼠标移上去才显示（2026-10）
   coverEdit: '.cover-plugin-preview .cover-edit-entry',
   body: '.tiptap.ProseMirror',
   topicItem: '.items .item', // 输入 #话题 后的联想列表，.name 是「#话题」
@@ -359,7 +359,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
       await waitVideo(ctx, b)
       await b.waitFor(SEL.title, { timeout: 60000 })
       if (p.video_cover) {
-        // 「编辑封面」平时透明，脚本认不出、浏览器助手的元素清单里也没有：这里先标出来交给 uploadVideoCover 点
+        // 「编辑封面」平时藏着，按文字找不到：这里把它交给 uploadVideoCover 直接点
         const entry = (await b.exists(SEL.coverEdit).catch(() => false)) ? SEL.coverEdit : ''
         await uploadVideoCover(ctx, b, p.video_cover, '小红书', 60000, { entry })
       }
