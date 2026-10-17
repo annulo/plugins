@@ -7,6 +7,8 @@
 
 ## 名字
 
+抖音支持图文笔记和视频：图文使用 `images`（1–35 张）、标题（最多 20 字）、正文和话题；视频使用 `video`。发布、排期和检查走同一组 `social/social.*` 函数，内容中心根据 `FIELDS.douyin` 启用对应账号，详见 `docs/douyin.md`。
+
 装在项目的 `plugins/social/`，项目里的名字都带插件 id：
 
 | 插件里 | 项目里 |
@@ -125,3 +127,5 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 4. 不要在模板里声明 `social_` 开头的表，也不要改 `plugins/social/` 下的默认写法：用户的定制放 `user/plugins/social/`。
 
 Facebook API comment reading: `social/facebook.comments({ post_id, after? })` reads a published local post record belonging to its connected Page. Returns `{ comments: [{ id?, message, created_time }], next_cursor }`, newest first (25 per page, including replies). Read only; no author profiles or persistent comment storage. Requires Page read permissions. Templates provide the comment dialog.
+
+视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音使用（`FIELDS.videoCover`）；其他平台不传。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。

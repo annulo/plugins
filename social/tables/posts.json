@@ -28,6 +28,10 @@
         "type": "string",
         "description": "配图 URL，JSON 数组字符串；小红书为空时发布前按 cover_text 生成文字封面"
       },
+      "cover": {
+        "type": "string",
+        "description": "视频的封面图（http 地址，或离线项目本机上传的 /_annulo/uploaded/…）；空的用平台默认的那一帧。只有支持上传视频封面的平台（_fields.ts 的 videoCover）会用"
+      },
       "cover_text": {
         "type": "string",
         "description": "封面图上的大字（没有配图时用）"

@@ -2,6 +2,15 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.6
+  zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；抖音设在竖封面（3:4）上。上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。
+  en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Douyin's cover goes on the vertical (3:4) slot. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover."
+- version: 0.8.5
+  zh: 抖音新增图文发布，支持 1–35 张配图及标题、正文、话题，内容发布弹窗可直接选择抖音账号，支持立即发布和排期。图文标题按 20 字校验，视频发布流程继续保留；修复新版编辑器重复正文、话题丢失的问题，自检同时检查图文与视频入口。
+  en: "Douyin now publishes image posts with 1–35 images, title, caption and hashtags, directly from content publishing with immediate or scheduled posting. Image titles are checked against the 20-character limit; video publishing remains supported. Fixed duplicated captions and lost hashtags in the new editor. Self-tests verify both image and video upload modes."
+- version: 0.8.4
+  zh: 修复小红书图文发布停在“上传视频”页的问题：忽略不可见的同名标签，确认切换成功且文件框接收图片后再上传；等待全部图片上传成功并关闭首次图片编辑提示后再继续，自检同步验证真实的图文与视频上传入口。
+  en: "Fixed Xiaohongshu image posts getting stuck on the video upload page: ignore invisible duplicate tabs and verify the selected mode and matching file input before uploading. Wait for every image upload and dismiss the first-time image-editing tip before continuing. Self-tests check the actual image and video upload modes."
 - version: 0.8.3
   zh: "排期的帖子到点按帖子里存的内容发，不再按文章现在的内容重新生成：排期后改了文章，要发新版就重新排一次。同一篇内容在同一个账号可以有好几条帖子。"
   en: "Scheduled posts are published exactly as saved instead of being regenerated from the article at publish time: if you edit the article after scheduling, schedule it again to send the new version. One piece of content can have several posts on the same account."

@@ -10,6 +10,7 @@
 //   tags        话题，JSON 数组字符串或数组，不带 #
 //   images      图文笔记的配图，JSON 数组字符串或数组（顺序就是轮播顺序）
 //   video       视频地址（http）或本机文件 local:<name>
+//   video_cover 自定义视频封面（支持的平台才使用）
 //   cover_text  没配图时文字封面上的大字
 //   category    视频的分区（B 站）
 
@@ -51,10 +52,10 @@ export function fromContent(c: any, platform: string) {
   const title = String(c?.title ?? '').trim()
   // 平台上没有标题（X、LinkedIn…）：title 只是后台列表里认这条用的，截短
   const shownTitle = f?.title === 'note' ? [...title].slice(0, f.titleMax).join('') : title
-  const base = { title: shownTitle, body: String(c?.body ?? '').trim(), tags: JSON.stringify(tags), cover_text: '', video: '', images: '[]', category: '' }
+  const base = { title: shownTitle, body: String(c?.body ?? '').trim(), tags: JSON.stringify(tags), cover_text: '', video: '', video_cover: '', images: '[]', category: '' }
   if (t === 'article') return { ...base, images: JSON.stringify(htmlImages(base.body)) }
   if (t === 'post') return { ...base, images: JSON.stringify(parseList(c?.images).slice(0, f?.images ?? 0)), cover_text: f?.cover ? String(c?.cover_text ?? '') : '' }
-  return { ...base, video: String(c?.video ?? ''), category: f?.category ? String(c?.category ?? '') : '' }
+  return { ...base, video: String(c?.video ?? ''), video_cover: f?.videoCover ? String(c?.video_cover ?? '').trim() : '', category: f?.category ? String(c?.category ?? '') : '' }
 }
 
 /** 这份内容发到这个平台，正文有多长、上限多少（X 中日韩文字算 2、话题接在正文后的平台把话题算进去） */
