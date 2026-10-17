@@ -8,7 +8,10 @@ import { assist } from './_assist'
 // 选文件、点「完成」「发布」还是脚本做（AVOID）。
 const EDITOR = '[data-annulo-cover-editor="true"]'
 const INPUT = '[data-annulo-cover-input="true"]'
-const AVOID = ['发布', '发布笔记', '暂存离开', '完成', '确定', '确认', 'AI生成封面', 'AI封面', 'AI 智能封面']
+const AVOID = ['发布', '发布笔记', '暂存离开', '完成', '确定', '确认', 'AI生成封面', 'AI封面', 'AI 智能封面', '设置横封面']
+// 点了「完成」平台又追问的（2026-10 抖音：「设置横封面获更多流量」）：选不改封面的那个
+const DISMISS = ['暂不设置', '以后再说', '跳过', '暂不', '知道了']
+const CLOSED = '[data-annulo-cover-closed]'
 
 function inspect(action: string, entry = '') {
   const visible = (e: Element) => {
@@ -30,7 +33,15 @@ function inspect(action: string, entry = '') {
     })
     ;(window as any).__annuloCoverNudged = false
     // 平台脚本可以先标出要点的入口（比如抖音有横、竖两个「选择封面」）；没标就按文字找，必须只有一个
-    const buttons = (entry ? [...document.querySelectorAll<HTMLElement>(entry)].filter(visible) : exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面'])).filter(e => {
+    // 平台脚本标出的入口可能是悬停才显示的（小红书的「编辑封面」透明度是 0）：只要占着位置就直接点，不要求看得见
+    if (entry) {
+      const marked = [...document.querySelectorAll<HTMLElement>(entry)].filter(e => e.getBoundingClientRect().width > 0)
+      if (marked.length !== 1) return { opened: false }
+      marked[0].scrollIntoView({ block: 'center' })
+      marked[0].click()
+      return { opened: true }
+    }
+    const buttons = exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面']).filter(e => {
       // 后台窗口小，封面区常在屏幕外，elementFromPoint 只认看得见的地方：先滚到中间
       e.scrollIntoView({ block: 'center' })
       const r = e.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
@@ -39,6 +50,12 @@ function inspect(action: string, entry = '') {
     if (buttons.length !== 1) return { opened: false }
     buttons[0].click()
     return { opened: true }
+  }
+  if (action === 'dismiss') {
+    const hit = exact(document.body, JSON.parse(entry)).filter(e => !(e as HTMLButtonElement).disabled)
+    if (hit.length !== 1) return { dismissed: false }
+    hit[0].click()
+    return { dismissed: true }
   }
   let root = document.querySelector('[data-annulo-cover-editor="true"]')
   if (!root || !visible(root)) {
@@ -153,9 +170,23 @@ export async function uploadVideoCover(ctx: any, b: any, cover: string, platform
   }
   if (!changed) throw await fail('上传后未出现新预览', 'did not show a new preview after upload')
   if (!(await read('confirm')).confirmed) throw await fail('无法确认', 'could not be confirmed')
-  while (Date.now() < deadline) {
+  // 点了「完成」平台可能再弹一个提示：点掉不改封面的选项；几秒还开着又没有这种提示，再点一次「完成」；还不行交给浏览器助手
+  const closeBy = Date.now() + 20000
+  let retried = false
+  for (let start = Date.now(); Date.now() < closeBy; await ctx.sleep(250)) {
     if ((await read('state')).closed) return
-    await ctx.sleep(250)
+    const dismissed = (await b.eval(`(${inspect.toString()})('dismiss', ${JSON.stringify(JSON.stringify(DISMISS))})`)).dismissed
+    if (dismissed) ctx.progress({ message: L(ctx, `${platform}确认封面后弹了提示，已选不改封面的选项…`, `${platform} showed a prompt after confirming the cover; dismissed it without changing the cover…`) })
+    else if (!retried && Date.now() - start > 5000) { retried = true; await read('confirm') }
+  }
+  const watchClosed = (on: boolean) => b.eval(on
+    ? `(() => { clearInterval(window.__annuloCoverClosed); window.__annuloCoverClosed = setInterval(() => { const r = document.querySelector('[data-annulo-cover-editor="true"]'); document.documentElement.toggleAttribute('data-annulo-cover-closed', !r || !r.getClientRects().length) }, 300) })()`
+    : `(() => { clearInterval(window.__annuloCoverClosed); document.documentElement.removeAttribute('data-annulo-cover-closed') })()`).catch(() => {})
+  try {
+    await watchClosed(true)
+    if (await assist(ctx, b, '视频封面已经设好并点了完成：关掉之后弹出的提示（选「暂不设置」这类不改封面的选项），让封面编辑弹窗关闭；不要设置横封面，不要改封面，不要点发布', { until: CLOSED, avoid: AVOID })) return
+  } finally {
+    await watchClosed(false)
   }
   throw await fail('确认后编辑器仍未关闭', 'editor stayed open after confirmation')
 }

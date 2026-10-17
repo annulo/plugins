@@ -166,3 +166,35 @@ test('the browser assistant can open the editor when the script cannot find the 
     assert.deepEqual(await page.evaluate(()=>window.uploads),[{id:'cover-input',files:[cover]}])
   } finally {await page.close()}
 })
+test('a prompt after Done is dismissed with 暂不设置, never 设置横封面',async()=>{
+  const {page,ctx,b}=await douyinFixture()
+  try {
+    await page.evaluate(()=>{
+      window.horizontal=false
+      document.querySelector('#done').onclick=()=>{
+        window.confirmed=true
+        const d=document.createElement('div');d.setAttribute('role','dialog');d.id='prompt'
+        d.innerHTML='<h3>设置横封面获更多流量</h3><button id="skip">暂不设置</button><button id="hor">设置横封面</button>'
+        document.body.append(d)
+        d.querySelector('#skip').onclick=()=>{d.remove();document.querySelector('#cover').hidden=true}
+        d.querySelector('#hor').onclick=()=>{window.horizontal=true}
+      }
+    })
+    await modules._video_cover_upload.uploadVideoCover(ctx,b,cover,'Fixture',3000)
+    assert.equal(await page.evaluate(()=>window.horizontal),false)
+    assert.equal(await page.locator('#prompt').count(),0)
+  } finally {await page.close()}
+})
+test('a hover-only entry marked by the platform script is still clicked (Xiaohongshu 编辑封面)',async()=>{
+  const {page,ctx,b}=await douyinFixture()
+  try {
+    await page.evaluate(()=>{
+      const o=document.querySelector('#open');o.textContent='';o.id='thumb'
+      const e=document.createElement('div');e.className='cover-edit-entry';e.style.opacity='0';e.textContent='编辑封面'
+      e.onclick=()=>document.querySelector('#cover').hidden=false
+      o.append(e)
+    })
+    await modules._video_cover_upload.uploadVideoCover(ctx,b,cover,'Fixture',3000,{entry:'.cover-edit-entry'})
+    assert.deepEqual(await page.evaluate(()=>window.uploads),[{id:'cover-input',files:[cover]}])
+  } finally {await page.close()}
+})
