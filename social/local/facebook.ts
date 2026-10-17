@@ -87,7 +87,8 @@ const SEL = {
   // 顶栏右上角的头像菜单（切回个人身份用）
   accountMenu: '[aria-label="Your profile"], [aria-label="Account controls and settings"], [aria-label="你的主页"], [aria-label="你的個人檔案"], [aria-label="帐户控制和设置"]',
   // 帖子右上角「…」
-  postMenu: '[aria-label="Actions for this post"], [aria-label*="此帖的操作"], [aria-label*="帖子操作"], [aria-label*="貼文的動作"], [aria-label*="這則貼文"]',
+  // 2026-10：帖子详情弹窗改用「可对<主页名>的这篇帖子执行的操作」；限定弹窗，避免点到背景其他账号的帖子。
+  postMenu: '[aria-label="Actions for this post"], [aria-label*="此帖的操作"], [aria-label*="帖子操作"], [aria-label*="貼文的動作"], [aria-label*="這則貼文"], [role="dialog"] [role="button"][aria-label^="可对"][aria-label$="的这篇帖子执行的操作"]',
   deleteItem: '^(Move to trash|Move to Trash|Delete post|Delete|移至回收站|移到回收站|删除帖子|删除|移至垃圾桶|刪除貼文|刪除)$',
   deleteConfirm: '^(Move|Delete|移动|移至|删除|移動|刪除)$',
 }
@@ -821,17 +822,23 @@ async function waitPostable(ctx: any, b: any, timeoutMs: number, video = false) 
       ctx.progress({ message: L(ctx, `视频还在上传 / 处理${pct ? ` ${pct}%` : ''}，已等 ${min} 分钟…`, `Video still uploading / processing${pct ? ` ${pct}%` : ''} — ${min} min so far…`) })
     }
     if (await clickText(b, { scope: SEL.dialog, re: SEL.notNow })) await ctx.sleep(1000)
+    // Facebook can leave an enabled "Post" control in the composer while "Next" is the actual action.
+    // Finish that first screen before looking for the final Post button.
+    if (!nexted && (await mark(b, { scope: SEL.dialog, re: SEL.nextBtn, attr: 'data-shuttle-next' }))) {
+      const ok = await b.eval(`(() => { const e = document.querySelector('[data-shuttle-next]'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
+      if (ok) {
+        ctx.progress({ message: L(ctx, '进入帖子设置…', 'Opening post settings…') })
+        await b.click('[data-shuttle-next]')
+        nexted = true
+        await ctx.sleep(2000)
+      } else {
+        await ctx.sleep(1000)
+      }
+      continue
+    }
     if (await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })) {
       const ok = await b.eval(`(() => { const e = document.querySelector('[data-shuttle-post]'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
       if (ok) return
-    } else if (!nexted && (await mark(b, { scope: SEL.dialog, re: SEL.nextBtn, attr: 'data-shuttle-next' }))) {
-      const ok = await b.eval(`(() => { const e = document.querySelector('[data-shuttle-next]'); return !!e && e.getAttribute('aria-disabled') !== 'true' })()`)
-      if (ok) {
-        await b.click('[data-shuttle-next]').catch(() => {})
-        nexted = true
-        await ctx.sleep(2000)
-        continue
-      }
     }
     await ctx.sleep(1000)
   }
@@ -938,7 +945,9 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     await ctx.sleep(/https?:\/\//.test(text) ? 5000 : 1500)
     await waitPostable(ctx, b, video ? 10 * 60_000 : 90000, !!video)
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
-    await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })
+    if (!(await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' }))) {
+      throw new Error(L(ctx, '帖子设置里没找到「发帖」按钮，Facebook 的页面可能改了', "Couldn't find the Post button in post settings — Facebook's page may have changed"))
+    }
     await b.click('[data-shuttle-post]')
     const got = await newPost(ctx, b, video ? 120000 : 45000)
     if (got) return done(got.id, got.url)
@@ -1218,9 +1227,9 @@ export async function probe(input: { channel_id: string }, ctx: any) {
     })
     await t.step('composer', L(ctx, '打开发帖框', 'Open the composer'), () => openComposer(ctx, b, ch))
     await t.step('post_button', L(ctx, '找到发布按钮', 'Find the Post button'), async () => {
+      // The composer may expose both labels; publishing must follow Next first.
+      if (await mark(b, { scope: SEL.dialog, re: SEL.nextBtn, attr: 'data-shuttle-next' })) return L(ctx, '先是「下一步 / 下一页」按钮', 'A "Next" button comes first')
       if (await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })) return
-      // 主页发帖有时先是「Next」，点了才出「Post」（waitPostable 会点它）
-      if (await mark(b, { scope: SEL.dialog, re: SEL.nextBtn, attr: 'data-shuttle-next' })) return L(ctx, '先是「下一步」按钮', 'A "Next" button comes first')
       throw new Error(L(ctx, '发帖框里没找到发布按钮（SEL.postBtn / SEL.nextBtn）', 'No Post button in the composer (SEL.postBtn / SEL.nextBtn)'))
     })
     await t.soft('media', L(ctx, '上传图片 / 视频的入口', 'Photo / video upload'), async () => {
