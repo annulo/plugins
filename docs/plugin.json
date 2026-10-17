@@ -1,0 +1,8 @@
+{
+  "name": { "zh": "外部文档", "en": "Docs" },
+  "description": {
+    "zh": "导入你在 Notion 写好的文档：给一个页面链接，读出标题、正文和图片（图片存进素材库），之后文档改了能再同步。正文在 Notion 里写，项目里只做各平台的微调和发布。",
+    "en": "Import documents you wrote in Notion: give a page link and get its title, body and images (saved to your library), and sync again when the document changes. Write in Notion; the project only adapts and publishes it for each platform."
+  },
+  "min_annulo_api": 38
+}

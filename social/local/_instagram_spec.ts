@@ -1,6 +1,7 @@
 // Instagram 的发帖规格。页面和本机函数都按这里检查，Instagram 改规则时只改这里。
 
 import { L } from './_i18n'
+import { withTags } from './_source'
 
 export const IG = {
   // 文案上限 2200 字符、话题最多 30 个；必须至少 1 张图或 1 个视频（文章没图时用 cover_text 生成文字封面）
@@ -18,8 +19,7 @@ export const IG = {
 
 /** 发出去的完整文字：正文 + 话题（#话题接在最后） */
 export function postText(body: string, tags: string[]) {
-  const t = (tags ?? []).map((x) => '#' + String(x).replace(/^#/, '').replace(/\s+/g, '')).filter((x) => x.length > 1)
-  return [String(body ?? '').trim(), t.join(' ')].filter(Boolean).join('\n\n')
+  return withTags(body, tags) // 正文里已经有的话题不重复接（_source.ts）
 }
 
 /** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件 */

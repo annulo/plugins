@@ -13,7 +13,7 @@ export { problems as draftProblems } from './_bilibili_spec'
 //                                          存一条写好的视频投稿（待审，social_posts）；由助手按任务写
 //   bilibili.check({ post_id })            按平台规格检查
 //   bilibili.login / bilibili.checkLogin   本机浏览器登录 B站（扫码，ctx.browser），登录态只在这台电脑上
-//   bilibili.publish / publishDue / remove 投稿、到点发布排期的、删除稿件
+//   bilibili.publish / remove 投稿、删除稿件
 //   bilibili.collect                       采集粉丝数和最近稿件的播放、点赞、评论、收藏、分享
 //   bilibili.probe({ channel_id })         自检：登录、读账号、读稿件、看删除菜单、打开投稿页，不真的上传（local/_health.ts）
 //
@@ -524,7 +524,7 @@ async function addResult(b: any): Promise<{ code: number; message: string; bvid:
 }
 
 /**
- * 发布一条视频（投稿）。只发审核通过（approved / scheduled）的；发布前检查规格和发布频率。
+ * 发布一条视频（投稿）。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去稿件列表里找有没有同标题的稿件（含审核中），避免重复投稿。
  * 投稿后 B站 要审核：拿到 BV 号就记成已发布，采集会继续更新它的数据。
  */
@@ -543,10 +543,11 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const desc = descText(p.body, tags)
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-  if (day.length >= BILI.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${BILI.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${BILI.dailyMax}); post again tomorrow`))
+  // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+  if (day.length >= BILI.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${BILI.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${BILI.dailyMax}); post again tomorrow`))
   const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
   const wait = last + BILI.minIntervalMinutes * 60_000 - Date.now()
-  if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${BILI.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${BILI.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+  if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${BILI.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${BILI.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const claimedBefore = p.claimed_at
@@ -644,28 +645,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (e instanceof Expired || e?.expired) err.expired = true
     if (e?.snapshot) err.snapshot = e.snapshot
     throw err
-  }
-}
-
-/** 到点的排期视频逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮，频率限制照样生效 */
-export async function publishDue(_input: {}, ctx: any) {
-  const ids = new Set(ctx.db.query('social_accounts', { where: { type: 'bilibili' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!ids.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => ids.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 

@@ -3,6 +3,7 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired, runProbe } from './_health'
+import { assist, ensure, markReady, readySel } from './_assist'
 
 // Instagram 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。支持个人 / 创作者账号的图片帖子（单图、多图）和视频帖（发成 Reel）。
 //
@@ -10,7 +11,7 @@ import { Expired, runProbe } from './_health'
 //                                           存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-instagram.md 写
 //   instagram.check({ post_id })            按平台规格检查
 //   instagram.login / instagram.checkLogin  本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   instagram.publish / publishDue / remove 发布、到点发布排期的、删除
+//   instagram.publish / remove 发布、删除
 //   instagram.collect                       采集自己最近帖子的互动数据和粉丝数
 //   instagram.probe({ channel_id })         自检：登录、读账号、读帖子、帖子菜单、打开发帖窗口、找上传图片的入口，不真的发（local/_health.ts）
 //
@@ -27,6 +28,7 @@ import { Expired, runProbe } from './_health'
 // 这一版是照 Instagram 网页的结构写的，还没用真实账号跑过。最可能要对着页面改的几步：
 //   1. 发帖入口（左栏「New post / Create」的 svg aria-label，以及点开后有没有「Post」子菜单）；
 //   2. 选完图后的两次「Next」、说明框的 aria-label、「Share」按钮（都按文字认，界面语言不是中英文时认不出）；
+//      2026-10 起有的账号是整页的发帖（地址 /create/style/ 这类，没有弹窗、底部「滤镜 / 编辑」、右上角「下一步」），按钮在整页里找（clickText）；
 //   3. 发完认新帖子的 shortcode（media/configure 接口的响应，认不到再去 feed 里按文案对）；
 //   4. 删除菜单里的「Delete」和确认框；
 //   5. 视频帖：Reel 提示框的「OK」、视频处理完才能点的「Next」（点到出说明框为止，不数次数）、转码没完时的重试。
@@ -74,7 +76,8 @@ const SEL = {
   // 收视频的 input（accept 里有 video）；没有就退回 fileInput
   videoInput: 'div[role="dialog"] input[type="file"][accept*="video"], form[enctype="multipart/form-data"] input[type="file"][accept*="video"]',
   // Reel 的说明框是「Add a caption...」（中文界面「添加配文...」，2026-09 实测），图片帖是「Write a caption...」
-  caption: 'div[role="dialog"] [contenteditable="true"][aria-label*="Write a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="Add a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="撰写说明"], div[role="dialog"] [contenteditable="true"][aria-label*="说明"], div[role="dialog"] [contenteditable="true"][aria-label*="配文"], div[role="dialog"] div[role="textbox"][contenteditable="true"]',
+  // 2026-10 有的账号灰度到整页的发帖（地址 /create/…，没有弹窗，右上角「下一步」）：说明框不在弹窗里，后面几个不带弹窗前缀的就是给它的
+  caption: 'div[role="dialog"] [contenteditable="true"][aria-label*="Write a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="Add a caption"], div[role="dialog"] [contenteditable="true"][aria-label*="撰写说明"], div[role="dialog"] [contenteditable="true"][aria-label*="说明"], div[role="dialog"] [contenteditable="true"][aria-label*="配文"], div[role="dialog"] div[role="textbox"][contenteditable="true"], [contenteditable="true"][aria-label*="Write a caption"], [contenteditable="true"][aria-label*="Add a caption"], [contenteditable="true"][aria-label*="撰写说明"], [contenteditable="true"][aria-label*="配文"]',
   moreOptions: 'svg[aria-label="More options"], svg[aria-label="更多选项"], svg[aria-label="更多選項"]',
   marked: '[data-shuttle-btn="1"]',
 }
@@ -419,10 +422,13 @@ async function clickText(b: any, texts: string[], inDialog = true): Promise<bool
     .eval(
       `(() => {
         document.querySelectorAll('[data-shuttle-btn]').forEach(e => e.removeAttribute('data-shuttle-btn'))
-        const want = ${JSON.stringify(texts)}
-        const roots = ${inDialog} ? [...document.querySelectorAll(${JSON.stringify(SEL.dialog)})] : [document]
+        // 比较时两边都去掉空白：整页发帖的「下一步」会折成两行，「Not Now」本身带空格
+        const want = ${JSON.stringify(texts)}.map(t => t.replace(/\\s+/g, ''))
+        // 整页的发帖（地址 /create/…，2026-10 灰度）没有弹窗：在整个页面里找
+        const onCreatePage = location.pathname.startsWith('/create/')
+        const roots = ${inDialog} && !onCreatePage ? [...document.querySelectorAll(${JSON.stringify(SEL.dialog)})] : [document]
         for (const r of roots.reverse()) {
-          const e = [...r.querySelectorAll('button, [role="button"], a[role="link"], div[tabindex]')].find(x => want.includes((x.innerText || '').trim()) && !x.disabled && x.getAttribute('aria-disabled') !== 'true')
+          const e = [...r.querySelectorAll('button, [role="button"], a[role="link"], div[tabindex]')].find(x => want.includes((x.innerText || '').replace(/\\s+/g, '')) && !x.disabled && x.getAttribute('aria-disabled') !== 'true')
           if (e) { e.setAttribute('data-shuttle-btn', '1'); return true }
         }
         return false
@@ -444,20 +450,38 @@ async function clickTextWait(ctx: any, b: any, texts: string[], timeoutMs: numbe
 }
 
 /**
- * 把文案放进说明框（Lexical 编辑器）。2026-09 实测 Reel 的说明框不认模拟打字（打完框里还是空的），靠后面的粘贴填进去。先真的打字；打出来不对（# 话题、@ 会弹建议框，换行时可能被选中替换；表情、中文偶尔丢字），
- * 清空后改用粘贴，再不行用 insertText。三种都不对才报错，报错里带上框里实际的字，方便对着改。
+ * 把文案放进说明框（Lexical 编辑器）：先粘贴（Lexical 认 paste 事件，换行原样进去），不对再打字，最后用 insertText。
+ * 每种方法之前都先清空并确认框里空了：框里可能有上一次没发完留下的字、Instagram 预填的字，或者上一种方法填进去的半截，
+ * 不清空新文案会接在后面（2026-10 出现过「旧文字 + 新文案」、文案重复两遍）。清空用真实按键：选中框里的内容再按退格，
+ * execCommand('selectAll' / 'delete') Lexical 不认。三种都不对才报错，报错里带上框里实际的字，方便对着改。
  */
 async function fillCaption(ctx: any, b: any, text: string) {
   const want = text.replace(/\s+/g, '')
   const read = async () => String(await b.eval(`(document.querySelector(${JSON.stringify(SEL.caption)})?.innerText || '')`).catch(() => ''))
   const same = async () => (await read()).replace(/\s+/g, '') === want
+  const selectAll = () =>
+    b.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(SEL.caption)})
+      if (!el) return
+      el.focus()
+      const r = document.createRange()
+      r.selectNodeContents(el)
+      const s = window.getSelection()
+      s.removeAllRanges()
+      s.addRange(r)
+    })()`).catch(() => {})
+  const clear = async () => {
+    for (let i = 0; i < 3 && (await read()).trim(); i++) {
+      await selectAll()
+      await b.press('Backspace').catch(() => {})
+      await ctx.sleep(300)
+    }
+  }
   const inPage = (how: 'paste' | 'insert') =>
     b.eval(`(() => {
       const el = document.querySelector(${JSON.stringify(SEL.caption)})
       if (!el) return
       el.focus()
-      document.execCommand('selectAll', false)
-      document.execCommand('delete', false)
       if (${JSON.stringify(how)} === 'paste') {
         const dt = new DataTransfer()
         dt.setData('text/plain', ${JSON.stringify(text)})
@@ -465,11 +489,10 @@ async function fillCaption(ctx: any, b: any, text: string) {
       } else document.execCommand('insertText', false, ${JSON.stringify(text)})
     })()`).catch(() => {})
   await b.click(SEL.caption)
-  await b.type(SEL.caption, text, { clear: true }).catch(() => {})
-  await ctx.sleep(800)
-  if (await same()) return
-  for (const how of ['paste', 'insert'] as const) {
-    await inPage(how)
+  for (const how of ['paste', 'type', 'insert'] as const) {
+    await clear()
+    if (how === 'type') await b.type(SEL.caption, text).catch(() => {})
+    else await inPage(how)
     await ctx.sleep(1000)
     if (await same()) return
   }
@@ -534,25 +557,20 @@ async function waitShared(ctx: any, b: any, timeoutMs: number, video = false): P
  * ch 暂时没用到，和 local/linkedin.ts、local/x.ts 的 openComposer 同一个签名。
  */
 async function openComposer(ctx: any, b: any, _ch: any) {
-  await b.waitFor(SEL.create, { timeout: 20000 }).catch(() => {
-    throw new Error(L(ctx, '没找到「新帖子」入口，Instagram 的页面可能改了', "Couldn't find \"New post\" — Instagram's page may have changed"))
-  })
-  // 页面出来后再关挡在前面的「打开通知」这类弹窗（关一个可能还有下一个，最多 3 次）
-  for (let i = 0; i < 3 && (await clickText(b, TEXT.notNow)); i++) await ctx.sleep(800)
-  await b.click(SEL.create)
-  await ctx.sleep(1500)
-  // 新版点开是子菜单（Post / Live video / Ad），点「Post」；老版直接是选图弹窗
-  if (!(await b.exists(SEL.fileInput).catch(() => false))) await clickText(b, TEXT.post, false)
-  // 选文件的 input 是隐藏的（界面上是「从电脑中选择」按钮），只等它出现，不等可见（2026-09 实测）
-  await b.waitFor(SEL.fileInput, { timeout: 15000, visible: false }).catch(() => {
-    throw new Error(L(ctx, '没打开选图窗口，Instagram 的页面可能改了', "Couldn't open the photo picker — Instagram's page may have changed"))
-  })
+  // 走路的一步：脚本先快速试一次（入口最多等 8 秒），没打开选图窗口就请浏览器助手（_assist.ts 的 ensure）
+  const ok = await ensure(ctx, b, '打开新建帖子，出现选择电脑里文件的界面', SEL.fileInput, async () => {
+    await b.waitFor(SEL.create, { timeout: 8000 })
+    // 页面出来后再关挡在前面的「打开通知」这类弹窗（关一个可能还有下一个，最多 3 次）
+    for (let i = 0; i < 3 && (await clickText(b, TEXT.notNow)); i++) await ctx.sleep(800)
+    await b.click(SEL.create)
+    await ctx.sleep(1500)
+    // 新版点开是子菜单（Post / Live video / Ad），点「Post」；老版直接是选图弹窗
+    if (!(await b.exists(SEL.fileInput).catch(() => false))) await clickText(b, TEXT.post, false)
+    // 选文件的 input 是隐藏的（界面上是「从电脑中选择」按钮），只等它出现，不等可见（2026-09 实测）
+    await b.waitFor(SEL.fileInput, { timeout: 8000, visible: false })
+  }, { avoid: TEXT.share })
+  if (!ok) throw new Error(L(ctx, '没打开选图窗口，Instagram 的页面可能改了', "Couldn't open the photo picker — Instagram's page may have changed"))
 }
-
-/**
- * 选了视频后可能弹「Video posts are now reels」：找文字里有 reel、有 OK 类按钮、又没有「Next」的弹窗（发帖窗口本身有 Next），
- * 点它的 OK。点了返回 true
- */
 async function dismissReelNotice(ctx: any, b: any): Promise<boolean> {
   const ok = await b
     .eval(
@@ -576,7 +594,7 @@ async function dismissReelNotice(ctx: any, b: any): Promise<boolean> {
 }
 
 /**
- * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格和发布频率。
+ * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去自己的帖子里找有没有这条，避免重复发。
  */
 export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
@@ -596,10 +614,11 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const text = postText(p.body, tags)
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-  if (day.length >= IG.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${IG.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${IG.dailyMax}); post again tomorrow`))
+  // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+  if (day.length >= IG.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${IG.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${IG.dailyMax}); post again tomorrow`))
   const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
   const wait = last + IG.minIntervalMinutes * 60_000 - Date.now()
-  if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${IG.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${IG.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+  if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${IG.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${IG.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
@@ -646,7 +665,14 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     {
       const deadline = Date.now() + (video ? 5 * 60_000 : 60_000)
       let clicks = 0
+      let helped = false
       while (!(await b.exists(SEL.caption).catch(() => false))) {
+        // 一直没点到「下一步」（Instagram 换了界面、按钮换了字、弹窗挡着）：交给浏览器助手走到写说明的页面，「分享」不许它点。只请一次
+        // 脚本自己只找一小会儿（图片帖约 8 秒、视频帖约 30 秒，视频要等处理）就交给助手，别空转太久
+        if (!helped && (clicks === 0 ? Date.now() > deadline - (video ? 4.5 * 60_000 : 52_000) : Date.now() > deadline)) {
+          helped = true
+          if (await assist(ctx, b, '走到写说明（caption）的页面', { until: SEL.caption, avoid: TEXT.share, maxSteps: 8 })) break
+        }
         if (Date.now() > deadline) {
           if (!clicks) throw new Error(video ? L(ctx, '选完视频 5 分钟还没出「Next / 下一步」：视频可能太大、太长或格式 Instagram 不收，也可能页面改了', "No \"Next\" 5 minutes after choosing the video: it may be too large, too long or a format Instagram rejects, or the page changed") : L(ctx, '选完图后没找到「Next / 下一步」，Instagram 的页面可能改了', "Couldn't find \"Next\" after choosing images — Instagram's page may have changed"))
           throw new Error(L(ctx, '点了「Next / 下一步」还是没到写说明的页面，Instagram 的页面可能改了', "Clicked \"Next\" but never reached the caption page — Instagram's page may have changed"))
@@ -665,7 +691,13 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
     b.listen(API.configure)
-    if (!(await clickTextWait(ctx, b, TEXT.share, 15000))) throw new Error(L(ctx, '没找到「Share / 分享」按钮，Instagram 的页面可能改了', "Couldn't find the \"Share\" button — Instagram's page may have changed"))
+    if (!(await clickTextWait(ctx, b, TEXT.share, 8000))) {
+      // 「分享」找不到或被挡住（弹窗、提示）：请浏览器助手把挡着的东西弄走，AI 不许点分享；露出来以后还是脚本点
+      const stop = await markReady(b, 'share', TEXT.share)
+      const ok = await assist(ctx, b, '让写说明页上的「分享 / Share」按钮露出来、能点（不要点分享）', { until: readySel('share'), avoid: TEXT.share })
+      await stop()
+      if (!ok || !(await clickTextWait(ctx, b, TEXT.share, 5000))) throw new Error(L(ctx, '没找到「Share / 分享」按钮，Instagram 的页面可能改了', "Couldn't find the \"Share\" button — Instagram's page may have changed"))
+    }
     const r = await waitShared(ctx, b, video ? 10 * 60_000 : 120000, !!video)
     if (r.code) return done(r.code)
     // 没认出 shortcode：去自己的帖子里按文案找
@@ -678,28 +710,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const msg = e?.message ?? String(e)
     ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
     throw new Error(msg)
-  }
-}
-
-/** 到点的排期帖子逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮，频率限制照样生效 */
-export async function publishDue(_input: {}, ctx: any) {
-  const igs = new Set(ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!igs.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => igs.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
-  try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
-    }
-    throw e
   }
 }
 
@@ -719,7 +729,13 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
   })
   await b.click(SEL.moreOptions)
   await ctx.sleep(1000)
-  if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) throw new Error(L(ctx, '菜单里没有「删除」，这条可能不是这个账号发的', 'No "Delete" in the menu — this post may not be from this account'))
+  if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) {
+    // 菜单没打开、换了样子：请浏览器助手打开这条帖子的「…」菜单，让「删除」露出来；AI 不许点删除，还是脚本点
+    const stop = await markReady(b, 'del', TEXT.del)
+    const ok = await assist(ctx, b, '打开这条帖子的更多选项菜单，让「删除 / Delete」出现（不要点删除）', { until: readySel('del'), avoid: TEXT.del })
+    await stop()
+    if (!ok || !(await clickTextWait(ctx, b, TEXT.del, 5000))) throw new Error(L(ctx, '菜单里没有「删除」，这条可能不是这个账号发的', 'No "Delete" in the menu — this post may not be from this account'))
+  }
   await ctx.sleep(1000)
   // 确认框里的「删除」按钮
   if (!(await clickTextWait(ctx, b, TEXT.del, 8000))) throw new Error(L(ctx, '没出现删除确认框，Instagram 的页面可能改了', "The delete confirmation didn't appear — Instagram's page may have changed"))

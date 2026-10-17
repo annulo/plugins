@@ -3,16 +3,18 @@ import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
 import { Expired, runProbe } from './_health'
+import { assist } from './_assist'
+import * as pageApi from './_facebook_api'
 
-// Facebook 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。个人主页和用户管理的公司主页（Page）都支持：
-// 一次登录添加个人号，并把他管理的每个主页各添加成一个渠道（fb_kind: 'profile' | 'page'），它们共用同一个浏览器 profile。
+// Facebook 个人号和公共主页保留浏览器通道；公共主页可选官方 API。
 //
 //   facebook.save({ article_id, channel_id, title?, body, tags, post_id? })
 //                                          存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-facebook.md 写
 //   facebook.check({ post_id })            按平台规格检查
 //   facebook.login / facebook.checkLogin   本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   facebook.publish / publishDue / remove 发布、到点发布排期的、删除
+//   facebook.publish / remove 发布、删除
 //   facebook.collect                       采集最近帖子的互动数据和粉丝数
+//   facebook.comments({ post_id, after? })  只读 API 公共主页帖子的评论正文和时间（post_id 是本机记录 id）
 //   facebook.probe({ channel_id })         自检：登录、读账号、读帖子、打开发帖框、找发布按钮，不真的发（local/_health.ts）
 //
 // 视频帖：social_posts.video 有值（素材的 http(s) 地址，或本机文件 local:<名字>）就发视频，不带图片；直接交给 b.upload，
@@ -46,6 +48,7 @@ type Post = {
   post_id?: string
   post_url?: string
   published_at?: string
+  facebook_api_state?: string
 }
 
 const parse = <T>(s: string | undefined, d: T): T => {
@@ -75,8 +78,10 @@ const SEL = {
   // 收视频的那个 input（accept 里有 video）；没有就退回 fileInput
   videoInput: '[role="dialog"] input[type="file"][accept*="video"]',
   // 发帖框里的按钮：主页发帖有时先「Next」（发布设置）再「Post」
-  nextBtn: '^(Next|下一步|繼續)$',
+  nextBtn: '^(Next|下一步|下一页|繼續|下一頁|下一步驟)$',
   postBtn: '^(Post|发帖|发布|發佈|發佈貼文)$',
+  // 发帖时 Facebook 会弹推广窗（「直接与用户对话」让主页加「立即拨打」按钮这类），点「以后再说」关掉，不然可能挡住发帖
+  notNow: '^(Not now|Not Now|Maybe later|Later|Skip|以后再说|稍后再说|暂时不要|跳过|以後再說|稍後再說|暫時不要|略過)$',
   // 主页上「切换到主页身份」的按钮（新版主页体验）
   switchBtn: '^(Switch now|Switch Now|Switch|立即切换|切换|立即切換|切換)$',
   // 顶栏右上角的头像菜单（切回个人身份用）
@@ -86,6 +91,8 @@ const SEL = {
   deleteItem: '^(Move to trash|Move to Trash|Delete post|Delete|移至回收站|移到回收站|删除帖子|删除|移至垃圾桶|刪除貼文|刪除)$',
   deleteConfirm: '^(Move|Delete|移动|移至|删除|移動|刪除)$',
 }
+// 发帖按钮的字：浏览器助手（_assist.ts）不许点它们，发出去由脚本点
+const POST_WORDS = ['Post', '发帖', '发布', '發佈', '發佈貼文', 'Share now', '立即分享']
 // 未登录时会被带到这些地址
 const LOGGED_OUT = /\/(login|checkpoint|recover|reg\/|r\.php)/
 // facebook.com/<这些> 不是账号或主页
@@ -103,6 +110,7 @@ function fbChannel(ctx: any, id: string) {
 }
 
 const isPage = (ch: any) => ch?.fb_kind === 'page'
+const isApi = (ch: any) => ch?.auth_mode === 'api'
 /** 渠道的主页地址：主页用用户名或 id；个人号有自定义用户名用它，没有用 profile.php?id= */
 function channelUrl(ch: any) {
   if (isPage(ch)) return `${SITE}/${ch.handle || ch.page_id || ch.platform_uid}`
@@ -116,21 +124,26 @@ async function cookie(b: any, name: string): Promise<string> {
 }
 
 /**
- * 在 scope（取最后一个，弹窗叠着时是最上面那个）里找 sel 中 aria-label 或文字匹配 re 的第一个可见元素，打上 attr。
+ * 在 scope 里找 sel 中 aria-label 或文字匹配 re 的第一个可见元素，打上 attr。scope 有好几个时从最后一个
+ * （叠在最上面的弹窗）往前找：2026-10 起发帖框是两个 role=dialog，外层「创建帖子」放着全部按钮，
+ * 最后一个「发帖」只是标题栏、只有关闭按钮，只看最后一个就找不到「下一页」「发布」。
  * Facebook 的按钮没有稳定的 class，全靠这个认。
  */
 async function mark(b: any, o: { scope?: string; sel?: string; re: string; attr: string }): Promise<boolean> {
   return !!(await b
     .eval(`(() => {
       document.querySelectorAll('[${o.attr}]').forEach(e => e.removeAttribute('${o.attr}'))
-      const root = ${o.scope ? `[...document.querySelectorAll(${JSON.stringify(o.scope)})].pop()` : 'document'}
-      if (!root) return false
+      const roots = ${o.scope ? `[...document.querySelectorAll(${JSON.stringify(o.scope)})].reverse()` : '[document]'}
       const re = new RegExp(${JSON.stringify(o.re)}, 'i')
-      const e = [...root.querySelectorAll(${JSON.stringify(o.sel ?? '[role="button"], button, [role="menuitem"], a')})].find(x => {
-        if (!x.getClientRects().length) return false
-        const t = [(x.getAttribute('aria-label') || '').trim(), (x.innerText || '').trim().split('\\n')[0]]
-        return t.some(s => s && re.test(s))
-      })
+      let e = null
+      for (const root of roots) {
+        e = [...root.querySelectorAll(${JSON.stringify(o.sel ?? '[role="button"], button, [role="menuitem"], a')})].find(x => {
+          if (!x.getClientRects().length) return false
+          const t = [(x.getAttribute('aria-label') || '').trim(), (x.innerText || '').trim().split('\\n')[0]]
+          return t.some(s => s && re.test(s))
+        })
+        if (e) break
+      }
       if (e) e.setAttribute('${o.attr}', '1')
       return !!e
     })()`)
@@ -233,7 +246,7 @@ export function check(input: { post_id: string }, ctx: any) {
 
 // ---- 账号 ----
 
-type FbPage = { id: string; name: string; handle: string; avatar: string }
+type FbPage = { id: string; name: string; handle: string; avatar: string; followers?: number }
 
 /**
  * 登录了没有：没被带到登录 / 验证页，并且有 c_user cookie（登录的个人号 id）。
@@ -245,19 +258,37 @@ async function loggedIn(b: any) {
 }
 
 /** 当前页面顶上的名字、头像、地址里的用户名（个人主页、公司主页通用） */
-async function readHeader(b: any): Promise<{ handle: string; name: string; avatar: string }> {
+async function readHeader(b: any): Promise<{ handle: string; name: string; title: string; avatar: string }> {
   const r = await b
     .eval(`(() => {
       const u = new URL(location.href)
       const seg = u.pathname.split('/').filter(Boolean)[0] || ''
-      const h1 = [...document.querySelectorAll('[role="main"] h1, h1')].map(e => (e.innerText || '').trim().split('\\n')[0]).find(Boolean)
-      const name = h1 || document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '')
-      const avatar = [...document.querySelectorAll('[role="main"] svg image, [role="main"] image')].map(e => e.getAttribute('xlink:href') || e.getAttribute('href') || '').find(s => /fbcdn|scontent/.test(s)) || ''
-      return { seg, id: u.searchParams.get('id') || '', name, avatar }
+      // 名字：主区域（[role="main"]）里的 h1，比如主页上的「Talizen」；没有 h1 用字号最大的文字。不能写成 '[role="main"] h1, h1'：
+      // querySelectorAll 按文档顺序返回，左边栏的「管理公共主页」会排在前面。网页标题常常只是「(14) Facebook」，只作最后的办法
+      const generic = /^(管理公共主页|管理主页|管理專頁|管理粉絲專頁|专业面板|專業主控板|Manage Page|Professional dashboard|Facebook)$/i
+      const firstLine = e => (e.innerText || '').trim().split('\\n')[0].trim()
+      const main = document.querySelector('[role="main"]')
+      // 个人主页上没有 h1（2026-10）：名字是主区域里字号最大的那段短文字（32px 的 span）
+      const biggest = () => [...(main || document).querySelectorAll('h1, h2, span, a, div')]
+        .filter(e => e.children.length <= 1)
+        .map(e => ({ t: firstLine(e), fs: parseFloat(getComputedStyle(e).fontSize) || 0 }))
+        .filter(x => x.t && x.t.length <= 80 && x.fs >= 20 && !generic.test(x.t))
+        .sort((a, b) => b.fs - a.fs)[0]
+      const h1 = [...(main ? main.querySelectorAll('h1') : [])].map(firstLine).find(t => t && !generic.test(t)) || (biggest() || {}).t || [...document.querySelectorAll('h1')].map(firstLine).find(t => t && !generic.test(t))
+      const og = (document.querySelector('meta[property="og:title"]') || {}).content || ''
+      const title = document.title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*[|｜]\\s*Facebook\\s*$/i, '').trim()
+      const name = h1 || (og && !generic.test(og) ? og : '') || (generic.test(title) ? '' : title)
+      // 头像：主区域里显示得最大的 Facebook 图片（svg 里的 image，头像是一个大圆）；封面是 <img>，不算
+      const pics = [...(main || document).querySelectorAll('svg image')]
+        .map(e => ({ src: e.getAttribute('xlink:href') || e.getAttribute('href') || '', w: (e.closest('svg') || e).getBoundingClientRect().width }))
+        .filter(x => /fbcdn|scontent/.test(x.src))
+        .sort((a, b) => b.w - a.w)
+      const avatar = (pics[0] || {}).src || (document.querySelector('meta[property="og:image"]') || {}).content || ''
+      return { seg, id: u.searchParams.get('id') || '', name, title: generic.test(title) ? '' : title, avatar }
     })()`)
     .catch(() => null)
-  if (!r) return { handle: '', name: '', avatar: '' }
-  return { handle: r.seg && !RESERVED.test(r.seg) ? r.seg : '', name: String(r.name ?? '').trim(), avatar: r.avatar }
+  if (!r) return { handle: '', name: '', title: '', avatar: '' }
+  return { handle: r.seg && !RESERVED.test(r.seg) ? r.seg : '', name: String(r.name ?? '').trim(), title: String(r.title ?? ''), avatar: r.avatar }
 }
 
 /** 页面上的粉丝数：「1.2K followers」「1,234 位粉丝」「粉丝 3万」这类，读不到返回 undefined */
@@ -358,15 +389,61 @@ async function listPages(ctx: any, b: any, selfId: string): Promise<FbPage[]> {
       if (key && key !== selfId && !found.has(key)) found.set(key, { id: key, name: l.name, handle: id ? '' : seg, avatar: '' })
     }
   }
-  return [...found.values()]
+  // 列表里认出来的名字常常是头像链接的 aria-label（「XX的头像」），也没有头像：逐个打开主页读真的名字、头像和粉丝数
+  const pages = [...found.values()].map((p) => ({ ...p, name: cleanName(p.name) }))
+  for (const p of pages) {
+    if (p.avatar && p.name) continue
+    ctx.progress({ message: L(ctx, `读取主页「${p.name}」`, `Reading the Page "${p.name}"`) })
+    await b.goto(SITE + (/^\d+$/.test(p.id) ? `/profile.php?id=${p.id}` : `/${p.handle || p.id}`)).catch(() => {})
+    await ctx.sleep(3000)
+    const h = await readHeader(b)
+    if (h.name) p.name = cleanName(h.name)
+    if (h.avatar) p.avatar = h.avatar
+    if (h.handle && !p.handle) p.handle = h.handle
+    const f = await followersOnPage(b)
+    if (f != null) p.followers = f
+  }
+  return pages
+}
+
+/** 头像链接的 aria-label、图片说明里带的后缀去掉：「XX的头像」「XX's profile picture」「XX的個人檔案相片」 */
+function cleanName(name: string) {
+  return String(name ?? '')
+    .replace(/\s*(?:的头像|的頭像|的个人主页头像|的個人檔案相片|的大头贴照|的大頭貼照)\s*$/, '')
+    .replace(/[’']s\s+(?:profile\s+)?(?:picture|photo)\s*$/i, '')
+    .replace(/^(?:Profile picture of|Photo of)\s+/i, '')
+    .trim()
 }
 
 /**
  * 添加 Facebook 账号，或者给已有的账号重新登录。弹出一个浏览器窗口，用户在里面登录 Facebook，最多等 5 分钟。
  * 登录成功后写进 social_accounts：个人号一个渠道，他管理的每个主页各一个（按 platform_uid 去重，不会重复添加），共用这个浏览器 profile。
  */
-export async function login(input: { channel_id?: string }, ctx: any) {
+export async function login(input: { channel_id?: string; mode?: 'api' | 'browser'; account?: string }, ctx: any) {
   const old = input?.channel_id ? fbChannel(ctx, input.channel_id) : null
+  if (input?.mode === 'api' || (old && isApi(old) && input?.mode !== 'browser')) {
+    if (old && isApi(old) && input?.mode !== 'api' && !input?.account) {
+      await checkLogin({ channel_id: old.id }, ctx)
+      return { id: old.id, name: old.name, added: false }
+    }
+    if (old && !isPage(old)) throw new Error(L(ctx, 'Facebook 个人主页只能用浏览器方式，官方 API 只支持公共主页', 'Facebook personal profiles use the browser channel; the official API supports Pages only'))
+    if (!ctx.oauth?.accounts) throw new Error(L(ctx, '当前 Annulo 尚未提供 Facebook 授权连接；测试 API 请先用 facebook.connectPageToken', 'This Annulo build has no Facebook OAuth connection yet; use facebook.connectPageToken for API testing'))
+    const accounts: string[] = ctx.oauth.accounts('facebook')
+    const account = input?.account || old?.oauth_account || accounts[0]
+    if (!account) throw new Error(L(ctx, '先到 Annulo 设置 → 连接中授权 Facebook', 'Connect Facebook in Annulo → Settings → Connections first'))
+    if (!accounts.includes(account)) throw new Error(L(ctx, '指定的 Facebook 授权账号未连接', 'The selected Facebook account is not connected'))
+    const pages = await pageApi.oauthPages(ctx, account)
+    const eligible = pages.filter((p) => pageApi.canPublish(p) && (!old || p.id === (old.page_id || old.platform_uid)))
+    if (old && !eligible.length) throw new Error(L(ctx, '这个授权账号不能向目标公共主页发布，请重新授权目标主页或选择其他账号', 'This account cannot publish to the selected Page. Authorize that Page or choose another account.'))
+    return { choose: {
+      type: 'facebook', profile: 'api', uid: account,
+      desc: L(ctx, '选择要在这个项目中使用的 Facebook 公共主页。只有有发布权限的主页可以添加。', 'Choose the Facebook Pages to use in this project. Only Pages you can publish to can be added.'),
+      pages: eligible.map((p) => ({
+        id: p.id, name: p.name, label: L(ctx, '公共主页 · 官方 API', 'Page · official API'),
+        added: !!ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: p.id }, limit: 1 }).list[0],
+      })),
+    } }
+  }
   const profile = old?.browser_profile || freeProfile(ctx, 'facebook')
   const b = await openBrowser(ctx, { profile, show: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录 Facebook', 'A browser window is open — log in to Facebook there') })
@@ -399,8 +476,23 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     throw new Error(L(ctx, `登录的「${me.name}」不管理主页「${old.name}」（或者没读到主页列表）。重新登录时请登录管理这个主页的账号`, `${me.name} doesn't manage the Page "${old.name}" (or the Page list couldn't be read). Log in with an account that manages it`))
   }
 
+  // 新添加、这个人管理着主页：先不建账号，把个人号和每个主页列给用户勾选（social.addChosen 建勾上的）。
+  // 一个人管几个主页、不同项目各用一个时，在每个项目里只勾自己的那个
+  if (!old && pages.length) {
+    const exists = (id: string) => !!ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: id }, limit: 1 }).list[0]
+    return {
+      choose: {
+        type: 'facebook',
+        profile,
+        uid,
+        me: { name: me.name, handle: me.handle, avatar: me.avatar, ...(followers != null ? { followers } : {}), added: !!same },
+        pages: pages.map((pg) => ({ id: pg.id, name: pg.name, handle: pg.handle || pg.id, avatar: pg.avatar ?? '', ...(pg.followers != null ? { followers: pg.followers } : {}), added: exists(pg.id) })),
+      },
+    }
+  }
+
   const t = now()
-  const base = { login_status: 'ok', last_checked_at: t }
+  const base = { login_status: 'ok', last_checked_at: t, auth_mode: 'browser' }
   const meFields: any = { fb_kind: 'profile', platform_uid: uid, name: me.name, handle: me.handle, avatar: me.avatar, ...base }
   if (followers != null) meFields.followers = followers
   const target = old && !isPage(old) ? old : same
@@ -414,24 +506,125 @@ export async function login(input: { channel_id?: string }, ctx: any) {
     added = true
   }
 
+  // 重新登录：只更新这个项目已经有的主页，不再把没勾过的主页加进来
   const outPages: { id: string; name: string; added: boolean }[] = []
   for (const pg of pages) {
-    const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...base }
+    const f = { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...(pg.followers != null ? { followers: pg.followers } : {}), ...base }
     const ex = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: pg.id }, limit: 1 }).list[0]
     if (ex) {
-      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile) })
+      // 为一个账号登录浏览器时，其它已用 API 的主页仍保留原通道和授权状态。
+      const keepApi = isApi(ex) && ex.id !== old?.id ? { auth_mode: ex.auth_mode, login_status: ex.login_status, last_checked_at: ex.last_checked_at } : {}
+      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, profile), ...keepApi })
       outPages.push({ id: ex.id, name: pg.name, added: false })
-    } else {
-      outPages.push({ id: ctx.db.insert('social_accounts', { type: 'facebook', browser_profile: profile, ...f, created_at: t }).id, name: pg.name, added: true })
     }
   }
   if (old && isPage(old)) return { id: old.id, name: old.name, added: false, pages: outPages }
   return { id: meId, name: me.name, added, pages: outPages }
 }
 
+type Choice = { type: 'facebook'; profile: string; uid: string; me: { name: string; handle?: string; avatar?: string; followers?: number }; pages: { id: string; name: string; handle?: string; avatar?: string; followers?: number }[] }
+
+/**
+ * 建用户勾选的账号（login 返回的 choose 原样带回来，加上勾了哪些）：个人号 profile_selected，主页 page_ids。
+ * 都共用登录时的浏览器 profile；已经有的更新，没有的新建。返回建好、更新的账号 id
+ */
+function addChosenBrowser(input: { choose: Choice; profile_selected?: boolean; page_ids?: string[] }, ctx: any) {
+  const c = input?.choose
+  if (!c?.profile || !c.uid) throw new Error(L(ctx, '缺登录信息：重新点「添加 Facebook 账号」', 'Missing login details: click "Add Facebook account" again'))
+  const picked = new Set(input.page_ids ?? [])
+  if (!input.profile_selected && !c.pages.some((p) => picked.has(p.id))) throw new Error(L(ctx, '至少勾一个', 'Pick at least one'))
+  const t = now()
+  const base = { login_status: 'ok', last_checked_at: t, auth_mode: 'browser' }
+  const upsert = (uid: string, f: any) => {
+    const ex = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: uid }, limit: 1 }).list[0]
+    if (ex) {
+      ctx.db.update('social_accounts', ex.id, { ...f, ...profileFields(ex, c.profile) })
+      return ex.id as string
+    }
+    return ctx.db.insert('social_accounts', { type: 'facebook', browser_profile: c.profile, ...f, created_at: t }).id as string
+  }
+  const ids: string[] = []
+  if (input.profile_selected) {
+    const { name, handle, avatar, followers } = c.me
+    ids.push(upsert(c.uid, { fb_kind: 'profile', platform_uid: c.uid, name, handle, avatar, ...(followers != null ? { followers } : {}), ...base }))
+  }
+  for (const pg of c.pages.filter((p) => picked.has(p.id))) {
+    ids.push(upsert(pg.id, { fb_kind: 'page', page_id: pg.id, platform_uid: pg.id, name: pg.name, handle: pg.handle || pg.id, ...(pg.avatar ? { avatar: pg.avatar } : {}), ...(pg.followers != null ? { followers: pg.followers } : {}), ...base }))
+  }
+  return { ids }
+}
+
+/** 测试阶段：Page token 由用户在本机「设置 → 密钥」填写，项目和表里只存密钥名。 */
+export async function connectPageToken(input: { page_id: string }, ctx: any) {
+  const id = String(input?.page_id ?? '').trim()
+  const page = await pageApi.testPage(ctx, id)
+  const t = now()
+  const existing = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: id }, limit: 1 }).list[0]
+  const fields = { fb_kind: 'page', page_id: id, platform_uid: id, name: page.name, handle: id, auth_mode: 'api', api_credential: 'page_token', oauth_account: '', login_status: 'ok', last_checked_at: t }
+  if (existing) {
+    ctx.db.update('social_accounts', existing.id, fields)
+    return { id: existing.id, name: page.name, added: false, secret_name: pageApi.testSecretName(id) }
+  }
+  const row = ctx.db.insert('social_accounts', { type: 'facebook', ...fields, created_at: t })
+  return { id: row.id, name: page.name, added: true, secret_name: pageApi.testSecretName(id) }
+}
+
+/** OAuth 登录完成后的主页选择；重新从 Meta 读取主页，绝不信任页面传来的名称或权限。 */
+async function addChosenApi(input: { choose: { profile: string; uid: string }; page_ids: string[] }, ctx: any) {
+  if (input?.choose?.profile !== 'api') throw new Error(L(ctx, '这次选择不是 Facebook API 授权', 'This is not a Facebook API selection'))
+  const account = String(input.choose.uid ?? '')
+  if (!ctx.oauth?.accounts?.('facebook')?.includes(account)) throw new Expired(L(ctx, 'Facebook 授权账号已断开，请重新连接', 'The Facebook account is disconnected; reconnect it'))
+  const ids = [...new Set((input.page_ids ?? []).map(String))]
+  if (!ids.length) throw new Error(L(ctx, '请至少选择一个公共主页', 'Choose at least one Page'))
+  const pages = await pageApi.oauthPages(ctx, account)
+  const selected = ids.map((id) => pages.find((p) => p.id === id))
+  if (selected.some((p) => !p?.access_token || !pageApi.canPublish(p))) {
+    throw new Error(L(ctx, '有主页已不在授权范围内，或没有发布权限，请重新授权后再选', 'A selected Page is no longer authorized or cannot publish; reconnect and choose again'))
+  }
+  const t = now()
+  const added: { id: string; name: string }[] = []
+  for (const page of selected as pageApi.ApiPage[]) {
+    const existing = ctx.db.query('social_accounts', { where: { type: 'facebook', platform_uid: page.id }, limit: 1 }).list[0]
+    const fields = { fb_kind: 'page', page_id: page.id, platform_uid: page.id, name: page.name, handle: page.id, auth_mode: 'api', api_credential: 'oauth', oauth_account: account, login_status: 'ok', last_checked_at: t }
+    if (existing) {
+      ctx.db.update('social_accounts', existing.id, fields)
+      added.push({ id: existing.id, name: page.name })
+    } else {
+      const row = ctx.db.insert('social_accounts', { type: 'facebook', ...fields, created_at: t })
+      added.push({ id: row.id, name: page.name })
+    }
+  }
+  return { ids: added.map((p) => p.id), added }
+}
+
+/** 已有浏览器登录的主页可切回原方式；OAuth API 账号可再次切回 API。 */
+export function setMode(input: { channel_id: string; mode: 'api' | 'browser' }, ctx: any) {
+  const ch = fbChannel(ctx, input?.channel_id)
+  if (!isPage(ch)) throw new Error(L(ctx, '官方 API 只支持 Facebook 公共主页', 'The official API supports Facebook Pages only'))
+  if (input.mode === 'browser' && !ch.browser_profile) throw new Error(L(ctx, '这个主页没有浏览器登录记录，请先用浏览器方式登录', 'This Page has no browser login; sign in using the browser method first'))
+  if (input.mode === 'api' && !ch.api_credential) throw new Error(L(ctx, '这个主页还没有 API 授权', 'This Page has no API authorization yet'))
+  ctx.db.update('social_accounts', ch.id, { auth_mode: input.mode, updated_at: now() })
+  return { id: ch.id, mode: input.mode }
+}
+
+export async function addChosen(input: any, ctx: any) {
+  if (input?.choose?.profile === 'api') return addChosenApi(input, ctx)
+  return addChosenBrowser(input, ctx)
+}
+
 /** 检查登录是否还有效（后台打开，不弹窗），写回 login_status */
 export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
+  if (isApi(ch)) {
+    try {
+      const page = await pageApi.pageInfo(ctx, ch, false)
+      ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: now(), name: page.name || ch.name })
+      return { ok: true }
+    } catch (e) {
+      if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+      throw e
+    }
+  }
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again"`))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
   await b.goto(SITE + '/')
@@ -441,9 +634,24 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   return { ok }
 }
 
+/** Comments are fetched on demand, never saved to project tables. */
+export async function comments(input: { post_id: string; after?: string }, ctx: any) {
+  const post = ctx.db.get('social_posts', input?.post_id)
+  if (!post) throw new Error(L(ctx, '帖子不存在，请重新打开帖子。', 'Post not found. Open the post again.'))
+  const ch = fbChannel(ctx, post.channel_id)
+  if (!isApi(ch) || !isPage(ch)) throw new Error(L(ctx, '查看评论需要通过官方 API 连接 Facebook 公共主页。', 'Connect a Facebook Page through the official API to view comments.'))
+  if (post.status !== 'published' || !post.post_id) throw new Error(L(ctx, '这条帖子尚无已发布记录，请先采集主页帖子。', 'This post has no published record. Collect the Page posts first.'))
+  try {
+    return await pageApi.postComments(ctx, ch, post.post_id, input.after ?? '')
+  } catch (e) {
+    if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+    throw e
+  }
+}
+
 // ---- 帖子列表（采集、查重共用）----
 
-type FbPost = { id: string; text: string; created: string; url: string; actor: string; views: number; likes: number; comments: number; shares: number; collects: number }
+type FbPost = { id: string; text: string; created: string; url: string; actor: string; views?: number; likes?: number; comments?: number; shares?: number; collects?: number }
 
 /**
  * 从 graphql / 内嵌 JSON 里认出帖子：带 post_id（数字）的对象是一条帖子，它下面找正文（message.text）、发布时间（creation_time）、
@@ -555,26 +763,27 @@ async function openComposer(ctx: any, b: any, ch: any) {
   await b.goto(channelUrl(ch))
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
   await ctx.sleep(3000)
-  const deadline = Date.now() + 30000
+  // 脚本自己只试约 10 秒（一两轮），认不出入口就交给浏览器助手，别空转半分钟
+  const deadline = Date.now() + 10000
   while (Date.now() < deadline) {
     if (await b.exists(SEL.editor).catch(() => false)) return
     const clicked = (await clickText(b, { scope: '[role="main"]', sel: '[role="button"]', re: SEL.composerEntry })) || (await b.click(SEL.composerEntryLabel, { timeout: 2000 }).then(() => true, () => false))
     if (clicked && (await b.waitFor(SEL.editor, { timeout: 10000 }).then(() => true, () => false))) return
     await ctx.sleep(2000)
   }
+  // 脚本认不出入口（Facebook 改了文字、挡着弹窗）：交给浏览器助手打开发帖框，发帖按钮不许它点
+  if (await assist(ctx, b, "打开写帖子的输入框（「What's on your mind? / 你在想什么」那一栏）", { until: SEL.editor, avoid: POST_WORDS })) return
   throw new Error(L(ctx, "没打开发帖框（没找到「What's on your mind?」），Facebook 的页面可能改了", "Couldn't open the post composer (no \"What's on your mind?\") — Facebook's page may have changed"))
 }
 
 /**
- * 把文字放进发帖框：真的打字（Facebook 的编辑器是 Lexical，模拟的 paste 事件不一定认；LinkedIn 新版就是这样）。
- * 打不进去再退回粘贴。注意：打字时 # 和 @ 会弹出话题 / 提及建议，话题放在最后、之间用空格隔开，不会误选。
+ * 把文字放进发帖框：先粘贴（Facebook 的编辑器是 Lexical，认 paste 事件，换行、链接都原样进去）。
+ * 粘贴不进去再清空了真的打字。不用打字打头：2026-10 实测打字会丢第一段、链接后面的换行被吃掉、段落顺序乱掉；
+ * 两次之间一定先清空，不然第二次接在第一次后面，正文重复。
  */
 async function fillText(ctx: any, b: any, text: string) {
   const same = async () => String(await b.eval(`([...document.querySelectorAll(${JSON.stringify(SEL.editor)})].pop()?.innerText || '')`)).replace(/\s+/g, '') === text.replace(/\s+/g, '')
   await b.click(SEL.editor)
-  await b.type(SEL.editor, text, { clear: true }).catch(() => {})
-  await ctx.sleep(800)
-  if (await same()) return
   await b.eval(`(() => {
     const el = [...document.querySelectorAll(${JSON.stringify(SEL.editor)})].pop()
     el.focus()
@@ -582,13 +791,16 @@ async function fillText(ctx: any, b: any, text: string) {
     dt.setData('text/plain', ${JSON.stringify(text)})
     el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
   })()`)
-  await ctx.sleep(800)
+  await ctx.sleep(1000)
+  if (await same()) return
+  await b.type(SEL.editor, text, { clear: true }).catch(() => {})
+  await ctx.sleep(1000)
   if (!(await same())) throw new Error(L(ctx, '正文没填进发帖框，Facebook 的编辑器可能改了', "Couldn't fill in the text — Facebook's editor may have changed"))
 }
 
 /** 发帖框里显示的上传进度（「Uploading 45%」「45%」这类），读不到返回空 */
 async function uploadPercent(b: any): Promise<string> {
-  const t = String(await b.eval(`([...document.querySelectorAll(${JSON.stringify(SEL.dialog)})].pop()?.innerText || '')`).catch(() => ''))
+  const t = String(await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.dialog)})].map(d => d.innerText || '').join('\\n')`).catch(() => ''))
   return /(\d{1,3})\s*%/.exec(t)?.[1] ?? ''
 }
 
@@ -608,6 +820,7 @@ async function waitPostable(ctx: any, b: any, timeoutMs: number, video = false) 
       const min = Math.floor((told - start) / 60000)
       ctx.progress({ message: L(ctx, `视频还在上传 / 处理${pct ? ` ${pct}%` : ''}，已等 ${min} 分钟…`, `Video still uploading / processing${pct ? ` ${pct}%` : ''} — ${min} min so far…`) })
     }
+    if (await clickText(b, { scope: SEL.dialog, re: SEL.notNow })) await ctx.sleep(1000)
     if (await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })) {
       const ok = await b.eval(`(() => { const e = document.querySelector('[data-shuttle-post]'); return !!e && !e.disabled && e.getAttribute('aria-disabled') !== 'true' })()`)
       if (ok) return
@@ -643,6 +856,7 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
         if (id || urlObj) return { id, url: urlObj?.url ?? '' }
       }
     }
+    if (await clickText(b, { scope: SEL.dialog, re: SEL.notNow })) ctx.log(L(ctx, '关掉了 Facebook 弹出的推广窗（以后再说）', 'Dismissed a Facebook promo popup (Not now)'))
     // 发帖框关了还等 15 秒，还没有结果就不等了
     if (!(await b.exists(SEL.editor).catch(() => false))) {
       closedAt = closedAt || Date.now()
@@ -654,16 +868,18 @@ async function newPost(ctx: any, b: any, timeoutMs: number): Promise<{ id: strin
 }
 
 /**
- * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格和发布频率。
+ * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去主页上找有没有这条，避免重复发。主页渠道先切到主页身份再发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < (p.video ? 60 : 10) * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
   if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = fbChannel(ctx, p.channel_id)
+  if (isApi(ch)) return publishApi(input, ctx, p, ch)
+  if (input.check_only) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
   const video = String(p.video ?? '').trim()
@@ -674,10 +890,11 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   const text = postText(p.body, tags)
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
-  if (day.length >= FB.dailyMax) throw new Error(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${FB.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${FB.dailyMax}); post again tomorrow`))
+  // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
+  if (day.length >= FB.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 条，上限 ${FB.dailyMax} 条，明天再发`, `"${ch.name}" already posted ${day.length} times in 24 hours (limit ${FB.dailyMax}); post again tomorrow`))
   const last = Math.max(0, ...day.map((x: any) => Date.parse(x.published_at)))
   const wait = last + FB.minIntervalMinutes * 60_000 - Date.now()
-  if (wait > 0 && !input.force_interval) throw new Error(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${FB.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${FB.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
+  if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一条刚发不久，两条至少隔 ${FB.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; posts need at least ${FB.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
@@ -735,24 +952,74 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/** 到点的排期帖子逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮，频率限制照样生效 */
-export async function publishDue(_input: {}, ctx: any) {
-  const fbs = new Set(ctx.db.query('social_accounts', { where: { type: 'facebook' }, limit: 100 }).list.map((c: any) => c.id))
-  if (!fbs.size) return { due: 0 }
-  const t = Date.now()
-  const due: Post[] = ctx.db.query('social_posts', { where: { status: 'scheduled' }, limit: 500 }).list
-    .filter((p: any) => fbs.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
+type ApiPublishState = { content: string; photo_ids: string[]; uploaded_at: string; attempted_at?: string }
+
+/** 官方 Page API 发文字及图文；每张图片先上传，最后只创建一条帖子。 */
+async function publishApi(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean }, ctx: any, p: Post, ch: any) {
+  if (!isPage(ch)) throw new Error(L(ctx, 'Facebook 官方 API 只能发布到公共主页', 'The Facebook API can publish to Pages only'))
+  const tags: string[] = parse(p.tags, [])
+  const images: string[] = parse(p.images, [])
+  if (p.video) throw new Error(L(ctx, '当前 API 通道支持文字和图片；视频请切换到浏览器通道', 'The API channel supports text and images; use the browser channel for video'))
+  pageApi.validatePhotos(ctx, images)
+  const bad = problems({ body: p.body, tags, images }, ctx)
+  if (bad.length) throw new Error(bad.join('; '))
+  const text = postText(p.body, tags)
+  const interrupted = p.status === 'publishing' || p.status === 'failed'
+  const priorClaim = Date.parse(p.claimed_at || '') || 0
+  const sameText = (value: string) => String(value ?? '').trim().replace(/\s+/g, ' ')
+  const content = JSON.stringify([ch.page_id || ch.platform_uid, text, images])
+  const saved = parse<ApiPublishState | null>(p.facebook_api_state, null)
+  const reuse = saved?.content === content && Array.isArray(saved.photo_ids) && saved.photo_ids.length <= images.length && saved.photo_ids.every((id) => /^\d+$/.test(id)) && !!Date.parse(saved.uploaded_at)
+  // An unresolved feed attempt belongs to the previous content. Editing a draft
+  // must not erase it or silently allow a second post with the edited caption.
+  const unresolved = !!Date.parse(saved?.attempted_at || '')
+  const previous = unresolved ? parse<any>(saved?.content, null) : null
+  const previousValid = Array.isArray(previous) && previous.length === 3 && typeof previous[0] === 'string' && typeof previous[1] === 'string' && Array.isArray(previous[2]) && previous[2].every((url: any) => typeof url === 'string')
+  if (input.check_only && !unresolved && !(!saved && !images.length && interrupted && priorClaim)) throw new Error(L(ctx, '没有待核对的 Facebook 发布记录', 'There is no unresolved Facebook publishing attempt'))
+  let state: ApiPublishState = unresolved || reuse ? saved! : { content, photo_ids: [], uploaded_at: now() }
+  const persist = () => ctx.db.update('social_posts', p.id, { facebook_api_state: JSON.stringify(state), updated_at: now() })
+  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null, facebook_api_state: JSON.stringify(state) })
+  let sendingFeed = false
   try {
-    const r = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r.post_id }
-  } catch (e: any) {
-    if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
+    // Partial uploads have not sent a feed request, so resume them directly.
+    // Legacy failed text posts have no saved API state; retain their recovery.
+    const attempted = Date.parse(state.attempted_at || '') || (!saved && !images.length && interrupted ? priorClaim : 0)
+    if (attempted) {
+      const checkText = previousValid ? previous[1] : text
+      const checkImages: string[] = previousValid ? previous[2] : images
+      const samePage = !unresolved || (previousValid && previous[0] === String(ch.page_id || ch.platform_uid))
+      const recent = samePage ? await pageApi.recentPosts(ctx, ch, 100, false, checkImages.length > 0) : []
+      const hit = recent.find((item) => sameText(item.message) === sameText(checkText) && Date.parse(item.created_time) >= attempted - 60_000 && (!checkImages.length || (Array.isArray(state.photo_ids) && state.photo_ids.length === checkImages.length && item.photo_ids.length === state.photo_ids.length && state.photo_ids.every((id) => item.photo_ids.includes(id)))))
+      if (hit) {
+        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: hit.permalink_url || `https://www.facebook.com/${hit.id}`, published_at: hit.created_time || now(), updated_at: now(), error: null, facebook_api_state: null, ...(saved?.content !== content && previousValid ? { body: hit.message, tags: '[]', images: JSON.stringify(checkImages) } : {}) })
+        return { id: p.id, post_id: hit.id, already: true }
+      }
+      if (input.check_only || (unresolved && input.confirm_unpublished !== true)) throw new Error(L(ctx, '上次 Facebook 发布结果尚未确认。请打开公共主页核对上次尝试的内容，确认未发布后再重试。', 'The previous Facebook publishing result is still uncertain. Open the Page and check the previous content, then confirm it was not published before retrying.'))
+      if (unresolved && !reuse) { state = { content, photo_ids: [], uploaded_at: now() }; persist() }
     }
+    // Meta retains unpublished photos for about 24 hours. Keep a margin so old
+    // uploads are replaced rather than attached after their expiry.
+    if (images.length && Date.now() - Date.parse(state.uploaded_at) > 23 * 3600_000) {
+      state = { content, photo_ids: [], uploaded_at: now() }
+      persist()
+    }
+    for (let i = state.photo_ids.length; i < images.length; i++) {
+      ctx.progress({ done: i, total: images.length, message: L(ctx, `正在上传 Facebook 图片 ${i + 1}/${images.length}…`, `Uploading Facebook image ${i + 1}/${images.length}…`) })
+      const id = await pageApi.uploadPhoto(ctx, ch, images[i])
+      state.photo_ids.push(id)
+      persist()
+    }
+    ctx.progress({ message: L(ctx, `正在通过 Facebook 官方 API 发布到「${ch.name}」…`, `Publishing to "${ch.name}" through the Facebook API…`) })
+    state.attempted_at = now()
+    persist()
+    sendingFeed = true
+    const id = images.length ? await pageApi.publishPhotos(ctx, ch, text, state.photo_ids) : await pageApi.publishText(ctx, ch, text)
+    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: `https://www.facebook.com/${id}`, published_at: now(), updated_at: now(), error: null, facebook_api_state: null })
+    return { id: p.id, post_id: id }
+  } catch (e: any) {
+    if (sendingFeed && e?.graphRejected) { state.attempted_at = ''; persist() }
+    ctx.db.update('social_posts', p.id, { status: 'failed', error: String(e?.message ?? e).slice(0, 1000), updated_at: now() })
+    if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
     throw e
   }
 }
@@ -765,6 +1032,12 @@ export async function remove(input: { post_id?: string; urn?: string; channel_id
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const id = p?.post_id || input?.urn
   const ch = fbChannel(ctx, p?.channel_id || input?.channel_id || '')
+  if (isApi(ch)) {
+    if (!id) throw new Error(L(ctx, '要给出已发布帖子的 ID', 'Provide a published post ID'))
+    await pageApi.deletePost(ctx, ch, id)
+    if (p) ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
+    return { removed: id }
+  }
   if (!id || !ch.browser_profile) throw new Error(L(ctx, '要给出帖子（post_id），或者 urn（Facebook 的帖子 id）+ channel_id；发布时没认出 id 的帖子请到 Facebook 上删', "Give a post (post_id), or urn (the Facebook post id) + channel_id; posts published without a recognized id must be deleted on Facebook"))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
   await b.goto(SITE + '/')
@@ -797,21 +1070,36 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
   const chs = input?.channel_id ? [fbChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'facebook' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
-    if (!ch.browser_profile || !ch.platform_uid || ch.login_status === 'expired') {
+    if (!ch.platform_uid || (!isApi(ch) && (!ch.browser_profile || ch.login_status === 'expired'))) {
       out.push({ channel: ch.name, skipped: L(ctx, '没登录', 'Not logged in') })
       continue
     }
-    const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    const posts = await readPosts(ctx, b, ch, 6)
-    const ok = await loggedIn(b)
-    // 粉丝数在主页顶上（readPosts 停在渠道主页，先滚回顶部）
-    if (ok) await b.eval(`window.scrollTo(0, 0)`).catch(() => {})
-    const followers = ok ? await followersOnPage(b) : undefined
-    await b.close()
-    if (!ok) {
-      ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
-      out.push({ channel: ch.name, skipped: L(ctx, '登录过期', 'Login expired') })
-      continue
+    let posts: FbPost[]
+    let followers: number | undefined
+    let apiMetrics: pageApi.MetricState | undefined
+    if (isApi(ch)) {
+      try {
+        const data = await pageApi.collectData(ctx, ch)
+        followers = data.followers
+        apiMetrics = data.state
+        posts = data.posts.map((p) => ({ id: p.id, text: p.message, created: p.created_time, url: p.permalink_url, actor: ch.page_id, likes: p.likes, comments: p.comments, shares: p.shares }))
+      } catch (e) {
+        if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+        throw e
+      }
+    } else {
+      const b = await openBrowser(ctx, { profile: ch.browser_profile })
+      posts = await readPosts(ctx, b, ch, 6)
+      const ok = await loggedIn(b)
+      // 粉丝数在主页顶上（readPosts 停在渠道主页，先滚回顶部）
+      if (ok) await b.eval(`window.scrollTo(0, 0)`).catch(() => {})
+      followers = ok ? await followersOnPage(b) : undefined
+      await b.close()
+      if (!ok) {
+        ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+        out.push({ channel: ch.name, skipped: L(ctx, '登录过期', 'Login expired') })
+        continue
+      }
     }
     const t = now()
     const day = localDay()
@@ -823,7 +1111,9 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     let updated = 0
     let added = 0
     for (const fp of posts) {
-      const metrics = { views: fp.views, likes: fp.likes, comments: fp.comments, collects: fp.collects, shares: fp.shares, metrics_at: t }
+      const values = Object.fromEntries(METRIC_KEYS.filter((k) => fp[k] != null).map((k) => [k, fp[k]]))
+      const available = Object.keys(values)
+      const metrics = { ...values, ...(available.length ? { metrics_at: t } : {}), ...(apiMetrics ? { facebook_api_metrics: JSON.stringify({ ...apiMetrics, available }) } : { facebook_api_metrics: null }) }
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: fp.id }, limit: 1 }).list[0]
       if (!hit) {
         const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(fp.text))
@@ -833,11 +1123,11 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
         }
       }
       if (!hit || hit.status === 'published') {
-        for (const k of METRIC_KEYS) totals[k] += (fp[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
+        for (const k of METRIC_KEYS) if (fp[k] != null) totals[k] += fp[k]! - (hit ? Number(hit[k]) || 0 : 0)
         if (!hit) totals.posts++
       }
       if (hit) {
-        const moved = recordDay(ctx, ch.id, hit as any, day, metrics, today)
+        const moved = available.length ? recordDay(ctx, ch.id, hit as any, day, values, today) : false
         ctx.db.update('social_posts', hit.id, moved ? { ...metrics, history: null } : metrics)
         updated++
       } else {
@@ -846,18 +1136,23 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
           channel_id: ch.id, title: [...(plain.split('\n')[0] || '')].slice(0, 30).join(''), body: fp.text, status: 'published', source: 'platform',
           post_id: fp.id, post_url: urlOf(fp), images: '[]', published_at: fp.created || t, created_at: t, ...metrics,
         })
-        recordDay(ctx, ch.id, saved, day, metrics, today)
+        if (available.length) recordDay(ctx, ch.id, saved, day, values, today)
         added++
       }
     }
     const patch: any = { collected_at: t, login_status: 'ok', last_checked_at: t, metric_totals: JSON.stringify(totals) }
+    patch.facebook_api_metrics = apiMetrics ? JSON.stringify(apiMetrics) : null
     if (followers != null) patch.followers = followers
     ctx.db.update('social_accounts', ch.id, patch)
-    const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, ...totals, updated_at: t }
+    const daily = { channel_id: ch.id, date: day, ...(!apiMetrics ? { followers: patch.followers ?? ch.followers ?? 0, ...totals } : {
+      posts: totals.posts,
+      ...(followers != null ? { followers } : {}),
+      ...Object.fromEntries(METRIC_KEYS.filter((k) => apiMetrics!.available.includes(k)).map((k) => [k, totals[k]])),
+    }), updated_at: t }
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)
     else ctx.db.insert('social_daily', daily)
-    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers })
+    out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers, ...(apiMetrics ? { available_metrics: apiMetrics.available, warnings: apiMetrics.warnings } : {}) })
   }
   return { channels: out }
 }
@@ -868,6 +1163,18 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
  */
 export async function probe(input: { channel_id: string }, ctx: any) {
   const ch = fbChannel(ctx, input?.channel_id)
+  if (isApi(ch)) return runProbe(ctx, async (t) => {
+    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch, false))
+    await t.step('posts', L(ctx, '读取公共主页帖子', 'Read Page posts'), () => pageApi.recentPosts(ctx, ch, 1))
+    await t.step('publish_credential', L(ctx, '检查发帖凭据', 'Check publishing credential'), async () => {
+      return pageApi.checkPublishAccess(ctx, ch)
+    })
+    const data = await t.soft('metrics', L(ctx, '检查数据采集权限', 'Check data collection access'), () => pageApi.collectData(ctx, ch, 1))
+    if (data) {
+      // A read-only probe checks access without changing collection snapshots.
+      for (const warning of data.state.warnings) await t.soft('metrics_' + warning.key, warning.name, async () => { throw new Error(warning.message) })
+    }
+  })
   return runProbe(ctx, async (t) => {
     const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => {
       if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))

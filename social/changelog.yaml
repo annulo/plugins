@@ -1,0 +1,76 @@
+# 升级说明，新的在最上面：每条一个 version 加各语言一段（zh、en……，可以再加别的语言）。
+# Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
+# Upgrade notes, newest first: each entry has a version plus one note per language.
+
+- version: 0.8.3
+  zh: "排期的帖子到点按帖子里存的内容发，不再按文章现在的内容重新生成：排期后改了文章，要发新版就重新排一次。同一篇内容在同一个账号可以有好几条帖子。"
+  en: "Scheduled posts are published exactly as saved instead of being regenerated from the article at publish time: if you edit the article after scheduling, schedule it again to send the new version. One piece of content can have several posts on the same account."
+- version: 0.8.2
+  zh: Facebook 官方 API 支持单图和多图帖子，最多 10 张，可复用部分上传结果；数据采集按指标分别读取，缺少点赞、评论或粉丝权限不再阻断可读数据同步；未知指标保留原值，不写成 0。自检分别检查发帖授权和互动读取，权限不足、API 受限及网络异常给出不同提示。发布结果不确定时可只核对、确认未发布后重试；修改草稿保留上次尝试，防止重复发帖。新增公共主页帖子的评论及回复正文读取，按时间倒序分页，不保存用户评论或泄露分页凭据。需要支持指标、发布结果确认和评论展示的模板。
+  en: "Facebook API publishes up to 10 images in one post and resumes partial uploads. Collection reads metrics independently so missing engagement or follower permissions no longer block available data. Unknown metrics preserve previous values instead of becoming zero. Self-tests distinguish publishing authorization from data access, with separate permission, restriction and network errors. Uncertain publishing results support check-only recovery and an explicitly confirmed retry; editing drafts preserves the previous attempt to prevent duplicates. Read Page comment and reply text newest first with pagination, without persisting user comments or exposing pagination credentials. Requires templates that display metrics, publishing recovery and comments."
+- version: 0.8.1
+  zh: Facebook 官方 API 通道支持单图和多图帖子，最多 10 张；公开图片地址和离线项目本机上传的图片均可发布。失败时保留已上传图片，重试继续完成；发帖结果不确定时先查原帖子，避免重复。单张本机图片最大 4 MB，视频继续使用浏览器方式。
+  en: "Facebook's official API now publishes single-image and multi-image posts with up to 10 images, including public URLs and offline Library uploads. Partial uploads resume on retry; uncertain publishing results are reconciled before posting again. Local images may be up to 4 MB each. Videos still use the browser channel."
+- version: 0.8.0
+  zh: Facebook 公共主页新增官方 API 通道，保留原有浏览器方式和个人号；授权后选择主页、绑定指定 Facebook 账号，可将已有主页从测试 Page Token 改为 OAuth，或重新登录浏览器切回原方式。凭据只保存在本机，不写入项目表。API 暂支持文字发布；完整互动采集仍受 Meta 权限限制。正式授权需要 Annulo 能力版本 39 并启用授权中转。
+  en: "Facebook Pages gain an official API channel alongside browser login and personal profiles. Select Pages from a specific connected account, replace a test Page Token with OAuth, or sign in through the browser to switch back. Credentials stay on this computer, outside project tables. API publishing currently supports text; full engagement collection still depends on Meta permissions. OAuth requires Annulo API 39 and an enabled broker."
+- version: 0.7.0
+  zh: 排期的帖子改由 Annulo 按排期时间准时发（到点一分钟内），不再每隔 5、15 分钟检查一次；出自文章的到点按文章那时的内容重新生成再发；撞上平台发布频率限制的往后推 15 分钟再发，没发起来的（比如没登录）记成失败、写明原因。内容怎么转成各平台的帖子（fromContent、字数）由插件提供，模板直接用。需要 Annulo 新版本。
+  en: "Scheduled posts are now published by Annulo right at their scheduled time (within a minute) instead of a check every 5–15 minutes; posts made from an article are regenerated from the article as it is then; a post that hits a platform's rate limit is pushed back 15 minutes, and one that can't start (e.g. not logged in) is marked failed with the reason. The plugin now provides how content becomes each platform's post (fromContent, lengths) for templates to use. Needs the latest Annulo."
+- version: 0.6.4
+  zh: Instagram、Facebook 发帖卡在某一步时（找不到「下一步」、打不开发帖框），先请浏览器助手看页面帮这一步，碰到验证码会把浏览器弹出来请你处理；「分享 / 发布」仍由脚本点。需要 Annulo 新版本，老版本照原来报错。
+  en: "When posting to Instagram or Facebook gets stuck (Next can't be found, the composer won't open), the browser assistant looks at the page and helps with that step, and brings the browser up for you on a CAPTCHA; Share / Post are still clicked by the script. Needs the latest Annulo; older versions report the error as before."
+- version: 0.6.3
+  zh: Instagram：有的账号发帖变成了整页（右上角「下一步」，没有弹窗），之前会报「选完图后没找到下一步」，现在两种发帖界面都能用。
+  en: "Instagram: some accounts now get a full-page composer (\"Next\" at the top right, no dialog), which used to fail with \"Couldn't find Next after choosing images\"; both composers work now."
+- version: 0.6.2
+  zh: Instagram：修了文案填进说明框时重复两遍、或者前面多出上次留下的文字：每次填之前先清空说明框。
+  en: "Instagram: fixed the caption being filled in twice or after leftover text from an earlier attempt — the caption box is cleared before filling."
+- version: 0.6.1
+  zh: Facebook、Instagram、LinkedIn、X：正文里已经写了的话题，发布时不再在末尾重复接一遍（之前会出现两行一样的话题）。
+  en: "Facebook, Instagram, LinkedIn, X: hashtags already in the text aren't appended again when publishing (the hashtag line could show up twice)."
+- version: 0.6.0
+  zh: 添加 Facebook 时，个人号和你管理的公共主页列出来勾选，只添加勾上的（不同项目可以各用一个主页）；添加 YouTube 时，同一个 Google 账号下有几个频道也列出来勾选，发布、采集前自动切到对应的频道。Facebook 和 YouTube 的账号名、头像读对了（之前会读成「管理公共主页」「XX的头像」或频道 id）。需要模板的勾选弹窗：外贸第 122 版、自媒体 0.10.0 起。
+  en: "When adding Facebook, your personal profile and the Pages you manage are listed to pick from, and only the picked ones are added (different projects can each use one Page); when adding YouTube, all channels under the Google account are listed the same way, and publishing and collecting switch to the right channel first. Facebook and YouTube account names and avatars are read correctly (they could show up as \"Manage Page\", \"X's profile picture\" or a channel id). Needs the picking dialog in the templates: Trade v122 and Creator 0.10.0 or later."
+- version: 0.5.5
+  zh: Facebook：发帖时弹出的推广窗（比如「直接与用户对话」让你加「立即拨打」按钮）会自动点「以后再说」关掉，定时发布不会被它挡住。
+  en: "Facebook: promo popups that show up while posting (like \"Talk to people directly\" asking to add a Call button) are dismissed with \"Not now\", so scheduled posts aren't blocked by them."
+- version: 0.5.4
+  zh: Facebook：修了发帖卡在「下一页」、最后报「发布按钮一直是灰的」：Facebook 的发帖框改成了两层，现在能找到「下一页」和「发帖」按钮。
+  en: "Facebook: fixed posting getting stuck on \"Next\" and failing with \"The Post button stayed disabled\" — Facebook's composer now has two layers, and the Next and Post buttons are found again."
+- version: 0.5.3
+  zh: Facebook：修了发帖时报「正文没填进发帖框」：正文改成整段粘贴进去，不再逐字打（打字会丢段落、带链接时顺序乱），重试也不会把正文填两遍。
+  en: "Facebook: fixed \"Couldn't fill in the text\" when posting — the text is now pasted in whole instead of typed (typing dropped paragraphs and scrambled text around links), and a retry no longer fills it in twice."
+- version: 0.5.2
+  zh: 升级说明有了中英文：英文界面的升级卡片显示英文（需要 Annulo 下一个版本）。
+  en: Upgrade notes now come in Chinese and English; the upgrade card follows your interface language (needs the next Annulo release).
+- version: 0.5.1
+  zh: 知乎：之前写的 Markdown 版本打开时自动转成富文本；知乎拒绝发布时直接显示知乎的原话（比如发布太频繁），图片上传失败会自动重试。各平台：页面上「AI 改写」可以写这次怎么改，助手在这一版现在的内容上改；发布频率改成只是建议，超了也照样发、排期到点就发。
+  en: "Zhihu: older Markdown versions turn into rich text when opened; when Zhihu rejects a post its own message is shown (e.g. posting too often), and failed image uploads retry. All platforms: \"AI rewrite\" takes instructions and edits the current content; posting frequency is only a suggestion — posts and schedules go out even past it."
+- version: 0.5.0
+  zh: 每个平台的字段集中成一张表（标题发不发、正文纯文字还是富文本、配图、视频、封面、分区），模板页面照它显示。知乎文章改成和文章一样的富文本：小标题、列表、加粗、引用、图片都在正文里，发布时原样排到知乎；修了正文多张图时后面的图会丢
+  en: "Each platform's fields (title, plain or rich text, images, video, cover, category) live in one table the template pages follow. Zhihu articles are rich text like articles and keep their layout when published; fixed later images getting lost when the body has several."
+- version: 0.4.0
+  zh: 新增知乎：添加知乎账号，把内容改写成知乎专栏文章（小标题、列表、正文配图、话题），审核后发布或排期，采集阅读、赞同、评论、收藏和粉丝数
+  en: "New: Zhihu. Add a Zhihu account, rewrite content into Zhihu column articles (headings, lists, inline images, topics), review, publish or schedule, and collect views, upvotes, comments, saves and followers."
+- version: 0.3.3
+  zh: 社媒：修复中文版 LinkedIn 找不到发布按钮、发帖一直超时的问题
+  en: "Fixed LinkedIn in Chinese not finding the Post button and timing out."
+- version: 0.3.2
+  zh: 社媒：提示文字里的「素材库」统一改叫「资料库」
+  en: "Wording: the asset library is consistently called Library in prompts."
+- version: 0.3.1
+  zh: 社媒：X 发长推文（开了 Premium、超过 280 字）后能认出发布成功，不再明明发出去了却标成发布失败
+  en: "X: long posts (Premium, over 280 characters) are recognized as published instead of being marked failed."
+- version: 0.3.0
+  zh: 社媒：写帖子时能指定配哪几张图、按什么顺序，改写时也能换图；文章里本机上传的图也能配进帖子；写推文先查字数，开了 Premium 的账号可以写长
+  en: "Choose which images go in a post and in what order, also when rewriting; locally uploaded article images can be used; tweets are length-checked first and Premium accounts can write long posts."
+- version: 0.2.0
+  zh: 社媒：离线项目里上传的图片、视频（/_annulo/uploaded/…）也能配进帖子发布；需要 Annulo 2026.10.6-7 或更新
+  en: "Images and videos uploaded in offline projects (/_annulo/uploaded/…) can be used in posts. Needs Annulo 2026.10.6-7 or later."
+- version: 0.1.1
+  zh: X：发推时直接点弹窗里的 Post 按钮（有时坐标点击不触发发布）；去掉两条推文至少隔 30 分钟的限制，只保留 24 小时最多 10 条
+  en: "X: clicks the Post button in the dialog directly (coordinate clicks sometimes didn't publish); dropped the 30-minute gap between posts, keeping at most 10 per 24 hours."
+- version: 0.1.0
+  zh: 第一版：X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站的账号、帖子、发布、采集和自检
+  en: "First release: accounts, posts, publishing, collecting and self-test for X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin and Bilibili."

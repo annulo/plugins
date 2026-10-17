@@ -8,15 +8,15 @@ export const cloud = ['check', 'createDraftBatch']
 // 手机上点也能做，转给电脑上开着的 Annulo 跑（要本机浏览器的登录态）
 export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewhereAll']
 
-// 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts）。
+// 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts、zhihu.ts）。
 // 页面上的按钮调这里，不用关心笔记 / 推文是哪个平台的。支持哪些平台在 _platforms.ts。项目里的名字都带插件 id：social/social.publish、social/x.save……
 //
-//   social.context({ article_id?, channel_ids })  写帖子前取账号的上下文（定位、这篇内容在这个账号有没有写过）。要改写的内容本身由模板的取数函数给（见 PLUGIN.md）；
+//   social.context({ article_id?, channel_ids })  写帖子前取账号的上下文（定位、这篇内容在这个账号有没有写过、没发出去的那一版现在的内容）。要改写的内容本身由模板的取数函数给（见 PLUGIN.md）；
 //                                                 写由助手按各平台的任务（tasks/write-<平台>.md）做，存用各平台的 save（social/x.save、social/xhs.save……）
 //   social.check / publish / remove({ post_id })
 //   social.login({ type, channel_id? })          添加账号 / 重新登录
 //   social.collect({ channel_id } | { type })     采集一个账号，或者某个平台的全部账号（定时任务）
-//   social.publishDue({ type })                  发布某个平台到点的排期（定时任务；一次一条，频率限制照样生效）
+//   social.publishScheduled({ post_id })         发一条到点的排期（定时任务 schedules/publish.json 按 scheduled_at 调）
 //   social.probe({ channel_id })                 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发（各平台的 probe）
 //   social.probeAll()                            自检所有已登录的账号（定时任务，每天一次）
 //   social.health()                              各账号最近一次自检 / 发布 / 删除 / 采集成没成（social_health）
@@ -65,6 +65,7 @@ function machineFields(ctx: any, ch: any) {
 
 /** 账号的登录态在别的电脑上：返回那台电脑的名字；在这里、没记过返回 '' */
 function elsewhere(ctx: any, ch: any): string {
+  if (ch?.auth_mode === 'api') return ''
   const m = here(ctx)
   const p = localProfile(ctx, ch)
   const other = () => String(ch.browser_machine_name || L(ctx, '另一台电脑', 'another computer'))
@@ -81,12 +82,14 @@ function elsewhere(ctx: any, ch: any): string {
 
 /** 手动操作前检查：登录态在别的电脑上就报错，说清楚去哪台操作 */
 function onThisMachine(ctx: any, ch: any) {
+  if (ch?.auth_mode === 'api') return
   const other = elsewhere(ctx, ch)
   if (other) throw new Error(L(ctx, `「${ch.name}」是在「${other}」上登录的，登录状态只在那台电脑上。到那台电脑上操作，或者在这台电脑上点「在这台电脑登录」`, `"${ch.name}" was logged in on "${other}", and the login only lives on that computer. Do this there, or click "Log in on this computer" here`))
 }
 
 /** 老账号没记过 profile 的：在这里跑成功了就记成这里 */
 function claim(ctx: any, ch: any) {
+  if (ch?.auth_mode === 'api') return
   if (ch && !ch.browser_profile_id && here(ctx)) ctx.db.update('social_accounts', ch.id, machineFields(ctx, ch))
 }
 
@@ -106,22 +109,23 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
   platformOf(ctx, input?.channel_id)
   const ch = ctx.db.get('social_accounts', input.channel_id)
   onThisMachine(ctx, ch)
-  if (!ch.browser_profile) throw new Error(L(ctx, '这个账号还没有本机登录记录，请先重新登录', 'This account has no local browser profile. Please log in again first.'))
+  if (!ch.browser_profile && ch.auth_mode !== 'api') throw new Error(L(ctx, '这个账号还没有本机登录记录，请先重新登录', 'This account has no local browser profile. Please log in again first.'))
   const handle = encodeURIComponent(String(ch.handle ?? '').replace(/^@/, ''))
   const uid = encodeURIComponent(String(ch.platform_uid ?? ''))
   const urls: Record<string, string> = {
     xiaohongshu: uid ? `https://www.xiaohongshu.com/user/profile/${uid}` : '',
     bilibili: uid ? `https://space.bilibili.com/${uid}` : '',
     douyin: uid ? `https://www.douyin.com/user/${uid}` : '',
+    zhihu: handle ? `https://www.zhihu.com/people/${handle}` : '',
     x: handle ? `https://x.com/${handle}` : '',
     linkedin: handle ? `https://www.linkedin.com/in/${handle}/` : '',
     instagram: handle ? `https://www.instagram.com/${handle}/` : '',
-    facebook: handle ? `https://www.facebook.com/${handle}` : uid ? `https://www.facebook.com/profile.php?id=${uid}` : '',
+    facebook: ch.fb_kind === 'page' && uid ? `https://www.facebook.com/${uid}` : handle ? `https://www.facebook.com/${handle}` : uid ? `https://www.facebook.com/profile.php?id=${uid}` : '',
     youtube: handle ? `https://www.youtube.com/@${handle}` : uid ? `https://www.youtube.com/channel/${uid}` : '',
   }
   const url = urls[ch.type]
   if (!url) throw new Error(L(ctx, '这个账号还没有主页地址，请先采集账号信息', 'This account has no profile URL. Collect account details first.'))
-  await ctx.browser.open({ profile: ch.browser_profile, url, show: true, keep_open: true })
+  await ctx.browser.open({ profile: ch.browser_profile || 'facebook-api', url, show: true, keep_open: true })
   return { opened: true }
 }
 
@@ -140,7 +144,9 @@ export function context(input: { article_id?: string; channel_ids: string[] }, c
     const own = articleId ? ctx.db.query('social_posts', { where: { article_id: articleId, channel_id: id }, limit: 50 }).list.filter((p: any) => p.status !== 'rejected' && p.status !== 'removed') : []
     // 还没发出去的最新一版：AI 改写时改它（带 post_id 存回去），不另起一条；只有已发布的版本时 post_id 为空，另写一条新的
     const draft = own.filter((p: any) => !['published', 'publishing'].includes(p.status)).sort((x: any, y: any) => String(y.updated_at ?? '').localeCompare(String(x.updated_at ?? '')))[0]
-    return { id: ch.id, name: ch.name, type: ch.type, profile: ch.profile ?? '', has_post: own.length > 0, post_id: draft?.id ?? '' }
+    // 那一版现在的内容（可能是用户手改过的）：页面上「AI 改写」带着改写要求（任务参数 note）时，在它的基础上改
+    const tags = (() => { try { return JSON.parse(draft?.tags ?? '[]') } catch { return [] } })()
+    return { id: ch.id, name: ch.name, type: ch.type, profile: ch.profile ?? '', has_post: own.length > 0, post_id: draft?.id ?? '', draft: draft ? { title: draft.title ?? '', body: draft.body ?? '', tags } : null }
   })
   return { channels }
 }
@@ -199,10 +205,11 @@ function channelOfPost(ctx: any, postId: string) {
 }
 
 // 发布、删除、采集、自检：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
-export async function publish(input: { post_id: string; force_interval?: boolean; _show_browser?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
+  if (input.check_only && (ch?.type !== 'facebook' || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
   onThisMachine(ctx, ch)
   const r = await track(ctx, ch, 'publish', (c) => m.publish(input, c), input.post_id)
   claim(ctx, ch)
@@ -217,27 +224,28 @@ export function remove(input: { post_id: string; _show_browser?: boolean }, ctx:
   return track(ctx, ch, 'remove', (c) => m.remove(input, c), input.post_id)
 }
 
-/** 某个平台到点的排期逐条发布（定时任务调用）。一次最多发 1 条，其余等下一轮；频率限制不算失败，放回排期 */
-export async function publishDue(input: { type: string }, ctx: any) {
-  if (!PLATFORMS[input?.type ?? '']) return { due: 0 }
-  // 登录态在别的电脑上的账号，排期由那台电脑发
-  const ids = new Set(ctx.db.query('social_accounts', { where: { type: input.type }, limit: 100 }).list.filter((c: any) => !elsewhere(ctx, c)).map((c: any) => c.id))
-  if (!ids.size) return { due: 0 }
-  const t = Date.now()
-  const due = ctx.db
-    .query('social_posts', { where: { status: 'scheduled' }, limit: 500 })
-    .list.filter((p: any) => ids.has(p.channel_id) && p.scheduled_at && Date.parse(p.scheduled_at) <= t)
-    .sort((a: any, b: any) => Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at))
-  if (!due.length) return { due: 0 }
-  const p = due[0]
+/**
+ * 发一条到点的排期（定时任务 schedules/publish.json 调用：Annulo 按 social_posts.scheduled_at 到点逐条调它）。
+ * 已经不是排期状态（发了、取消了）的跳过；登录态在别的电脑上的账号由那台电脑发；
+ * 帖子里存的是什么就发什么（排期时已经过了规格检查），不再按文章重新生成。
+ * 撞上平台的频率限制不算失败：往后推 15 分钟再排（改了时间，Annulo 到点会再调）。
+ */
+export async function publishScheduled(input: { post_id: string }, ctx: any) {
+  const p = ctx.db.get('social_posts', input?.post_id)
+  if (!p || p.status !== 'scheduled') return { skipped: L(ctx, '已经不在排期里', 'No longer scheduled') }
+  const ch = ctx.db.get('social_accounts', p.channel_id)
+  const other = ch && elsewhere(ctx, ch)
+  if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
   try {
     const r: any = await publish({ post_id: p.id }, ctx)
-    return { due: due.length, published: r?.post_id }
+    return { published: r?.post_id }
   } catch (e: any) {
     if (/至少隔|上限|at least|limit/.test(e.message)) {
-      ctx.db.update('social_posts', p.id, { status: 'scheduled', error: e.message })
-      return { due: due.length, waiting: e.message }
+      ctx.db.update('social_posts', p.id, { status: 'scheduled', scheduled_at: new Date(Date.now() + 15 * 60_000).toISOString(), error: e.message })
+      return { waiting: e.message }
     }
+    // 没开始发就出错的（比如没在这台电脑登录）帖子还停在排期：记成失败，页面上看得到原因、能重发（同一个时间 Annulo 不会再调）
+    if (ctx.db.get('social_posts', p.id)?.status === 'scheduled') ctx.db.update('social_posts', p.id, { status: 'failed', error: e?.message ?? String(e), updated_at: new Date().toISOString() })
     throw e
   }
 }
@@ -290,7 +298,7 @@ async function collectOne(ctx: any, channelId: string) {
   const m = platformOf(ctx, channelId)
   const ch = ctx.db.get('social_accounts', channelId)
   // 打开浏览器、翻主页要十几秒到一分钟：按钮上说清楚在做什么（各平台的 collect 自己没有进度）
-  ctx.progress({ message: L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
+  ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 Facebook API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the Facebook API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
   const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId }, c))
   ctx.progress({ message: L(ctx, '保存数据…', 'Saving…') })
   // 读到 0 条、但这个账号明明发过（有平台 id 的）：多半是平台的接口改名了，采集悄悄变成空的
@@ -311,11 +319,11 @@ export async function probe(input: { channel_id: string; _show_browser?: boolean
   const ch = ctx.db.get('social_accounts', input.channel_id)
   if (!m.probe) throw new Error(L(ctx, `${ch.type} 还没有自检`, `${ch.type} has no self-test yet`))
   onThisMachine(ctx, ch)
-  if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" first`))
+  if (ch.auth_mode !== 'api' && !ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" first`))
   const r = await m.probe({ channel_id: ch.id }, ctx)
   record(ctx, ch, 'probe', r)
   if (r.kind === 'expired') ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: new Date().toISOString() })
-  else if (r.ok) ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: new Date().toISOString(), ...(ch.browser_profile_id ? {} : machineFields(ctx, ch)) })
+  else if (r.ok) ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: new Date().toISOString(), ...(ch.auth_mode === 'api' || ch.browser_profile_id ? {} : machineFields(ctx, ch)) })
   return r
 }
 
@@ -323,7 +331,7 @@ export async function probe(input: { channel_id: string; _show_browser?: boolean
 export async function probeAll(_input: {}, ctx: any) {
   const out: any[] = []
   for (const ch of ctx.db.query('social_accounts', { limit: 200 }).list) {
-    if (!PLATFORMS[ch.type]?.probe || !ch.browser_profile || ch.login_status === 'expired' || elsewhere(ctx, ch)) continue
+    if (!PLATFORMS[ch.type]?.probe || (ch.auth_mode !== 'api' && !ch.browser_profile) || ch.login_status === 'expired' || elsewhere(ctx, ch)) continue
     try {
       const r = await probe({ channel_id: ch.id }, ctx)
       out.push({ channel: ch.name, ok: r.ok, step: r.step, error: r.error })
@@ -339,11 +347,29 @@ export function health(_input: {}, ctx: any) {
 }
 
 /** 添加账号 / 重新登录（在别的电脑上登录的账号，在这台登录后就归这台）：登录成功后记下是这台电脑 */
-export async function login(input: { type?: string; channel_id?: string }, ctx: any) {
+/**
+ * 登录后让用户勾选要添加哪些（login 返回 { choose }，比如 Facebook 的个人号和管理的主页）：建勾上的，记下是在这台电脑登录的。
+ * 参数照平台脚本的 addChosen（choose 原样带回来，加上勾了哪些）
+ */
+export async function addChosen(input: { choose: { type: string }; [k: string]: unknown }, ctx: any) {
+  const m = PLATFORMS[input?.choose?.type ?? '']
+  if (!m?.addChosen) throw new Error(L(ctx, '这个平台不用勾选：', "This platform doesn't need picking: ") + input?.choose?.type)
+  const r = await m.addChosen(input, ctx)
+  for (const id of r.ids) {
+    const ch = ctx.db.get('social_accounts', id)
+    if (ch?.auth_mode !== 'api') ctx.db.update('social_accounts', id, machineFields(ctx, ch))
+  }
+  return r
+}
+
+export async function login(input: { type?: string; channel_id?: string; mode?: 'api' | 'browser'; account?: string }, ctx: any) {
   const m = input?.channel_id ? platformOf(ctx, input.channel_id) : PLATFORMS[input?.type ?? '']
   if (!m) throw new Error(L(ctx, '不支持的社媒类型：', 'Unsupported social platform: ') + input?.type)
-  const r = await m.login({ channel_id: input?.channel_id }, ctx)
+  const r = await m.login({ channel_id: input?.channel_id, mode: input?.mode, account: input?.account }, ctx)
   const id = r?.id ?? input?.channel_id
-  if (id) ctx.db.update('social_accounts', id, machineFields(ctx, ctx.db.get('social_accounts', id)))
+  if (id) {
+    const ch = ctx.db.get('social_accounts', id)
+    if (ch?.auth_mode !== 'api') ctx.db.update('social_accounts', id, machineFields(ctx, ch))
+  }
   return r
 }

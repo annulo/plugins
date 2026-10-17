@@ -3,7 +3,7 @@ name: 写小红书笔记
 description: 把一篇文章改写成小红书图文笔记，每个勾选的账号按自己的定位各写一篇，social/xhs.save 存成待审（审核后发布）
 ---
 
-参数：`source` 是要改写的内容，`{"fn": "<模板的取数函数>", "id": "<内容 id>"}`，由模板的按钮给；`channel_ids` 是要发的小红书账号。
+参数：`source` 是要改写的内容，`{"fn": "<模板的取数函数>", "id": "<内容 id>"}`，由模板的按钮给；`channel_ids` 是要发的小红书账号。`note`（可能没有）是用户这次在页面上写的改写要求。
 
 ## 1. 拿上下文
 
@@ -24,6 +24,7 @@ annulo run social/social.context --input '{"article_id":"<source.id>","channel_i
 
 `channels` 是每个账号和它的定位（`profile`）。
 `post_id` 不为空的账号已经有这篇内容还没发出去的版本：改写那一条，存的时候带上这个 `post_id`，不要另起一条；`has_post` 为 true 但 `post_id` 为空，说明只有已经发出去的版本，另写一条新的。
+有 `note` 时是改写：在 `draft`（那一版现在的标题、正文、话题，可能是用户手改过的）的基础上按 `note` 改，没让改的地方保持原样，存的时候带上 `post_id`；`note` 和写法冲突时照 `note`（规则里的平台限制照样要守）。没有 `draft` 就按 `note` 的意思写一版新的。
 
 ## 2. 怎么写
 

@@ -1,8 +1,0 @@
-{
-  "fn": "social/social.publishDue",
-  "input": {
-    "type": "x"
-  },
-  "every": "5m",
-  "name": "发布到点的推文"
-}

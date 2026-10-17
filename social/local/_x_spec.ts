@@ -1,6 +1,7 @@
 // X（Twitter）的发帖规格。页面和本机函数都按这里检查，X 改规则时只改这里。
 
 import { L } from './_i18n'
+import { withTags } from './_source'
 
 export const X = {
   // 字数按 X 的算法：拉丁字母、数字、常用标点算 1，中日韩文字和 emoji 算 2，链接一律算 23；普通账号上限 280
@@ -33,8 +34,7 @@ export function xLen(s: string) {
 
 /** 发出去的完整文字：正文 + 话题 */
 export function tweetText(body: string, tags: string[]) {
-  const t = (tags ?? []).map((x) => '#' + String(x).replace(/^#/, '').replace(/\s+/g, '')).filter((x) => x.length > 1)
-  return [String(body ?? '').trim(), t.join(' ')].filter(Boolean).join('\n\n')
+  return withTags(body, tags) // 正文里已经有的话题不重复接（_source.ts）
 }
 
 export type XDraft = { title: string; body: string; tags: string[] }

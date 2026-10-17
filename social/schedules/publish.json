@@ -1,0 +1,14 @@
+{
+  "fn": "social/social.publishScheduled",
+  "input": {
+    "post_id": "$id"
+  },
+  "due": {
+    "table": "social_posts",
+    "field": "scheduled_at",
+    "where": {
+      "status": "scheduled"
+    }
+  },
+  "name": "发布到点的排期帖子"
+}

@@ -1,6 +1,7 @@
 // LinkedIn 的发帖规格。页面和本机函数都按这里检查，LinkedIn 改规则时只改这里。
 
 import { L } from './_i18n'
+import { withTags } from './_source'
 
 export const LI = {
   // 个人动态的正文上限 3000 个字符（按字符数算，中英文都算 1）；超过「查看更多」的折叠点大约 210 个字符
@@ -21,8 +22,7 @@ export const liLen = (s: string) => [...String(s ?? '')].length
 
 /** 发出去的完整文字：正文 + 话题 */
 export function postText(body: string, tags: string[]) {
-  const t = (tags ?? []).map((x) => '#' + String(x).replace(/^#/, '').replace(/\s+/g, '')).filter((x) => x.length > 1)
-  return [String(body ?? '').trim(), t.join(' ')].filter(Boolean).join('\n\n')
+  return withTags(body, tags) // 正文里已经有的话题不重复接（_source.ts）
 }
 
 /** 视频地址：素材库的 http(s) 地址，或存在这台电脑上的 local:<名字> */

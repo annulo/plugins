@@ -25,3 +25,14 @@ export function sourceOf(input: any): Source | null {
   const url = String(input?.url ?? '').trim()
   return { id, title: String(input?.article_title ?? '').trim(), url: /^https?:\/\//.test(url) ? url : '', images }
 }
+
+/**
+ * 发出去的正文：正文后面空一行接上话题（#话题 空格分隔）。正文里已经写了的话题不再接（AI 写正文时常把话题顺手写在最后一行，
+ * 不去重就会出现两行一样的话题），比较时不分大小写。Facebook、Instagram、LinkedIn、X 共用。
+ */
+export function withTags(body: string, tags: string[]) {
+  const text = String(body ?? '').trim()
+  const had = new Set((text.match(/#[^\s#.,;:!?，。！？、；：]+/g) ?? []).map((x) => x.slice(1).toLowerCase()))
+  const t = [...new Set((tags ?? []).map((x) => String(x).replace(/^#/, '').replace(/\s+/g, '')).filter(Boolean))].filter((x) => !had.has(x.toLowerCase())).map((x) => '#' + x)
+  return [text, t.join(' ')].filter(Boolean).join('\n\n')
+}

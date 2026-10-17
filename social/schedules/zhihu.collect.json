@@ -1,0 +1,8 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "zhihu"
+  },
+  "every": "6h",
+  "name": "采集知乎文章数据"
+}
