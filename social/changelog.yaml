@@ -2,15 +2,21 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
-- version: 0.8.6
+- version: 0.8.8
   zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；抖音设在竖封面（3:4）上。上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。封面弹窗里有多个图片入口（如抖音的「生成参考图」）时只认「上传封面」旁边那个，「上传封面」只点一次；脚本认不出弹窗或上传入口时请浏览器助手帮一步（不会替你点完成或发布）；失败时保存现场，方便「交给助手修」。
   en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Douyin's cover goes on the vertical (3:4) slot. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover. When the editor has several image inputs (such as Douyin's reference-image picker), use only the one next to \"上传封面\" and click it at most once; if the script can't find the editor or upload input, the browser assistant helps with that step (it never clicks Done or Publish); failures keep a snapshot for \"Fix with assistant\"."
-- version: 0.8.5
+- version: 0.8.7
   zh: 抖音新增图文发布，支持 1–35 张配图及标题、正文、话题，内容发布弹窗可直接选择抖音账号，支持立即发布和排期。图文标题按 20 字校验，视频发布流程继续保留；修复新版编辑器重复正文、话题丢失的问题，自检同时检查图文与视频入口。
   en: "Douyin now publishes image posts with 1–35 images, title, caption and hashtags, directly from content publishing with immediate or scheduled posting. Image titles are checked against the 20-character limit; video publishing remains supported. Fixed duplicated captions and lost hashtags in the new editor. Self-tests verify both image and video upload modes."
-- version: 0.8.4
+- version: 0.8.6
   zh: 修复小红书图文发布停在“上传视频”页的问题：忽略不可见的同名标签，确认切换成功且文件框接收图片后再上传；等待全部图片上传成功并关闭首次图片编辑提示后再继续，自检同步验证真实的图文与视频上传入口。
   en: "Fixed Xiaohongshu image posts getting stuck on the video upload page: ignore invisible duplicate tabs and verify the selected mode and matching file input before uploading. Wait for every image upload and dismiss the first-time image-editing tip before continuing. Self-tests check the actual image and video upload modes."
+- version: 0.8.5
+  zh: "X：发视频推文时，不会再明明发出去了却报「发布确认失败」：之前会把页面上别的请求当成发推结果，提前离开页面。"
+  en: "X: video posts that went out are no longer reported as \"Post confirmation failed\" — another request on the page was mistaken for the post result and the page was left too early."
+- version: 0.8.4
+  zh: "B 站投稿页改版后又能发了：视频选上没反应、标签互相覆盖或被自动标签占满、新的必填项（创作声明、封面）都修好了；分区现在只有一级，写了两级也照样投。"
+  en: "Bilibili publishing works again after its upload page redesign: fixed videos not being picked up, tags overwriting each other or being crowded out by auto-added tags, and the new required fields (creation declaration, cover); categories are now top-level only, and a two-level category still goes through."
 - version: 0.8.3
   zh: "排期的帖子到点按帖子里存的内容发，不再按文章现在的内容重新生成：排期后改了文章，要发新版就重新排一次。同一篇内容在同一个账号可以有好几条帖子。"
   en: "Scheduled posts are published exactly as saved instead of being regenerated from the article at publish time: if you edit the article after scheduling, schedule it again to send the new version. One piece of content can have several posts on the same account."

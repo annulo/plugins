@@ -39,6 +39,7 @@ annulo run social/social.probe --input '{"channel_id":"<channel_id>"}'
 ## 3. 改平台文件
 
 平台文件在 `plugins/social/local/` 下：`linkedin.ts`（LinkedIn）、`x.ts`（X）、`facebook.ts`、`instagram.ts`、`youtube.ts`、`xhs.ts`（小红书）、`douyin.ts`（抖音）、`bilibili.ts`（B 站）、`zhihu.ts`（知乎）。
+动手前先看 `plugins/social/docs/publish-breakage.md`：以前各平台卡过的地方和原因（SVG 点不动、清空输入框会删掉标签、页面后加载、新的必填项……），这次可能是同一种。
 页面元素在文件开头的 `SEL` 常量里，数据接口在 `API` 常量里；发布、自检共用同一份代码（`openComposer` 这类函数），改一处两边都好。
 
 - **加，不删**：在原来的选择器后面用逗号加上新的（`'旧的, 新的'`），旧的留着——平台常常同时跑新旧两版页面，不同用户看到的不一样。

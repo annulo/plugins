@@ -481,8 +481,15 @@ export async function publish(input: { post_id: string }, ctx: any) {
     })()`)
     if (!submitted) throw new Error(L(ctx, '发推框的 Post 按钮不可用，X 的页面可能改了', "The Post button is unavailable; X's page may have changed"))
     ctx.log('X publish: dispatched Post button click')
-    const rs = await b.responses(API.create, { min: 1, timeout: 60000 }).catch(() => [])
-    const created = rs.filter((r: any) => /\/Create(?:Note)?Tweet(?:\?|$)/.test(r.url ?? ''))
+    // 只认发推接口：页面上别的请求也带 /Create（2026-10 点 Post 后 3 毫秒 Grok 的 CreateCheckoutSession 先回来，被当成发推结果，接着跳去主页把正在提交的视频推文打断了）
+    const isCreate = (r: any) => /\/Create(?:Note)?Tweet(?:\?|$)/.test(r.url ?? '')
+    let rs: any[] = [] // b.responses 每次返回到目前为止记到的全部匹配项
+    for (const until = Date.now() + (video ? 180_000 : 60_000); Date.now() < until;) {
+      rs = await b.responses(API.create, { min: 1, timeout: Math.max(1000, until - Date.now()) }).catch(() => rs)
+      if (rs.some(isCreate)) break
+      await ctx.sleep(1000)
+    }
+    const created = rs.filter(isCreate)
     ctx.log('X publish responses', JSON.stringify(rs.map((r: any) => ({ url: String(r.url).split('?')[0], status: r.status, errors: r.json?.errors?.map((e: any) => e.message) }))))
     for (const r of created) {
       // 长推文（CreateNoteTweet）的结果在 data.notetweet_create 下
@@ -494,12 +501,17 @@ export async function publish(input: { post_id: string }, ctx: any) {
     }
     // 页面已发成功但响应接口变了时，先检查实际帖子，不把它误判成失败或再次发送。
     const snapshot = (await b.snapshot({ label: 'publish-confirm' }).catch(() => null))?.dir
+    // 发推框还开着（视频推文提交要一会儿）就先等它关掉再离开页面，离开会打断提交
+    for (let i = 0; i < 60 && (await b.exists(`[role="dialog"][aria-modal="true"] ${SEL.postBtn}`).catch(() => false)); i++) await ctx.sleep(2000)
     ctx.log('X publish: confirming from profile', snapshot ?? '')
-    try {
-      const { tweets } = await readTimeline(ctx, b, ch.handle, ch.platform_uid, 1)
-      const hit = tweets.find((t) => norm(t.text) === norm(text) && Date.parse(t.created) >= sentAt - 60_000)
-      if (hit) { ctx.log('X publish confirmed existing post', hit.id); return done(hit.id, { confirmed_from_profile: true }) }
-    } catch (e: any) { ctx.log('X profile confirmation failed', e?.message ?? String(e)) }
+    for (let i = 0; i < 3; i++) {
+      try {
+        const { tweets } = await readTimeline(ctx, b, ch.handle, ch.platform_uid, 1)
+        const hit = tweets.find((t) => norm(t.text) === norm(text) && Date.parse(t.created) >= sentAt - 60_000)
+        if (hit) { ctx.log('X publish confirmed existing post', hit.id); return done(hit.id, { confirmed_from_profile: true }) }
+      } catch (e: any) { ctx.log('X profile confirmation failed', e?.message ?? String(e)) }
+      await ctx.sleep(5000) // 刚发的推文主页上可能晚几秒才出来
+    }
     const msg = created.map((r: any) => r.json?.errors?.[0]?.message).find(Boolean)
       || L(ctx, '发布结果尚未确认，请先查看账号主页后重试', 'Post result is not confirmed. Check the account profile before retrying.')
     const failure: any = new Error(L(ctx, '发布确认失败：', 'Post confirmation failed: ') + (/duplicate/i.test(msg) ? L(ctx, '和之前发过的一条内容重复，X 不让重复发', 'It duplicates an earlier post.') : msg) + (snapshot ? L(ctx, `（现场：${snapshot}）`, ` (snapshot: ${snapshot})`) : ''))
