@@ -88,7 +88,7 @@ async function fixture(ctx, { rejection = false, slate = false, topics = [], dou
         document.querySelector('#'+kind+'-panel input').onchange=e=>{
           window.uploads.push({kind,files:[...e.target.files].map(f=>f.name)});
           const n=e.target.files.length;
-          document.body.insertAdjacentHTML('beforeend','<input placeholder="添加作品标题"><div class="zone-container" contenteditable="true" ${slate ? 'data-slate-editor="true"' : ''}></div><div class="upload-status">上传成功</div><p>已添加'+n+'张图片</p>'+Array.from({length:n},()=>'<div class="img-fixture" draggable="true"><img src="https://media.test/ready.png"></div>').join('')+'<button id="submit" onclick="window.submitted=true">发布</button>');
+          document.body.insertAdjacentHTML('beforeend','<input placeholder="添加作品标题"><div class="zone-container" contenteditable="true" ${slate ? 'data-slate-editor="true"' : ''}></div><div class="upload-status">上传成功</div><p>已添加'+n+'张图片</p>'+Array.from({length:n},()=>'<div class="img-fixture" draggable="true"><img src="https://media.test/ready.png"></div>').join('')+'<button id="submit" onclick="window.submitted=true;window.noteSubmit?.()">发布</button>');
           const ed=document.querySelector('.zone-container');
           const toEnd=()=>{const r=document.createRange();r.selectNodeContents(ed);r.collapse(false);const s=getSelection();s.removeAllRanges();s.addRange(r)};
           // 粘贴：替换整个编辑区；doublePaste 模拟 2026-10 的重复正文（插在原来的字后面又来一遍）
@@ -129,6 +129,19 @@ async function fixture(ctx, { rejection = false, slate = false, topics = [], dou
       if (typeof target !== 'string') return Promise.reject(new Error('No popup'))
       await page.locator(target).first().click()
     },
+    // 浏览器助手的桩：像模型那样给标题框、简介框、发布按钮编号，填标题，再按任务调工具
+    agent: async (task, opts) => {
+      b.agentRuns.push({ task, opts })
+      await page.evaluate(() => [document.querySelector('input[placeholder="添加作品标题"]'), document.querySelector('.zone-container'), document.getElementById('submit')].forEach((e, i) => e?.setAttribute('data-annulo-act', String(i + 1))))
+      await page.locator('[data-annulo-act="1"]').fill(ctx.rows.get('post').title)
+      const call = (name, args = {}) => opts.tools[name]?.run(args)
+      await call('fill_description', { id: 2 })
+      await call('wait_upload')
+      await call('set_cover')
+      const r = await call('publish', { title_id: 1, button_id: 3 })
+      return r?.finish ? { ok: true, summary: r.finish } : { ok: false, reason: String(r) }
+    },
+    agentRuns: [],
     responses: async () => (await page.evaluate(() => window.submitted)) ? [{ json: { status_code: rejection ? 1 : 0, status_msg: rejection ? 'Rejected fixture' : '', item_id: rejection ? '' : '1234567890123456789' } }] : [],
   }
   ctx.browser = { open: async () => b }
@@ -175,7 +188,7 @@ test('a hashtag Douyin has no suggestion for is left out and reported, the post 
 test('a description that reads back wrong is never submitted; without a way to show the window it fails with the reason', async () => {
   const ctx = context({body:'Body text'}), {page}=await fixture(ctx,{slate:true,doublePaste:true})
   try {
-    await assert.rejects(dy.publish({post_id:'post'},ctx),/description isn't right/)
+    await assert.rejects(dy.publish({post_id:'post'},ctx),/description/)
     assert.equal(await page.evaluate(()=>window.submitted),false)
     assert.equal(ctx.rows.get('post').status,'failed')
   } finally { await page.close() }
@@ -190,6 +203,19 @@ test('handing over: the window is shown, the person fixes it and publishes, and 
     assert.equal(ctx.rows.get('post').status,'published')
     assert.equal(ctx.rows.get('post').post_url,'https://www.douyin.com/note/1234567890123456789')
   } finally { await page.close() }
+})
+test('dry run fills and checks everything, never clicks 发布 and leaves the post as it was', async () => {
+  const ctx = context({body:'Body',tags:'["one"]'}), {page,b}=await fixture(ctx,{slate:true,topics:['one']})
+  try {
+    let clicked = false
+    await page.exposeFunction('noteSubmit', () => { clicked = true })
+    const r = await dy.publish({post_id:'post',dry_run:true},ctx)
+    assert.equal(r.dry_run,true)
+    assert.deepEqual(r.need,[])
+    assert.equal(clicked,false)
+    assert.equal(ctx.rows.get('post').status,'approved')
+    assert.deepEqual(b.agentRuns[0].opts.avoid,['发布'])
+  } finally { if (!page.isClosed()) await page.close() }
 })
 test('missing images cannot reach browser upload', async () => {
   const ctx = context({images:'[]'}); ctx.browser={open:()=>assert.fail('Browser must not open')}
@@ -209,7 +235,7 @@ test('a requested video cover failure stops the real publisher before final subm
   const ctx = context({video:'local:fixture.mp4',images:'[]',video_cover:'/_annulo/uploaded/cover.png'})
   const {page}=await fixture(ctx)
   try {
-    await assert.rejects(dy.publish({post_id:'post'},ctx),/cover.*nothing was published/)
+    await assert.rejects(dy.publish({post_id:'post'},ctx),/Not published.*cover/)
     assert.equal(ctx.rows.get('post').status,'failed')
     assert.equal(ctx.rows.get('post').video_cover,'/_annulo/uploaded/cover.png')
     assert.equal(await page.evaluate(()=>window.submitted),false)
