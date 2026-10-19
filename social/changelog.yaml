@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.9
+  zh: 抖音发布更稳：话题改为从候选里点选（之前只是文字），标题和简介填完逐项核对，不对就不发；卡住时把填好的窗口交给你接着发。
+  en: "More reliable Douyin publishing: hashtags are picked from Douyin's suggestions (they were plain text before), title and description are checked before posting, and when it gets stuck the filled-in window is handed to you to finish."
 - version: 0.8.8
   zh: 新增独立视频封面字段，小红书与抖音保存、校验、即时和定时发布保留封面；抖音设在竖封面（3:4）上。上传时限定封面编辑器并验证新预览，失败则停止发布，避免静默丢失封面。封面弹窗里有多个图片入口（如抖音的「生成参考图」）时只认「上传封面」旁边那个，「上传封面」只点一次；脚本认不出弹窗或上传入口时请浏览器助手帮一步（不会替你点完成或发布）；失败时保存现场，方便「交给助手修」。
   en: "Add independent video covers for Xiaohongshu and Douyin drafts, validation and immediate or scheduled publishing. Douyin's cover goes on the vertical (3:4) slot. Scope uploads to the cover editor and verify a new preview; stop publishing on failure rather than silently losing the selected cover. When the editor has several image inputs (such as Douyin's reference-image picker), use only the one next to \"上传封面\" and click it at most once; if the script can't find the editor or upload input, the browser assistant helps with that step (it never clicks Done or Publish); failures keep a snapshot for \"Fix with assistant\"."

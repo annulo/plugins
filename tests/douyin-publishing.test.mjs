@@ -67,7 +67,7 @@ test('a legacy video draft without a selected video does not switch itself into 
   assert.ok(saved.problems.some(p=>p.includes('No media yet')))
 })
 
-async function fixture(ctx, { rejection = false, slate = false } = {}) {
+async function fixture(ctx, { rejection = false, slate = false, topics = [], doublePaste = false } = {}) {
   const page = await browser.newPage()
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6mWQAAAAASUVORK5CYII=', 'base64')
   await page.route('https://media.test/**', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>' }))
@@ -89,7 +89,24 @@ async function fixture(ctx, { rejection = false, slate = false } = {}) {
           window.uploads.push({kind,files:[...e.target.files].map(f=>f.name)});
           const n=e.target.files.length;
           document.body.insertAdjacentHTML('beforeend','<input placeholder="添加作品标题"><div class="zone-container" contenteditable="true" ${slate ? 'data-slate-editor="true"' : ''}></div><div class="upload-status">上传成功</div><p>已添加'+n+'张图片</p>'+Array.from({length:n},()=>'<div class="img-fixture" draggable="true"><img src="https://media.test/ready.png"></div>').join('')+'<button id="submit" onclick="window.submitted=true">发布</button>');
-          document.querySelector('.zone-container').onpaste=e=>{e.preventDefault();e.currentTarget.innerText=e.clipboardData.getData('text/plain')};
+          const ed=document.querySelector('.zone-container');
+          const toEnd=()=>{const r=document.createRange();r.selectNodeContents(ed);r.collapse(false);const s=getSelection();s.removeAllRanges();s.addRange(r)};
+          // 粘贴：替换整个编辑区；doublePaste 模拟 2026-10 的重复正文（插在原来的字后面又来一遍）
+          ed.onpaste=e=>{e.preventDefault();const t=e.clipboardData.getData('text/plain');ed.innerText=${doublePaste ? "t+t" : "t"};toEnd()};
+          // 话题：输入 #xxx 后弹候选（只有 topics 里的），点了把 #xxx 换成话题块
+          const known=${JSON.stringify(topics)};
+          ed.addEventListener('input',()=>{
+            document.getElementById('cands')?.remove();
+            const m=/#([^#\s]+)$/.exec(ed.innerText.replace(/\u00a0/g,' '));
+            if(!m||!known.includes(m[1]))return;
+            document.body.insertAdjacentHTML('beforeend','<div id="cands"><div class="tag-item"><span class="tag-hash-view-name-x">'+m[1]+'</span></div></div>');
+            document.querySelector('#cands span').onmousedown=e=>e.preventDefault();
+            document.querySelector('#cands span').onclick=()=>{
+              const last=ed.lastChild;last.textContent=last.textContent.replace(/#[^#\s]+$/,'');
+              ed.insertAdjacentHTML('beforeend','<div data-mention="#" contenteditable="false" style="display:inline">&nbsp;<span>#'+m[1]+'</span>&nbsp;</div>&#8203;');
+              document.getElementById('cands').remove();ed.focus();toEnd();
+            };
+          });
         }
       }
       </script>` })
@@ -136,12 +153,42 @@ test('an explicit platform rejection stays failed', async () => {
   try { await assert.rejects(dy.publish({post_id:'post'},ctx),/Rejected fixture/); assert.equal(ctx.rows.get('post').status,'failed') }
   finally { await page.close() }
 })
-test('Slate captions retain paragraph text and hashtags without duplication', async () => {
-  const ctx = context({body:'First paragraph\nSecond paragraph',tags:'["one","two"]'}), {page}=await fixture(ctx,{slate:true})
+test('Slate captions keep the body once and hashtags become topic blocks picked from the suggestions', async () => {
+  const ctx = context({body:'First paragraph\nSecond paragraph',tags:'["one","two"]'}), {page}=await fixture(ctx,{slate:true,topics:['one','two']})
+  try {
+    const r = await dy.publish({post_id:'post'},ctx)
+    assert.equal(r.warnings, undefined)
+    assert.deepEqual(await page.locator('[data-mention="#"]').allInnerTexts().then(l=>l.map(t=>t.trim())),['#one','#two'])
+    assert.match(await page.locator('.zone-container').innerText(),/^First paragraph\nSecond paragraph/)
+    assert.equal(ctx.rows.get('post').status,'published')
+  } finally { await page.close() }
+})
+test('a hashtag Douyin has no suggestion for is left out and reported, the post still goes out', async () => {
+  const ctx = context({body:'Body',tags:'["one","nope"]'}), {page}=await fixture(ctx,{slate:true,topics:['one']})
+  try {
+    const r = await dy.publish({post_id:'post'},ctx)
+    assert.equal(ctx.rows.get('post').status,'published')
+    assert.match(r.warnings.join(' '),/nope/)
+    assert.doesNotMatch(await page.locator('.zone-container').innerText(),/#nope/)
+  } finally { await page.close() }
+})
+test('a description that reads back wrong is never submitted; without a way to show the window it fails with the reason', async () => {
+  const ctx = context({body:'Body text'}), {page}=await fixture(ctx,{slate:true,doublePaste:true})
+  try {
+    await assert.rejects(dy.publish({post_id:'post'},ctx),/description isn't right/)
+    assert.equal(await page.evaluate(()=>window.submitted),false)
+    assert.equal(ctx.rows.get('post').status,'failed')
+  } finally { await page.close() }
+})
+test('handing over: the window is shown, the person fixes it and publishes, and the post is recorded', async () => {
+  const ctx = context({body:'Body text'}), {page,b}=await fixture(ctx,{slate:true,doublePaste:true})
+  let shown = 0
+  b.show = async () => { shown++; setTimeout(()=>page.evaluate(()=>document.getElementById('submit').click()),50) }
   try {
     await dy.publish({post_id:'post'},ctx)
-    assert.equal(await page.locator('.zone-container').innerText(),'First paragraph\nSecond paragraph\n#one #two')
+    assert.equal(shown,1)
     assert.equal(ctx.rows.get('post').status,'published')
+    assert.equal(ctx.rows.get('post').post_url,'https://www.douyin.com/note/1234567890123456789')
   } finally { await page.close() }
 })
 test('missing images cannot reach browser upload', async () => {

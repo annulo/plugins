@@ -6,6 +6,7 @@ import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_s
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
 import { Expired, runProbe } from './_health'
 import { selectUpload, waitImages } from './_douyin_upload'
+import { assist, markReady, readySel } from './_assist'
 
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_douyin_spec'
@@ -28,7 +29,7 @@ export { problems as draftProblems } from './_douyin_spec'
 // 页面结构和接口（2026-09）写成常量，抖音改版时只改这里。
 //
 // 两种上传入口及图文填写已在真实账号核对；平台改版时重点检查：
-//   1. 上传入口（_douyin_upload.ts）与标题、简介框（SEL.title / desc），正文和话题整段粘贴后核对；
+//   1. 上传入口（_douyin_upload.ts）与标题、简介框（SEL.title / desc）：正文整段粘贴后读回核对；话题输「#话题」后从候选里点选（SEL.topicOption），核对话题块（SEL.mention）；
 //   2. 等上传完成的判断（TEXT.uploaded：上传完后出现「重新上传」）；
 //   3. 点发布后要验证身份时（TEXT.verify）：换成可见窗口重发一遍，等用户输短信验证码或扫码；要求设置封面时（TEXT.needCover）怎么选封面（SEL.coverBtn、TEXT.coverDone）；
 //   4. 发布结果：监听 API.create（/web/api/media/aweme/create…）的响应拿作品 id；没拿到再看是否跳到作品管理页 / TEXT.success；
@@ -85,6 +86,11 @@ const SEL = {
   coverBtn: '[class*="cover"] [class*="upload"], [class*="coverControl"], [class*="cover-select"]',
   coverControl: '[class*="coverControl"]', // 发布页上横、竖封面各一块，里面写着「横封面4:3」「竖封面3:4」和「选择封面」
   card: '[class*="video-card"], [class*="card-container"], [class*="work-card"]', // 作品管理里的一张作品卡片
+  // 话题（2026-10）：简介里输「#话题」弹出候选，点了才变成话题块 <div data-mention="#">#话题</div>；只是文字的 #话题 抖音不认
+  mention: '[data-mention="#"]',
+  topicOption: '[class*="tag-hash-view-name"]', // 候选里的话题名
+  // 点发布后抖音的提示（toast、通知、表单下的红字），失败时原样告诉用户
+  notice: '[class*="toast"], [class*="Toast"], [class*="notification"], [class*="notice"], [class*="error-text"], [class*="errorText"], [class*="form-error"]',
 }
 const TEXT = {
   uploaded: /重新上传|上传成功|上传完成/,
@@ -414,40 +420,100 @@ function markByText(b: any, sel: string, text: string, mark: string) {
 /** 读输入框 / 编辑框里现在的文字 */
 const valueOf = (b: any, sel: string) => b.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).then((v: any) => String(v ?? ''), () => '')
 
-/** 填一个框（input 或 contenteditable）：先 clear + 打字；没进去再在页面里 insertText；都不对就报错 */
-async function fill(ctx: any, b: any, sel: string, text: string, what: string) {
-  const normText = (v: string) => v.replace(/[\s\u200B-\u200D\uFEFF]+/g, '')
-  const same = async () => normText(await valueOf(b, sel)) === normText(text)
-  const slate = await b.eval(`!!document.querySelector(${JSON.stringify(sel)})?.hasAttribute('data-slate-editor')`)
-  if (slate) {
-    // Slate 的 DOM Range 和内部光标可能不同步；先清空选中的编辑区，再整段粘贴，避免重复正文或话题丢失。
-    await b.click(sel)
-    await b.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); e.focus(); const r=document.createRange();r.selectNodeContents(e);const s=window.getSelection();s.removeAllRanges();s.addRange(r);document.dispatchEvent(new Event('selectionchange')) })()`)
-    await ctx.sleep(150)
-    await b.press('Backspace')
-    await ctx.sleep(150)
-    await b.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)});e.focus();const data=new DataTransfer();data.setData('text/plain',${JSON.stringify(text)});e.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true})) })()`)
-  } else await b.type(sel, text, { clear: true }).catch(() => {})
-  await ctx.sleep(600)
-  if (await same()) return
+const squash = (s: string) => String(s ?? '').replace(/[\s\u200B-\u200D\uFEFF\u00a0]+/g, '')
+
+/** 填标题（普通输入框）：清空再打字；没进去就在页面里直接设值。返回最后填对没有 */
+async function fillTitle(ctx: any, b: any, text: string) {
+  const same = async () => squash(await valueOf(b, SEL.title)) === squash(text)
+  await b.type(SEL.title, text, { clear: true }).catch(() => {})
+  await ctx.sleep(500)
+  if (await same()) return true
   await b.eval(`(() => {
-    const el = document.querySelector(${JSON.stringify(sel)})
-    if (!el) return false
+    const el = document.querySelector(${JSON.stringify(SEL.title)})
+    if (!el) return
     el.focus()
-    if ('value' in el && el.tagName !== 'DIV') {
-      const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set
-      set.call(el, ${JSON.stringify(text)})
-      el.dispatchEvent(new Event('input', { bubbles: true }))
-      el.dispatchEvent(new Event('change', { bubbles: true }))
-    } else {
-      const range = document.createRange(); range.selectNodeContents(el)
-      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range)
-      document.execCommand('insertText', false, ${JSON.stringify(text)})
-    }
-    return true
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(text)})
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
   })()`).catch(() => {})
-  await ctx.sleep(600)
-  if (!(await same())) throw new Error(L(ctx, `${what}没填进去，抖音的发布页可能改了`, `Couldn't fill in the ${what} — Douyin's publish page may have changed`))
+  await ctx.sleep(500)
+  return same()
+}
+
+/** 简介框现在的内容：正文（去掉话题块）和已经变成话题块的话题；没有简介框返回 null */
+async function descState(b: any): Promise<{ text: string; topics: string[] } | null> {
+  return b
+    .eval(`(() => {
+      const e = document.querySelector(${JSON.stringify(SEL.desc)})
+      if (!e) return null
+      const c = e.cloneNode(true)
+      c.querySelectorAll('[data-mention]').forEach(m => m.remove())
+      return { text: c.textContent || '', topics: [...e.querySelectorAll(${JSON.stringify(SEL.mention)})].map(m => (m.textContent || '').replace(/[#\\s\\u00a0\\u200b]+/g, '')) }
+    })()`)
+    .catch(() => null)
+}
+
+/**
+ * 清空简介框（Slate 编辑器），把正文整段粘贴进去。清空有两种办法：选中整个编辑区按退格；不灵再用 selectAll。
+ * 不用 b.type：它先点编辑框正中间，Slate 有时把字插在点的位置，整段正文夹进原来的字中间（2026-10 出现过）。
+ */
+async function pasteDesc(ctx: any, b: any, text: string, how: 'range' | 'command') {
+  const sel = JSON.stringify(SEL.desc)
+  await b.click(SEL.desc).catch(() => {})
+  if (how === 'range') await b.eval(`(() => { const e = document.querySelector(${sel}); e.focus(); const r = document.createRange(); r.selectNodeContents(e); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); document.dispatchEvent(new Event('selectionchange')) })()`).catch(() => {})
+  else await b.eval(`(() => { document.querySelector(${sel}).focus(); document.execCommand('selectAll') })()`).catch(() => {})
+  await ctx.sleep(200)
+  await b.press('Backspace').catch(() => {})
+  await ctx.sleep(200)
+  if (text) await b.eval(`(() => { const e = document.querySelector(${sel}); e.focus(); const d = new DataTransfer(); d.setData('text/plain', ${JSON.stringify(text)}); e.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true })) })()`).catch(() => {})
+  await ctx.sleep(800)
+}
+
+/**
+ * 在简介的光标处（粘贴完正文就在末尾）输入「#话题」，等候选出来，点名字一模一样的那个，抖音把它变成话题块。
+ * 候选里没有一样的（抖音没有这个话题，或者不让用）：删掉输入的字，返回 false。
+ */
+async function addTopic(ctx: any, b: any, tag: string) {
+  const typed = '#' + tag
+  // 焦点不在简介框里时 insertText 会写到别处：不输
+  const ok = await b
+    .eval(`(() => { const e = document.querySelector(${JSON.stringify(SEL.desc)}); if (!e || !e.contains(document.activeElement)) return false; return document.execCommand('insertText', false, ${JSON.stringify(typed)}) })()`)
+    .catch(() => false)
+  if (!ok) return false
+  let hit = false
+  for (const end = Date.now() + 5000; !hit && Date.now() < end; ) {
+    await ctx.sleep(500)
+    hit = await markByText(b, SEL.topicOption, tag, 'topic')
+  }
+  if (hit && (await b.click('[data-shuttle-mark="topic"]').then(() => true, () => false))) {
+    await ctx.sleep(600)
+    return !!(await descState(b))?.topics.includes(squash(tag))
+  }
+  for (let i = 0; i < [...typed].length; i++) await b.press('Backspace').catch(() => {})
+  return false
+}
+
+/** 填简介和话题：正文粘贴后读回来逐字核对（不对换一种清空办法再来），再一个个加话题。返回正文对不对、哪些话题没加上 */
+async function fillDesc(ctx: any, b: any, body: string, tags: string[]) {
+  let ok = false
+  for (const how of ['range', 'command'] as const) {
+    await pasteDesc(ctx, b, body, how)
+    const s = await descState(b)
+    if (s && squash(s.text) === squash(body) && !s.topics.length) {
+      ok = true
+      break
+    }
+  }
+  if (!ok) return { body: false, missing: tags }
+  for (const t of tags) await addTopic(ctx, b, t)
+  const s = await descState(b)
+  return { body: !!s && squash(s.text) === squash(body), missing: tags.filter((t) => !s?.topics.includes(squash(t))) }
+}
+
+/** 页面上现在显示的提示（toast、通知、红字），失败时原样告诉用户 */
+async function notices(b: any): Promise<string[]> {
+  const list = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.notice)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 120)`).catch(() => [])
+  return Array.isArray(list) ? list.map(String) : []
 }
 
 /** 上传进度：返回 { done, failed, pct }（pct 读不到是 -1） */
@@ -509,30 +575,44 @@ async function clickSubmit(b: any) {
   return false
 }
 
-/** 发布接口的响应：{ status_code, status_msg, item_id / aweme_id }；没等到返回 null */
+/** 发布接口的响应：{ status_code, status_msg, item_id / aweme_id }；没等到返回 null。发过几次（用户在窗口里重试）时认成功的那次，没有就认最后一次 */
 async function createResult(b: any): Promise<{ code: number; message: string; id: string } | null> {
   const rs = await b.responses(API.create, { min: 0 }).catch(() => [])
+  let last: { code: number; message: string; id: string } | null = null
   for (const r of rs ?? []) {
     if (!r.json) continue
     const j = r.json
     const id = String(j.item_id ?? j.aweme_id ?? j.data?.item_id ?? j.data?.aweme_id ?? find(j, (x) => /^\d{10,}$/.test(String(x.aweme_id ?? x.item_id ?? '')))?.aweme_id ?? '')
-    return { code: Number(j.status_code ?? -1), message: String(j.status_msg ?? j.message ?? ''), id: /^\d+$/.test(id) ? id : '' }
+    last = { code: Number(j.status_code ?? -1), message: String(j.status_msg ?? j.message ?? ''), id: /^\d+$/.test(id) ? id : '' }
+    if (last.code === 0) return last
   }
-  return null
+  return last
 }
+
+type Outcome = { b: any; res: Awaited<ReturnType<typeof createResult>>; okPage: boolean; warnings: string[] }
 
 /**
  * 发布一条图文或视频作品。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去作品列表里找有没有同标题的作品（含审核中），避免重复发。
  * 发布后抖音要审核：拿到作品 id 就记成已发布，采集会继续更新它的数据。
+ *
+ * 抖音的页面常改、还有 A/B 测试，脚本不可能每一步都认得。所以每一项都按「填 → 读回来核对」做，分两级：
+ *   - 必须对的（视频、标题、简介正文、用户选的封面）：不对就不点发布；
+ *   - 尽量做的（话题）：没加上就照发，结果里带 warnings；
+ * 卡住的一步先请浏览器助手（_assist.ts）帮；必须的项还是不对、或者点了发布抖音不收（检测没过、要补必填项…），
+ * 就把窗口调到前台交给用户（b.show，Annulo 能力版本 49）：别的都已填好，用户改好点「发布」，这里等到发布结果照常记下。
+ * 调不到前台的（老版本 Annulo、后台定时任务）照原来报错，写清楚卡在哪。
+ *
+ * dry_run：演练，走完上传、填写、核对，停在点「发布」之前，返回 { dry_run, need, warnings, snapshot }（need 是必须的项哪些不对，snapshot 是那时页面的现场目录），
+ * 不改这条的状态、不交给用户。改脚本后在真实账号上验证、自检提前发现改版都用它，不用真发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条作品：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   // 视频上传要十几分钟：认领 60 分钟内的不重复发
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < 60 * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
-  if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
+  if (!input.dry_run && !['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = dyChannel(ctx, p.channel_id)
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
@@ -550,7 +630,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const claimedBefore = p.claimed_at
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (id: string, extra: object = {}) => {
     const url = id ? postUrl(id, p) : MANAGE
     ctx.db.update('social_posts', p.id, { status: 'published', post_id: id || null, post_url: url, published_at: now(), updated_at: now(), error: null })
@@ -563,12 +643,58 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const hit = r.videos.find((v) => !v.deleted && sameTitle(v, p.title) && (!v.created || Date.parse(v.created) >= sinceMs))
     return hit?.id ?? ''
   }
+  const body = String(p.body ?? '').trim()
+  const titleWrong = L(ctx, `标题没填对：改成「${p.title}」`, `The title isn't right: change it to "${p.title}"`)
+  const bodyWrong = L(ctx, '简介没填对：清空简介框，照 Annulo 里这条的简介重新填', "The description isn't right: clear it and paste this post's description from Annulo")
+  /** 点发布前、交给用户前核对必须的项：标题、简介正文 */
+  const required = async (b: any) => {
+    const out: string[] = []
+    if (squash(await valueOf(b, SEL.title)) !== squash(p.title)) out.push(titleWrong)
+    if (body || tags.length) {
+      const s = await descState(b)
+      if (!s || squash(s.text) !== squash(body)) out.push(bodyWrong)
+    }
+    return out
+  }
+  /** 报错：没发出去，卡在哪；窗口在用户眼前的会留着（Annulo 在函数失败时不关看得见的窗口） */
+  const stuck = (why: string[], kept: boolean) =>
+    new Error(
+      L(ctx, `没发出去：${why.join('；')}。`, `Not published: ${why.join('; ')}. `) +
+        (kept
+          ? L(ctx, '抖音的窗口还开着，别的都已填好：在里面改好点「发布」就行，之后点「采集」会把它对上这一条。', "Douyin's window is still open with everything else filled in: fix it there and click 发布 (Publish); collecting stats afterwards links it to this post.")
+          : L(ctx, '到页面上再点一次「发布」，卡住时会弹出抖音窗口交给你接着弄；也可以到抖音创作者中心手动发。', "Click Publish on the page again — if it gets stuck, the Douyin window opens for you to finish; or post it in Douyin's creator center."))
+    )
+
   /**
-   * 在一个浏览器窗口里走一遍：上传、填写、点发布、等结果。show 是可见窗口（要用户验证身份时用）。
-   * 后台窗口里碰到身份验证返回 'verify'（调用方换成可见窗口重来）；可见窗口里等用户验证完，最多 5 分钟。
+   * 在一个浏览器窗口里走一遍：上传、填写、核对、点发布、等结果。show 是可见窗口。
+   * 碰到身份验证、必须的项不对、抖音不收：把窗口调到前台交给用户（b.show）；调不出来时，身份验证返回 'verify'（调用方换成可见窗口重来），别的报错。
    */
-  const attempt = async (show: boolean): Promise<'verify' | { b: any; res: Awaited<ReturnType<typeof createResult>>; okPage: boolean }> => {
+  async function attempt(show: boolean): Promise<'verify' | Outcome | { dry_run: true; b: any; need: string[]; warnings: string[] }> {
     const b = await openBrowser(ctx, { profile: ch.browser_profile, show })
+    let shown = show
+    const warnings: string[] = []
+    /** 把窗口调到前台交给用户；调不出来返回 false */
+    const reveal = async () => {
+      if (!shown && typeof b.show === 'function') shown = await b.show().then(() => true, () => false)
+      return shown
+    }
+    /** 交给用户：告诉他卡在哪，等他在窗口里点发布（最多 15 分钟）；等到发布结果就照常记下，等不到报错、窗口留着 */
+    const handOver = async (why: string[]): Promise<Outcome> => {
+      if (!(await reveal())) throw stuck(why, false)
+      ctx.progress({ message: L(ctx, `要你在弹出的抖音窗口里接手：${why.join('；')}。别的都已填好，改好后点「发布」，发出去这里会自动记下`, `Over to you in the Douyin window that opened: ${why.join('; ')}. Everything else is filled in — fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+      for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+        await ctx.sleep(2000)
+        const res = await createResult(b)
+        if (res?.code === 0) return { b, res, okPage: false, warnings }
+        const text = String(await b.eval(`document.body.innerText`).catch(() => ''))
+        if (/\/content\/manage/.test(String(b.url() ?? '')) || TEXT.success.test(text)) {
+          await ctx.sleep(1500)
+          return { b, res: await createResult(b), okPage: true, warnings }
+        }
+      }
+      throw stuck([...why, L(ctx, '15 分钟内没等到你发布', 'No publish within 15 minutes')], true)
+    }
+
     ctx.progress({ message: L(ctx, '打开上传页…', 'Opening the upload page…') })
     const selector = await openUpload(ctx, b, ch, video ? 'video' : 'image')
     b.listen(API.create)
@@ -576,17 +702,23 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     await b.upload(selector, video ? [video] : images, { timeout: 10 * 60_000 }).catch((e: any) => {
       throw new Error(L(ctx, '素材没传上去（下载失败、本机文件找不到，或者文件太大）：', "The media didn't upload (download failed, local file missing, or the file is too large): ") + (e?.message ?? e))
     })
-    await b.waitFor(SEL.title, { timeout: 120000 }).catch(() => {
-      throw new Error(L(ctx, '选了素材，但没出现填写标题的表单（格式抖音不认，或者页面改了）', "Picked media, but the details form didn't appear (Douyin may not accept the format, or the page changed)"))
-    })
+    if (!(await b.waitFor(SEL.title, { timeout: 120000 }).then(() => true, () => false))) {
+      // 表单可能被弹窗、引导挡住：请浏览器助手帮一步
+      const ok = await assist(ctx, b, '让填写作品信息的表单出现（作品标题输入框）；不要点发布', { until: SEL.title, avoid: TEXT.submit })
+      if (!ok) throw new Error(L(ctx, '选了素材，但没出现填写标题的表单（格式抖音不认，或者页面改了）', "Picked media, but the details form didn't appear (Douyin may not accept the format, or the page changed)"))
+    }
     await ctx.sleep(1500)
     await dismissPopups(ctx, b)
     if (!video) await waitImages(ctx, b, images.length)
 
     ctx.progress({ message: L(ctx, '填写标题、简介、话题…', 'Filling in title, description and hashtags…') })
-    await fill(ctx, b, SEL.title, p.title, L(ctx, '标题', 'title'))
-    const body = descText(String(p.body ?? '').trim(), tags)
-    if (body) await fill(ctx, b, SEL.desc, body, L(ctx, '简介和话题', 'description and hashtags'))
+    const need: string[] = []
+    if (!(await fillTitle(ctx, b, p.title))) need.push(titleWrong)
+    if (body || tags.length) {
+      const d = await fillDesc(ctx, b, body, tags)
+      if (!d.body) need.push(bodyWrong)
+      if (d.missing.length) warnings.push(L(ctx, `这些话题没加上（抖音的候选里没有一模一样的）：${d.missing.join('、')}`, `These hashtags weren't added (no exact match in Douyin's suggestions): ${d.missing.join(', ')}`))
+    }
 
     // 等上传完：大视频要十几分钟，每半分钟报一次进度
     const deadline = Date.now() + 30 * 60_000
@@ -607,24 +739,43 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       // 填完话题，联想下拉还开着，会挡住下面的封面区：先收起
       await b.press('Escape').catch(() => {})
       await ctx.sleep(300)
-      await uploadVideoCover(ctx, b, p.video_cover, '抖音', 60000, { entry: await markCoverEntry(b) })
+      await uploadVideoCover(ctx, b, p.video_cover, '抖音', 60000, { entry: await markCoverEntry(b) }).catch((e: any) => {
+        need.push(L(ctx, '封面没换上：在「设置封面」里换成这条的封面', "The cover wasn't set: change it under 设置封面 (Set cover)") + `（${e?.message ?? e}）`)
+      })
     }
 
+    // 后面的步骤（封面弹窗、话题候选）可能动到前面填好的：点发布前再核对一遍
+    if (!need.length) need.push(...(await required(b)))
+    if (input.dry_run) return { dry_run: true, b, need, warnings }
+    if (need.length) return handOver(need)
+
     ctx.progress({ message: L(ctx, '发布…', 'Publishing…') })
-    if (!(await clickSubmit(b))) throw new Error(L(ctx, '没找到「发布」按钮（TEXT.submit），抖音的页面可能改了', "Couldn't find the \"发布\" (Publish) button (TEXT.submit) — Douyin's page may have changed"))
+    /** 点「发布」：脚本找不到就请浏览器助手把按钮弄出来（关掉挡着的东西），发布还是脚本点 */
+    const submit = async () => {
+      if (await clickSubmit(b)) return true
+      const stop = await markReady(b, 'submit', TEXT.submit)
+      try {
+        return (await assist(ctx, b, '让「发布」按钮露出来、能点（不要点发布）', { until: readySel('submit'), avoid: TEXT.submit })) && (await b.click(readySel('submit')).then(() => true, () => false))
+      } finally {
+        await stop()
+      }
+    }
+    if (!(await submit())) return handOver([L(ctx, '没找到能点的「发布」按钮', 'No clickable 发布 (Publish) button found')])
     // 等发布接口的响应（拿作品 id），或者跳到作品管理页 / 出现「发布成功」；要封面时补选一次再点发布；要验证身份时等用户验证
     let end = Date.now() + 90000
     let res: Awaited<ReturnType<typeof createResult>> = null
     let okPage = false
     let coverTried = false
     let verifying = false
+    const seen = new Set<string>()
     while (Date.now() < end) {
       await ctx.sleep(1500)
       res = await createResult(b)
       if (res) break
+      for (const n of await notices(b)) seen.add(n)
       const text = String(await b.eval(`document.body.innerText`).catch(() => ''))
       if (TEXT.verify.test(text)) {
-        if (!show) {
+        if (!(await reveal())) {
           await b.close().catch(() => {})
           return 'verify'
         }
@@ -637,10 +788,10 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       }
       if (!coverTried && TEXT.needCover.test(text)) {
         coverTried = true
-        if (p.video_cover) throw new Error(L(ctx, '抖音没有接受自定义封面，已停止发布；请检查封面后重试', 'Douyin did not accept the custom cover; publishing stopped. Check the cover and retry'))
+        if (p.video_cover) return handOver([L(ctx, '抖音没有接受这条的封面：在「设置封面」里重新选', "Douyin didn't accept this post's cover: pick it again under 设置封面 (Set cover)")])
         ctx.progress({ message: L(ctx, '抖音要求设置封面，用默认封面…', 'Douyin requires a cover; using the default frame…') })
-        await ensureCover(ctx, b)
-        if (!(await clickSubmit(b))) throw new Error(L(ctx, '设置封面后没找到「发布」按钮（TEXT.submit）', "Couldn't find the \"发布\" (Publish) button after setting the cover (TEXT.submit)"))
+        const covered = await ensureCover(ctx, b).then(() => true, () => false)
+        if (!covered || !(await clickSubmit(b))) return handOver([L(ctx, '抖音要求先设置封面：在「设置封面」里选一张', 'Douyin requires a cover: pick one under 设置封面 (Set cover)')])
         continue
       }
       okPage = /\/content\/manage/.test(String(b.url() ?? '')) || TEXT.success.test(text)
@@ -651,7 +802,19 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       }
     }
     if (verifying && !res && !okPage) throw new Error(L(ctx, '5 分钟内没有完成抖音的身份验证，这条没发出去。再点一次「发布」，在弹出的窗口里验证', "Douyin's identity check wasn't completed within 5 minutes, so nothing was published. Click Publish again and verify in the window that opens"))
-    return { b, res, okPage }
+    if (res && res.code !== 0) return handOver([L(ctx, `抖音没收下：${res.message || res.code}`, `Douyin rejected it: ${res.message || res.code}`)])
+    if (!res && !okPage) {
+      const said = [...seen].slice(0, 3).join(' / ')
+      return handOver([L(ctx, '点了「发布」，但没看到发布成功', 'Clicked 发布 (Publish) but saw no success') + (said ? L(ctx, `（抖音提示：${said}）`, ` (Douyin said: ${said})`) : '')])
+    }
+    return { b, res, okPage, warnings }
+  }
+  if (input.dry_run) {
+    const r = await attempt(false)
+    if (r === 'verify' || !('dry_run' in r)) throw new Error('unreachable')
+    const snap = await r.b.snapshot?.({ label: 'dry-run' }).catch(() => null)
+    await r.b.close().catch(() => {})
+    return { dry_run: true, need: r.need, warnings: r.warnings, snapshot: snap?.dir }
   }
   try {
     if (interrupted) {
@@ -668,16 +831,14 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       ctx.progress({ message: L(ctx, '抖音要验证是本人操作，换成可见窗口重新发一次…', "Douyin wants to verify it's you; retrying in a visible window…") })
       r = await attempt(true)
     }
-    if (r === 'verify') throw new Error('unreachable')
-    const { b, res, okPage } = r
-    if (res && res.code !== 0) throw new Error(L(ctx, `抖音没收下这条作品：${res.message || res.code}`, `Douyin rejected the post: ${res.message || res.code}`))
-    if (res?.id) return done(res.id, { reviewing: true })
-    if (res || okPage) {
-      // 发上了但没拿到作品 id：去作品列表里按标题找
-      const id = await lookup(b, startedAt).catch(() => '')
-      return id ? done(id, { reviewing: true }) : done('', { unverified: true })
-    }
-    throw new Error(L(ctx, '点了「发布」，但没看到发布成功，可能没发出去：到抖音创作者中心看一眼（页面上可能有没填的必填项）', "Clicked Publish but saw no success — it may not have gone through: check Douyin's creator center (a required field may be missing)"))
+    if (r === 'verify' || 'dry_run' in r) throw new Error('unreachable')
+    const { b, res, okPage, warnings } = r
+    const extra = warnings.length ? { warnings } : {}
+    if (warnings.length) ctx.log(L(ctx, '发出去了，有几项没弄好：', 'Published, but some things are missing: ') + warnings.join('; '))
+    if (res?.id) return done(res.id, { reviewing: true, ...extra })
+    // 发上了但没拿到作品 id：去作品列表里按标题找
+    const id = await lookup(b, startedAt).catch(() => '')
+    return id ? done(id, { reviewing: true, ...extra }) : done('', { unverified: true, ...extra })
   } catch (e: any) {
     const msg = e?.message ?? String(e)
     ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
@@ -802,18 +963,27 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     const day = localDay()
     const today = todayRows(ctx, ch.id, day)
     const totals = channelTotals(ctx, ch)
-    // 发布时没认出作品 id 的：按标题对上
-    const unlinked: Post[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id)
+    // 发布时没认出作品 id 的：按标题对上。没发出去、交给用户在抖音窗口里接着发的（failed）也按标题对上，发布时间要在开始发它之后
+    const unlinked: Post[] = [
+      ...ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id),
+      ...ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'failed' }, limit: 100 }).list,
+    ]
     let updated = 0
     let added = 0
     for (const v of r.videos) {
       if (v.deleted) continue
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: v.id }, limit: 1 }).list[0]
       if (!hit) {
-        const u = unlinked.find((x) => sameTitle(v, x.title))
+        const u = unlinked.find((x) => sameTitle(v, x.title) && (x.status !== 'failed' || (!!v.created && Date.parse(v.created) >= Date.parse(x.claimed_at || '') - 60_000)))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: v.id, post_url: postUrl(v.id, u) })
-          hit = { ...u, post_id: v.id }
+          const patch: any = { post_id: v.id, post_url: postUrl(v.id, u) }
+          if (u.status === 'failed') {
+            Object.assign(patch, { status: 'published', published_at: v.created, error: null })
+            totals.posts++
+          }
+          ctx.db.update('social_posts', u.id, patch)
+          unlinked.splice(unlinked.indexOf(u), 1)
+          hit = { ...u, ...patch }
         }
       }
       if (!hit && !v.open) continue // 在抖音上直接发的、还在审核或不公开的先不收
