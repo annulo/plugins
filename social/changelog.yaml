@@ -3,8 +3,8 @@
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
 - version: 0.8.13
-  zh: "B站 删除稿件也交给浏览器助手：搜到这一条、打开菜单删掉，碰到验证码交给你；老的投稿脚本删掉了（要新版 Annulo）。"
-  en: "Deleting Bilibili videos is handed to the browser assistant too: it finds the video, opens its menu and deletes it, handing captchas to you. The old scripted upload flow is gone (needs a newer Annulo)."
+  zh: "知乎发布、删除改由浏览器助手看着页面做，B站 删除稿件也是；碰到验证码交给你。要新版 Annulo。"
+  en: "Zhihu publishing and deleting, and deleting Bilibili videos, are now done by the browser assistant looking at the page; captchas are handed to you. Needs a newer Annulo."
 - version: 0.8.12
   zh: B站 投稿改由浏览器助手看着页面填写（需要新版 Annulo），页面改了也能自己找到；经验记在笔记里，越用越顺。
   en: "Bilibili uploads are now filled in by the browser assistant looking at the page (needs a newer Annulo), so page changes don't break them; what it learns is kept in notes."
