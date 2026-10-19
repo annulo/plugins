@@ -6,7 +6,7 @@ import { list as healthList, record, showBrowserIf, track } from './_health'
 // 手机上打开后台（不在 Annulo 里）时这几个也能用：shuttle push 会把它们打包成站点 Func，只用 ctx.db
 export const cloud = ['check', 'createDraftBatch']
 // 手机上点也能做，转给电脑上开着的 Annulo 跑（要本机浏览器的登录态）
-export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewhereAll']
+export const remote = ['collect', 'publish', 'purge', 'remove', 'elsewhereAll']
 
 // 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts、zhihu.ts）。
 // 页面上的按钮调这里，不用关心笔记 / 推文是哪个平台的。支持哪些平台在 _platforms.ts。项目里的名字都带插件 id：social/social.publish、social/x.save……
@@ -17,11 +17,9 @@ export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewh
 //   social.login({ type, channel_id? })          添加账号 / 重新登录
 //   social.collect({ channel_id } | { type })     采集一个账号，或者某个平台的全部账号（定时任务）
 //   social.publishScheduled({ post_id })         发一条到点的排期（定时任务 schedules/publish.json 按 scheduled_at 调）
-//   social.probe({ channel_id })                 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发（各平台的 probe）
-//   social.probeAll()                            自检所有已登录的账号（定时任务，每天一次）
-//   social.health()                              各账号最近一次自检 / 发布 / 删除 / 采集成没成（social_health）
+//   social.health()                              各账号最近一次发布 / 删除 / 采集成没成（social_health）
 //
-// 发布、删除、采集、自检的结果都记进 social_health（_health.ts）：平台改了页面时页面上提示，
+// 发布、删除、采集的结果都记进 social_health（_health.ts）：平台改了页面时页面上提示，
 // 用户点「交给助手修」按任务 tasks/fix-platform.md 照着现场改平台文件。
 //   social.purge({ post_id })                    彻底删掉一条记录（只限已从平台删除的、退回的），连同每天的互动数据
 //   social.elsewhereAll()                        登录态不在这里的账号 { [channel_id]: 那台电脑的名字 }（账号卡片据此显示「登录在别的电脑」）
@@ -29,7 +27,7 @@ export const remote = ['collect', 'publish', 'probe', 'purge', 'remove', 'elsewh
 // 表：social_accounts（账号）、social_posts（帖子，channel_id 是账号的 id，article_id 是出自哪篇内容）、social_daily、social_post_daily、social_health。
 //
 // 浏览器登录态只在登录用的那个浏览器 profile 里：登录时记下 profile 的 id（social_accounts.browser_profile_id，ctx.browser.profile），
-// 本机没有这个 profile、或者 id 对不上，就是在别的电脑（或者另起的一个 Annulo）上。这时定时的发布、采集、自检跳过这个账号，
+// 本机没有这个 profile、或者 id 对不上，就是在别的电脑（或者另起的一个 Annulo）上。这时定时的发布、采集跳过这个账号，
 // 手动点的报「到那台电脑上操作，或者在这台电脑登录」，都不碰 login_status，免得把那台电脑上好好的登录标成过期。
 // browser_machine（电脑 id，ctx.workspace.machine，能力版本 15）一起记着：旧版 Annulo 按它认；以前只记了它的账号，
 // 本机有这个 profile、记的又是这台电脑（id 或电脑名一样），就改记成 profile。老账号什么都没记过：在哪台跑成功了就记成哪台。
@@ -204,7 +202,7 @@ function channelOfPost(ctx: any, postId: string) {
   return ctx.db.get('social_accounts', ctx.db.get('social_posts', postId)?.channel_id)
 }
 
-// 发布、删除、采集、自检：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
+// 发布、删除、采集：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
 export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
@@ -310,36 +308,6 @@ async function collectOne(ctx: any, channelId: string) {
     if (has) record(ctx, ch, 'collect', { ok: false, kind: 'broken', step: 'collect', error: L(ctx, '采集读到 0 条，但这个账号发过内容：平台的页面或接口可能改了', "Collected 0 posts, but this account has posted before: the platform's page or API may have changed") })
   }
   return r
-}
-
-/** 自检一个账号：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发（各平台文件的 probe），结果记进 platform_health */
-export async function probe(input: { channel_id: string; _show_browser?: boolean }, ctx: any) {
-  ctx = showBrowserIf(ctx, input)
-  const m = platformOf(ctx, input?.channel_id)
-  const ch = ctx.db.get('social_accounts', input.channel_id)
-  if (!m.probe) throw new Error(L(ctx, `${ch.type} 还没有自检`, `${ch.type} has no self-test yet`))
-  onThisMachine(ctx, ch)
-  if (ch.auth_mode !== 'api' && !ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" first`))
-  const r = await m.probe({ channel_id: ch.id }, ctx)
-  record(ctx, ch, 'probe', r)
-  if (r.kind === 'expired') ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: new Date().toISOString() })
-  else if (r.ok) ctx.db.update('social_accounts', ch.id, { login_status: 'ok', last_checked_at: new Date().toISOString(), ...(ch.auth_mode === 'api' || ch.browser_profile_id ? {} : machineFields(ctx, ch)) })
-  return r
-}
-
-/** 自检所有在这台电脑上登录过、没过期的账号（定时任务，每天一次）。一个账号失败不影响别的 */
-export async function probeAll(_input: {}, ctx: any) {
-  const out: any[] = []
-  for (const ch of ctx.db.query('social_accounts', { limit: 200 }).list) {
-    if (!PLATFORMS[ch.type]?.probe || (ch.auth_mode !== 'api' && !ch.browser_profile) || ch.login_status === 'expired' || elsewhere(ctx, ch)) continue
-    try {
-      const r = await probe({ channel_id: ch.id }, ctx)
-      out.push({ channel: ch.name, ok: r.ok, step: r.step, error: r.error })
-    } catch (e: any) {
-      out.push({ channel: ch.name, ok: false, error: e?.message ?? String(e) })
-    }
-  }
-  return { channels: out }
 }
 
 export function health(_input: {}, ctx: any) {

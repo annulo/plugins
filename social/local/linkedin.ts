@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { LI, liLen, postText, problems } from './_linkedin_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 
 // LinkedIn 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。先支持个人账号的动态，公司主页以后再加。
 //
@@ -12,7 +12,6 @@ import { Expired, runProbe } from './_health'
 //   linkedin.login / linkedin.checkLogin   本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   linkedin.publish / remove 发布（文字 + 图片，或文字 + 视频）、删除
 //   linkedin.collect                       采集自己最近帖子的互动数据和粉丝数
-//   linkedin.probe({ channel_id })         自检：登录、读账号、读帖子、打开发帖框、找发布按钮、上传入口收不收视频，不真的发（local/_health.ts）
 //
 // social_posts 的 images 是配图；填了 video（素材库的 http(s) 地址，或本机文件 local:<名字>）就发视频动态：
 // 只传视频、不传图片，过完视频编辑页（下一步 / 完成），等 LinkedIn 传完处理完（大文件要几分钟）再发。
@@ -445,7 +444,7 @@ async function newPostId(ctx: any, b: any, timeoutMs: number): Promise<string> {
   return ''
 }
 
-/** 打开发帖框，等到编辑框出来（发布和自检共用） */
+/** 打开发帖框，等到编辑框出来（发布用） */
 async function openComposer(ctx: any, b: any, ch: any) {
   await b.goto(SITE + '/feed/?shareActive=true')
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
@@ -651,61 +650,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, posts: posts.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不输入文字、不点发布（空的发帖框关掉也不会弹「保存草稿」）。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = liChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      await b.goto(SITE + '/feed/')
-      await ctx.sleep(3000)
-      if (LOGGED_OUT.test(b.url()) || !(await loggedIn(b))) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-    })
-    await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      const u = await readUser(ctx, b)
-      if (!u) throw new Error(L(ctx, '读不到账号信息：打开 /in/me/ 没跳到自己的主页', "Couldn't read the account: /in/me/ didn't lead to your profile"))
-      return `${u.name} @${u.handle}` + (u.followers != null ? L(ctx, ` · ${u.followers} 粉丝`, ` · ${u.followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
-    })
-    const posts = await t.step('posts', L(ctx, '读最近的帖子', 'Read recent posts'), async () => {
-      const list = await readPosts(ctx, b, ch.handle, 1)
-      const seen = (await b.responses(API.feed, { min: 0 }).catch(() => [])).length
-      if (!seen) throw new Error(L(ctx, `打开动态页没等到 ${API.feed} 的数据接口`, `No ${API.feed} data requests on the activity page`))
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!list.length && published) throw new Error(L(ctx, '读到 0 条帖子，但这个账号发过：帖子数据的结构可能变了', 'Read 0 posts, but this account has posted: the post data may have changed'))
-      return list
-    })
-    await t.soft('menu', L(ctx, '帖子的「更多」菜单（删除用）', 'Post menu (for deleting)'), async () => {
-      const last = posts?.[0]
-      if (!last) return L(ctx, '没有帖子，跳过', 'No posts, skipped')
-      await b.goto(`${SITE}/feed/update/${last.urn}/`)
-      await b.waitFor(SEL.controlMenu, { timeout: 20000 })
-      // 打开菜单看有没有「删除」，按 Esc 关掉，不点
-      await b.click(SEL.controlMenu)
-      await ctx.sleep(1000)
-      const text = String(await b.eval(`document.body.innerText`).catch(() => ''))
-      await b.press('Escape')
-      if (!/Delete post|删除动态|Delete|删除/.test(text)) throw new Error(L(ctx, '帖子菜单里没找到「删除」', 'No "Delete" in the post menu'))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('composer', L(ctx, '打开发帖框', 'Open the composer'), () => openComposer(ctx, b, ch))
-    await t.step('post_button', L(ctx, '找到发布按钮', 'Find the Post button'), async () => {
-      if (!(await markPostBtn(b)) || !(await b.exists(SEL.postBtn))) throw new Error(L(ctx, '发帖框里没找到发布按钮（SEL.postBtn）', 'No Post button in the composer (SEL.postBtn)'))
-    })
-    await t.soft('media', L(ctx, '上传图片 / 视频的入口', 'Image / video upload'), async () => {
-      // 有 input 就看 accept 收不收视频；没有就只确认「添加媒体」按钮在（不点：点了会弹系统的选文件窗口）
-      const inp = await inputTakesVideo(b)
-      if (inp) {
-        if (!inp.ok && !(await b.exists(SEL.videoBtn).catch(() => false))) throw new Error(L(ctx, `上传的 input 不收视频（accept="${inp.accept}"），也没找到「添加视频」按钮（SEL.videoBtn），视频帖子发不了`, `The file input doesn't take video (accept="${inp.accept}") and there's no "Add a video" button (SEL.videoBtn), so video posts won't work`))
-        return inp.ok ? L(ctx, '能传图片和视频', 'Takes images and video') : L(ctx, '图片 input 不收视频，视频走「添加视频」按钮', 'Image input takes no video; video goes through "Add a video"')
-      }
-      if (!(await b.exists(SEL.mediaBtn))) throw new Error(L(ctx, '发帖框里没找到「添加媒体」按钮（SEL.mediaBtn）', 'No "Add media" button in the composer (SEL.mediaBtn)'))
-      return L(ctx, '有「添加媒体」按钮（收不收视频要点开才知道，没查）', 'Found "Add media" (whether it takes video is only known after clicking; not checked)')
-    })
-  })
 }

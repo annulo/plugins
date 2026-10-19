@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 import { assist, ensure, markReady, readySel } from './_assist'
 
 // Instagram 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。支持个人 / 创作者账号的图片帖子（单图、多图）和视频帖（发成 Reel）。
@@ -13,7 +13,6 @@ import { assist, ensure, markReady, readySel } from './_assist'
 //   instagram.login / instagram.checkLogin  本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   instagram.publish / remove 发布、删除
 //   instagram.collect                       采集自己最近帖子的互动数据和粉丝数
-//   instagram.probe({ channel_id })         自检：登录、读账号、读帖子、帖子菜单、打开发帖窗口、找上传图片的入口，不真的发（local/_health.ts）
 //
 // Instagram 必须配图：文章里没图时，用 cover_text 生成一张文字封面（做法同 local/xhs.ts 的 textCard）。
 // 视频帖：social_posts.video 有值（素材的 http(s) 地址，或本机文件 local:<名字>）就发视频，不带图片、不生成封面；直接交给 b.upload，
@@ -553,7 +552,7 @@ async function waitShared(ctx: any, b: any, timeoutMs: number, video = false): P
 }
 
 /**
- * 打开「新帖子」窗口，等到选图的 input 出来（发布和自检共用）。b 要已经在 instagram.com 上、已登录。
+ * 打开「新帖子」窗口，等到选图的 input 出来（发布用）。b 要已经在 instagram.com 上、已登录。
  * ch 暂时没用到，和 local/linkedin.ts、local/x.ts 的 openComposer 同一个签名。
  */
 async function openComposer(ctx: any, b: any, _ch: any) {
@@ -814,77 +813,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, posts: posts.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不上传图片 / 视频、不点分享、不点删除（没选图的发帖窗口按 Esc 关掉，不会弹「放弃帖子」）。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = igChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => {
-      if (!ch.browser_profile) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
-      return openBrowser(ctx, { profile: ch.browser_profile })
-    })
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      await b.goto(SITE + '/')
-      await ctx.sleep(3000)
-      if (!(await loggedIn(b))) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-    })
-    let user: IgUser = null as any
-    await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      const u = await readUser(b)
-      if (!u) throw new Error(L(ctx, '读不到账号信息（首页里没找到当前用户的用户名，或者主页的 meta 变了）', "Couldn't read the account (no username for the current user on the home page, or the profile page's meta changed)"))
-      user = u
-      return `@${u.handle}` + (u.followers != null ? L(ctx, ` · ${u.followers} 粉丝`, ` · ${u.followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
-    })
-    const posts = await t.step('posts', L(ctx, '读最近的帖子', 'Read recent posts'), async () => {
-      const list = await readPosts(ctx, b, ch.platform_uid || user.id, user.handle || ch.handle, 1)
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!list.length && published) throw new Error(L(ctx, `读到 0 条帖子，但这个账号发过：主页加载帖子的请求（${API.posts}）可能改了`, `Read 0 posts, but this account has posted: the profile page's post request (${API.posts}) may have changed`))
-      return list
-    })
-    await t.soft('menu', L(ctx, '帖子的「…」菜单（删除用）', 'Post menu (for deleting)'), async () => {
-      const last = posts?.[0]
-      if (!last) return L(ctx, '没有帖子，跳过', 'No posts, skipped')
-      // 和 remove 同样的路径：打开帖子页，点第一个「More options」
-      await b.goto(post_url(last.code))
-      await ctx.sleep(2000)
-      await b.waitFor(SEL.moreOptions, { timeout: 20000 }).catch(() => {
-        throw new Error(L(ctx, '帖子页上没找到「…」菜单（SEL.moreOptions）', 'No "…" menu on the post page (SEL.moreOptions)'))
-      })
-      await b.click(SEL.moreOptions)
-      await ctx.sleep(1000)
-      // 打开菜单看有没有「删除」（和 clickText 一样按按钮文字认），按 Esc 关掉，不点
-      const items: string[] = await b
-        .eval(`[...document.querySelectorAll(${JSON.stringify(SEL.dialog)})].flatMap(d => [...d.querySelectorAll('button, [role="button"], a[role="link"], div[tabindex]')].map(x => (x.innerText || '').trim())).filter(Boolean)`)
-        .catch(() => [])
-      await b.press('Escape')
-      if (!items.some((x) => TEXT.del.includes(x))) throw new Error(L(ctx, `菜单里没有「删除」：${items.slice(0, 12).join('、')}`, `No "Delete" in the menu: ${items.slice(0, 12).join(', ')}`))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('composer', L(ctx, '打开发帖窗口', 'Open the new post dialog'), async () => {
-      await b.goto(SITE + '/')
-      await ctx.sleep(2000)
-      if (!(await loggedIn(b))) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      await openComposer(ctx, b, ch)
-    })
-    // Instagram 发帖必须带图：没有选图的 input 就发不了
-    await t.step('file_input', L(ctx, '上传图片的入口', 'Image upload'), async () => {
-      if (!(await b.exists(SEL.fileInput).catch(() => false))) throw new Error(L(ctx, '发帖窗口里没找到上传图片的 input（SEL.fileInput）', 'No image file input in the new post dialog (SEL.fileInput)'))
-      const accept = String(await b.eval(`(document.querySelector(${JSON.stringify(SEL.fileInput)})?.getAttribute('accept') || '')`).catch(() => ''))
-      if (accept && !/image/i.test(accept)) throw new Error(L(ctx, `上传的 input 不收图片（accept="${accept}"）`, `The file input doesn't take images (accept="${accept}")`))
-    })
-    // 视频帖（Reel）用同一个 input：accept 里要有 video，或者没限制
-    await t.soft('video_input', L(ctx, '上传入口收视频', 'Upload accepts video'), async () => {
-      const accepts: string[] = (await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.fileInput)})].map(e => e.getAttribute('accept') || '')`).catch(() => [])) || []
-      if (!accepts.length) throw new Error(L(ctx, '发帖窗口里没找到上传的 input（SEL.fileInput）', 'No file input in the new post dialog (SEL.fileInput)'))
-      if (!accepts.some((a) => !a.trim() || /video|\*/i.test(a))) throw new Error(L(ctx, `上传的 input 不收视频（accept="${accepts.join(' | ')}"）`, `The file input doesn't take video (accept="${accepts.join(' | ')}")`))
-      return accepts.find((a) => /video/i.test(a)) ? L(ctx, '收视频', 'Takes video') : L(ctx, 'accept 没限制', 'accept is unrestricted')
-    })
-    // 关掉发帖窗口：什么都没选，Esc 直接关；万一弹了「放弃帖子？」也不点，下次打开浏览器会重新加载页面
-    await b.press('Escape').catch(() => {})
-  })
 }

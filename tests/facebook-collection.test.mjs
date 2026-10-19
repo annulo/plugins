@@ -151,35 +151,6 @@ for (const [name, fail, kind] of [
   assert.equal(channel(ctx).login_status, kind === 'expired' ? 'expired' : 'ok')
 })
 
-test('self-test reports data permission warnings separately and does not modify snapshots', async () => {
-  const ctx = context()
-  graph(({ fields }) => fields.includes('comments.') ? rejected(10, 'Missing pages_read_user_content') : undefined)
-  const result = await fb.probe({ channel_id: 'channel' }, ctx)
-  assert.equal(result.ok, true)
-  assert.ok(result.steps.find((s) => s.key === 'publish_credential' && s.ok))
-  assert.ok(result.steps.find((s) => s.key === 'metrics_comments' && !s.ok && s.soft))
-  assert.equal(ctx.writes.length, 0)
-})
-
-test('a temporary metrics read failure is a warning, not proof that publishing authorization failed', async () => {
-  const ctx = context()
-  graph(({ fields }) => fields === 'fan_count' ? response({ error: { code: 2, message: 'Unavailable' } }, 503) : undefined)
-  const result = await fb.probe({ channel_id: 'channel' }, ctx)
-  assert.equal(result.ok, true)
-  assert.ok(result.steps.find((s) => s.key === 'metrics' && !s.ok && s.soft))
-})
-
-test('OAuth self-test checks granted publishing scopes instead of only the existence of a token', async () => {
-  const ctx = context({ api_credential: 'oauth', oauth_account: 'alice' })
-  ctx.oauth = Object.assign(async () => token, { accounts: () => ['alice'] })
-  graph(({ path }) => path === '/v26.0/me/accounts' ? response({ data: [{ id: '100', name: 'Page', tasks: ['CREATE_CONTENT'], access_token: token }] }) : path === '/v26.0/me/permissions' ? response({ data: [{ permission: 'pages_show_list', status: 'granted' }, { permission: 'pages_read_engagement', status: 'granted' }] }) : undefined)
-  const result = await fb.probe({ channel_id: 'channel' }, ctx)
-  assert.equal(result.ok, false)
-  assert.equal(result.kind, 'permission')
-  assert.match(result.error, /pages_manage_posts/)
-  assert.equal(result.steps.some((s) => s.key === 'metrics'), false)
-})
-
 test('login validation does not depend on optional follower access', async () => {
   const ctx = context()
   const calls = graph(({ fields }) => fields.includes('fan_count') ? rejected(10, 'No follower access') : undefined)

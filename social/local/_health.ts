@@ -1,14 +1,10 @@
 // 浏览器自动化的健康状况：社媒平台常改页面，按钮、接口一换，发布、采集就悄悄坏了。
-// 这里记每个账号每类操作（自检、发布、删除、采集）最近一次成没成（platform_health，一个账号一类操作一行），
+// 这里记每个账号每类操作（发布、删除、采集）最近一次成没成（social_health，一个账号一类操作一行），
 // 页面据此提示「流程失效」、给出「交给助手修」（tasks/fix-platform.md）。
-//
-// 各平台文件导出 probe({ channel_id })：用 runProbe 一步一步走一遍登录、读数据、打开发帖框、找发布按钮，
-// 不真的发帖。失败的那一步带着现场（Annulo 存的截图、页面上的可操作元素，见 ctx.browser 的 snapshot）。
-// 真发布、真采集出的错由 local/social.ts 记（track）。
+// 只记真实的操作（local/social.ts 用 track 包一层）：失败时带着现场（Annulo 存的截图、页面上的可操作元素，见 ctx.browser 的 snapshot）。
+// 以前有「自检」（probe，只走到找到发布按钮，不真发），查不到真正会坏的步骤，2026-10 去掉了；表里可能还留着 op 是 probe 的旧记录，页面忽略它。
 
-import { L } from './_i18n'
-
-export type Op = 'probe' | 'publish' | 'remove' | 'collect'
+export type Op = 'publish' | 'remove' | 'collect'
 /** broken：页面 / 接口对不上了（要改代码）；expired：登录过期（重新登录就好） */
 export type Kind = 'broken' | 'expired' | 'permission' | 'restricted' | 'network'
 
@@ -18,67 +14,12 @@ export function errorKind(e: any): Kind {
 }
 
 export type Step = { key: string; name: string; ok: boolean; ms: number; detail?: string; error?: string; snapshot?: string; soft?: boolean }
-export type ProbeResult = { ok: boolean; kind?: Kind; step?: string; error?: string; snapshot?: string; steps: Step[] }
 
 const now = () => new Date().toISOString()
 
-class Stop extends Error {}
-
-/** 登录过期：自检、发布里判断出没登录时抛它，记成 expired 而不是流程失效 */
+/** 登录过期：发布、采集里判断出没登录时抛它，记成 expired 而不是流程失效 */
 export class Expired extends Error {
   expired = true
-}
-
-/**
- * 按步骤跑自检。body 里用 t.step(key, 名字, fn) 一步一步走：fn 抛错就停，记下这一步、错误和现场；
- * t.soft(...) 是可有可无的一步（比如「上传图片的按钮」），失败只记下、不停、不算整体失败。
- * t.page = b 之后，没有现场的失败（代码自己判断出来的，比如「没找到按钮」）会补存一份。
- */
-export async function runProbe(ctx: any, body: (t: Probe) => Promise<void>): Promise<ProbeResult> {
-  const t = new Probe(ctx)
-  try {
-    await body(t)
-  } catch (e) {
-    if (!(e instanceof Stop)) await t.fail('run', L(ctx, '自检', 'Self-test'), e, 0)
-  }
-  const bad = t.steps.find((s) => !s.ok && !s.soft)
-  return bad ? { ok: false, kind: t.kind, step: bad.name, error: bad.error, snapshot: bad.snapshot, steps: t.steps } : { ok: true, steps: t.steps }
-}
-
-export class Probe {
-  steps: Step[] = []
-  page: any = null
-  kind: Kind = 'broken'
-  constructor(private ctx: any) {}
-
-  async step<T>(key: string, name: string, fn: () => Promise<T>): Promise<T> {
-    return this.run(key, name, fn, false) as Promise<T>
-  }
-
-  async soft<T>(key: string, name: string, fn: () => Promise<T>): Promise<T | undefined> {
-    return this.run(key, name, fn, true)
-  }
-
-  private async run<T>(key: string, name: string, fn: () => Promise<T>, soft: boolean): Promise<T | undefined> {
-    this.ctx.progress({ message: L(this.ctx, `自检：${name}…`, `Self-test: ${name}…`) })
-    const t0 = Date.now()
-    try {
-      const v = await fn()
-      this.steps.push({ key, name, ok: true, ms: Date.now() - t0, detail: typeof v === 'string' ? v : typeof v === 'number' ? String(v) : Array.isArray(v) ? L(this.ctx, `${v.length} 条`, `${v.length} items`) : undefined, soft: soft || undefined })
-      return v
-    } catch (e) {
-      await this.fail(key, name, e, Date.now() - t0, soft)
-      if (soft) return undefined
-      throw new Stop()
-    }
-  }
-
-  async fail(key: string, name: string, e: any, ms: number, soft = false) {
-    let snapshot = e?.snapshot as string | undefined
-    if (!snapshot && this.page?.snapshot) snapshot = (await this.page.snapshot({ label: key }).catch(() => null))?.dir
-    if (!soft) this.kind = errorKind(e)
-    this.steps.push({ key, name, ok: false, ms, error: String(e?.message ?? e), snapshot, soft: soft || undefined })
-  }
 }
 
 // ---- 记录 ----
@@ -134,8 +75,13 @@ export async function track<T>(ctx: any, ch: { id: string; type: string; login_s
     const out = await fn(c)
     // 浏览器助手帮过的步骤（_assist.ts）带进这次成功的记录：平台可能改了页面，提醒把新写法改进代码
     const assisted: any[] = c.__assisted ?? []
-    const warnings: any[] = (out as any)?.channels?.flatMap((r: any) => r.warnings ?? []) ?? []
-    if (pages.length || ch.auth_mode === 'api') record(ctx, ch, op, { ok: true, steps: [
+    // 次要的没做成的项：采集按账号带 warnings（{ key, name, message }），发布直接带（文字，比如抖音的「这些话题没加上」）
+    const warnings: any[] = [
+      ...((out as any)?.channels?.flatMap((r: any) => r.warnings ?? []) ?? []),
+      ...((out as any)?.warnings ?? []).map((w: any) => (typeof w === 'string' ? { key: op, name: '', message: w } : w)),
+    ]
+    // 演练（dry_run）没真发：不算成功，不清掉之前的失败
+    if ((pages.length || ch.auth_mode === 'api') && !(out as any)?.dry_run) record(ctx, ch, op, { ok: true, steps: [
       ...assisted.map((a) => ({ key: 'assisted', name: a.goal, ok: true, ms: 0, detail: JSON.stringify(a.actions) })),
       ...warnings.map((w) => ({ key: w.key, name: w.name, ok: false, ms: 0, error: w.message, soft: true })),
     ] })

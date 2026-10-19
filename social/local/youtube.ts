@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { YT, postText, problems } from './_youtube_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 
 // YouTube 渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个 YouTube 频道，发的是素材库里的视频。
 // 一个 Google 账号下有几个频道（品牌账号）时，添加时列出来让用户勾选，各添加成一个渠道、共用一个浏览器；操作前切到对应的频道（useChannel）。
@@ -13,7 +13,6 @@ import { Expired, runProbe } from './_health'
 //   youtube.login / youtube.checkLogin     本机浏览器登录 YouTube Studio（ctx.browser），登录态只在这台电脑上
 //   youtube.publish / remove  上传发布、删除
 //   youtube.collect                        采集订阅数和最近视频的播放、点赞、评论
-//   youtube.probe({ channel_id })          自检：登录、读频道、读视频、看删除菜单、打开上传对话框，不真的上传（local/_health.ts）
 //
 // social_posts 里 YouTube 的一条：title 是视频标题（发出去），body 是视频描述，tags 是关键词标签（不进描述，单独填），
 // video 是素材库里视频的地址；post_id 存视频 id（11 位），post_url 是 watch 地址。
@@ -671,7 +670,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/** 打开 Studio 的内容列表，点开这条视频那一行的「选项」菜单（删除和自检共用） */
+/** 打开 Studio 的内容列表，点开这条视频那一行的「选项」菜单（删除用） */
 async function openRowMenu(ctx: any, b: any, ch: any, vid: string) {
   await b.goto(`${STUDIO}/channel/${ch.platform_uid}/videos/upload`)
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
@@ -799,59 +798,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, videos: r.videos.length, exact: r.exact, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不选文件、不点发布、不点删除（行菜单按 Esc 关掉，上传对话框没选文件，关掉不会留草稿）。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = ytChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openFor(ctx, ch))
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
-      await b.goto(`${STUDIO}/channel/${ch.platform_uid}`)
-      await ctx.sleep(4000)
-      const uc = await studioChannel(b)
-      if (!uc) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      if (uc !== ch.platform_uid) throw new Expired(L(ctx, `Studio 里登录的是另一个频道（${uc}），不是这个频道（${ch.platform_uid}）`, `Studio is logged in to another channel (${uc}), not this one (${ch.platform_uid})`))
-    })
-    await t.step('account', L(ctx, '读频道信息', 'Read the channel'), async () => {
-      const u = await readChannel(ctx, b, ch.platform_uid)
-      if (!u.name || u.name === u.id) throw new Error(L(ctx, '读不到频道名（公开频道页的 ytInitialData 结构变了）', "Couldn't read the channel name (the channel page's ytInitialData changed)"))
-      return `${u.name}${u.handle ? ' ' + u.handle : ''}` + (u.followers != null ? L(ctx, ` · ${u.followers} 订阅`, ` · ${u.followers} subscribers`) : L(ctx, ' · 没读到订阅数', ' · subscribers not found'))
-    })
-    let videos: YtVideo[] = []
-    await t.step('videos', L(ctx, '读最近的视频', 'Read recent videos'), async () => {
-      const r = await readVideos(ctx, b, ch.platform_uid)
-      if (r.loggedOut) throw new Expired(L(ctx, '打开 Studio 的内容页被带去登录了（登录过期了）', 'Opening Studio content redirected to login (login expired)'))
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!r.videos.length && published) throw new Error(L(ctx, `读到 0 条视频，但这个频道发过：${API.list} 的数据结构可能变了`, `Read 0 videos, but this channel has published: ${API.list} may have changed`))
-      videos = [...r.videos].sort((x, y) => (Date.parse(y.created) || 0) - (Date.parse(x.created) || 0))
-      return L(ctx, `读到 ${videos.length} 条视频`, `${videos.length} videos`) + (r.exact || !videos.length ? '' : L(ctx, `（Studio 的 ${API.list} 没读到，用的公开频道页）`, ` (from the public channel page; Studio's ${API.list} returned nothing)`))
-    })
-    await t.soft('menu', L(ctx, '视频的「选项」菜单（删除用）', 'Video options menu (for deleting)'), async () => {
-      const last = videos[0]
-      if (!last) return L(ctx, '没有视频，跳过', 'No videos, skipped')
-      // 打开菜单看有没有「永久删除」，按 Esc 关掉，不点
-      await openRowMenu(ctx, b, ch, last.id)
-      const items: string[] = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.menuItem)})].filter(e => e.offsetParent !== null).map(e => e.innerText.trim()).filter(Boolean)`).catch(() => [])
-      await b.press('Escape')
-      if (!items.some((x) => /Delete forever|永久删除/.test(x))) throw new Error(L(ctx, `视频的「选项」菜单里没有「永久删除」：${items.join('、') || '（没读到菜单项，SEL.menuItem）'}`, `No "Delete forever" in the video options menu: ${items.join(', ') || '(no menu items found, SEL.menuItem)'}`))
-      return L(ctx, '菜单里有永久删除', 'Delete forever is in the menu')
-    })
-    await t.step('dialog', L(ctx, '打开上传对话框', 'Open the upload dialog'), async () => {
-      await openUpload(ctx, b, ch)
-      if (!(await b.exists(SEL.dialog).catch(() => false))) throw new Error(L(ctx, '没找到上传对话框（SEL.dialog）', 'No upload dialog (SEL.dialog)'))
-    })
-    await t.step('file_input', L(ctx, '选视频文件的入口', 'Video file input'), async () => {
-      if (!(await b.exists(SEL.fileInput).catch(() => false))) throw new Error(L(ctx, '上传对话框里没找到选文件的 input（SEL.fileInput）', 'No file input in the upload dialog (SEL.fileInput)'))
-    })
-    // 关掉上传对话框（没选文件，不会留草稿）
-    await b.press('Escape').catch(() => {})
-    await ctx.sleep(500)
-    if (await b.exists(SEL.dialog).catch(() => false)) await b.click(SEL.closeDialog, { timeout: 3000 }).catch(() => {})
-  })
 }

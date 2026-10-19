@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { isAssetUrl, pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { ZHIHU, bodyImages, isHtml, len, problems, segments, type Segment } from './_zhihu_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 
 // 手动草稿按启用的平台校验
 export { problems as draftProblems } from './_zhihu_spec'
@@ -15,7 +15,6 @@ export { problems as draftProblems } from './_zhihu_spec'
 //   zhihu.login / zhihu.checkLogin      本机浏览器登录知乎（扫码或验证码，ctx.browser），登录态只在这台电脑上
 //   zhihu.publish / remove 发布、删除
 //   zhihu.collect                       采集粉丝数和文章的阅读、赞同、评论、收藏
-//   zhihu.probe({ channel_id })         自检：登录、读文章、文章的删除菜单、打开写文章页，不真的发（local/_health.ts）
 //
 // social_posts 里知乎的一条：title 是文章标题（≤100 字），body 是正文。正文有两种写法：
 //   - 富文本 HTML（和模板里文章一样的编辑器写的，h2 / h3 / p / ul / ol / blockquote / strong / a / img…），图片就在正文里，images 是正文里的图；
@@ -573,7 +572,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
 // ---- 删除 ----
 
-/** 打开内容管理的文章页，找到这篇的卡片，点开它的「更多」菜单（删除和自检共用）。id 为空时用第一篇 */
+/** 打开内容管理的文章页，找到这篇的卡片，点开它的「更多」菜单（删除用）。id 为空时用第一篇 */
 async function openCardMenu(ctx: any, b: any, ch: any, id: string) {
   await b.goto(MANAGE)
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
@@ -679,54 +678,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name, posts: r.list.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-// ---- 自检 ----
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，用和它们同一份选择器，
- * 不填字、不上传、不点发布、不点删除（「更多」菜单打开看一眼就关）。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = zhihuChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    const u = await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      const u = await whoami(b)
-      if (!u) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      return u
-    })
-    let count = 0
-    await t.step('posts', L(ctx, '读账号和文章', 'Read the account and articles'), async () => {
-      const r = await readArticles(b, 1)
-      if (r.loggedOut) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      if (!r.ok) throw new Error(L(ctx, '文章列表接口（API.articles）没返回数据，接口可能改了', "The article list API (API.articles) returned nothing; it may have changed"))
-      count = r.list.length
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!count && published) throw new Error(L(ctx, '读到 0 篇文章，但这个账号发过：文章列表接口的结构可能改了', 'Read 0 articles, but this account has posted: the article list API may have changed'))
-      return L(ctx, `${u.name ?? ch.name} · ${u.follower_count ?? '?'} 粉丝 · 读到 ${count} 篇文章`, `${u.name ?? ch.name} · ${u.follower_count ?? '?'} followers · ${count} articles`)
-    })
-    await t.soft('menu', L(ctx, '文章的删除菜单（删除用）', 'Delete menu on articles (for deleting)'), async () => {
-      if (!count) return L(ctx, '没有文章，跳过', 'No articles, skipped')
-      if (!(await openCardMenu(ctx, b, ch, ''))) throw new Error(L(ctx, '内容管理里没找到文章卡片', 'No article cards in Content management'))
-      await b.press('Escape').catch(() => {})
-      return L(ctx, '有删除菜单', 'Delete menu found')
-    })
-    await t.step('publish_page', L(ctx, '打开写文章页（标题、正文、图片框、发布按钮）', 'Open the editor (title, text, image input, Publish button)'), async () => {
-      await b.goto(WRITE)
-      if (LOGGED_OUT.test(b.url())) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      await b.waitFor(SEL.editor, { timeout: 30000 }).catch(() => {
-        throw new Error(L(ctx, '写文章页没出现正文编辑器（SEL.editor）', "The editor (SEL.editor) didn't appear on the write page"))
-      })
-      if (!(await b.exists(SEL.title))) throw new Error(L(ctx, '没找到标题框（SEL.title）', 'No title box (SEL.title)'))
-      if (!(await b.exists(SEL.imageInput))) throw new Error(L(ctx, '没找到上传图片的文件框（SEL.imageInput）', 'No image file input (SEL.imageInput)'))
-      if (!(await markByText(b, SEL.publish, TEXT.publish, 'publish'))) throw new Error(L(ctx, '没找到「发布」按钮（SEL.publish）', 'No Publish button (SEL.publish)'))
-    })
-    // 话题那行要存成草稿后才出现，自检不打字，只看「发布设置」按钮在不在
-    await t.soft('settings', L(ctx, '「发布设置」（加话题用）', '"发布设置" (publish settings, for topics)'), async () => {
-      if (!(await markByText(b, 'button', TEXT.settings, 'settings'))) throw new Error(L(ctx, '没找到「发布设置」按钮', 'No "发布设置" (publish settings) button'))
-      return L(ctx, '有发布设置', 'Publish settings found')
-    })
-  })
 }

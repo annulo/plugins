@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { BILI, descText, isVideoRef, problems } from './_bilibili_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_bilibili_spec'
@@ -15,7 +15,6 @@ export { problems as draftProblems } from './_bilibili_spec'
 //   bilibili.login / bilibili.checkLogin   本机浏览器登录 B站（扫码，ctx.browser），登录态只在这台电脑上
 //   bilibili.publish / remove 投稿、删除稿件
 //   bilibili.collect                       采集粉丝数和最近稿件的播放、点赞、评论、收藏、分享
-//   bilibili.probe({ channel_id })         自检：登录、读账号、读稿件、看删除菜单、打开投稿页，不真的上传（local/_health.ts）
 //
 // social_posts 里 B站 的一条：title 是稿件标题（≤80 字），body 是简介（≤2000 字），tags 是标签（JSON 数组，单独填，不进简介），
 // video 是视频（素材库的 http 地址，或 local:<名字> 的本机文件，原样交给 b.upload，Annulo 能力版本 12 起认 local:），
@@ -441,7 +440,7 @@ async function uploadState(b: any): Promise<{ done: boolean; failed: boolean; pc
   return { done: TEXT.uploaded.test(t), failed: TEXT.uploadFailed.test(t), pct }
 }
 
-/** 打开投稿页，等到选文件的 input 出来（发布和自检共用） */
+/** 打开投稿页，等到选文件的 input 出来（发布用） */
 async function openUpload(ctx: any, b: any, ch: any) {
   await b.goto(UPLOAD)
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
@@ -714,7 +713,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 }
 
 /**
- * 打开稿件管理页，找到这条稿件的那一行，点开它的「更多」菜单（删除和自检共用）。
+ * 打开稿件管理页，找到这条稿件的那一行，点开它的「更多」菜单（删除用）。
  * 行没有稳定的 class：从指向 BV 号的链接往上找，找到里面有「更多」按钮的那一层当作行。
  * 有的版本「删除」直接在行上（不在菜单里）：那就不点「更多」，返回 direct: true。
  */
@@ -875,55 +874,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, videos: r.videos.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不选文件、不点投稿、不点删除（行菜单按 Esc 关掉；投稿页没选文件，不会留草稿）。
- * 标题框要选了文件才出现，所以不查。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = biliChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
-      await b.goto(SITE)
-      await ctx.sleep(2000)
-      const d = await whoami(b, ch)
-      if (!d) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      if (d.other) throw new Expired(L(ctx, `浏览器里登录的是另一个账号（${d.uname} / ${d.other}），不是这个账号（${ch.platform_uid}）`, `The browser is logged in to another account (${d.uname} / ${d.other}), not this one (${ch.platform_uid})`))
-    })
-    await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      const u = await readUser(b)
-      if (!u) throw new Error(L(ctx, `读不到账号信息（${API.nav} 的结构变了）`, `Couldn't read the account (${API.nav} changed)`))
-      return `${u.name}` + (u.followers != null ? L(ctx, ` · ${u.followers} 粉丝`, ` · ${u.followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
-    })
-    let videos: BiliVideo[] = []
-    await t.step('videos', L(ctx, '读最近的稿件', 'Read recent videos'), async () => {
-      const r = await readVideos(ctx, b, 1)
-      if (r.loggedOut) throw new Expired(L(ctx, '打开稿件管理被带去登录了（登录过期了）', 'Opening upload management redirected to login (login expired)'))
-      if (!r.ok) throw new Error(L(ctx, `稿件列表接口没返回数据：${API.archives(1)}`, `The upload list API returned nothing: ${API.archives(1)}`))
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!r.videos.length && published) throw new Error(L(ctx, `读到 0 条稿件，但这个账号发过：${API.archives(1)} 的数据结构可能变了`, `Read 0 videos, but this account has published: ${API.archives(1)} may have changed`))
-      videos = r.videos.filter((v) => !isDeleted(v)).sort((x, y) => (Date.parse(y.created) || 0) - (Date.parse(x.created) || 0))
-      return L(ctx, `读到 ${videos.length} 条稿件`, `${videos.length} videos`)
-    })
-    await t.soft('menu', L(ctx, '稿件的「更多」菜单（删除用）', 'Video More menu (for deleting)'), async () => {
-      const last = videos[0]
-      if (!last) return L(ctx, '没有稿件，跳过', 'No videos, skipped')
-      // 打开菜单看有没有「删除」，按 Esc 关掉，不点
-      const menu = await openRowMenu(ctx, b, ch, last.bvid)
-      if (menu.direct) return L(ctx, '行上直接有删除', 'Delete is on the row')
-      const items: string[] = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.menuItem)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 12)`).catch(() => [])
-      await b.press('Escape').catch(() => {})
-      if (!items.some((x) => TEXT.delete.includes(x))) throw new Error(L(ctx, `「更多」菜单里没有「删除」：${items.slice(0, 20).join('、') || '（没读到菜单项，SEL.menuItem）'}`, `No "删除" (Delete) in the More menu: ${items.slice(0, 20).join(', ') || '(no menu items found, SEL.menuItem)'}`))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('upload', L(ctx, '打开投稿页、找到选视频文件的入口', 'Open the upload page and find the file input'), async () => {
-      await openUpload(ctx, b, ch)
-      if (!(await b.exists(SEL.fileInput).catch(() => false))) throw new Error(L(ctx, '投稿页里没找到选文件的 input（SEL.fileInput）', 'No file input on the upload page (SEL.fileInput)'))
-    })
-  })
 }

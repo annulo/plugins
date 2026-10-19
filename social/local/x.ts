@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { X, problems, tweetText, xLen } from './_x_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_x_spec'
@@ -15,7 +15,6 @@ export { problems as draftProblems } from './_x_spec'
 //   x.login / x.checkLogin                 本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   x.publish / x.remove    发布（文字 + 图片，或文字 + 视频）、删除
 //   x.collect                              采集推文的互动数据和粉丝数
-//   x.probe({ channel_id })                自检：登录、读账号、读推文、推文菜单、打开发推框、找发布按钮、上传入口收不收视频，不真的发（local/_health.ts）
 //
 // social_posts 里 X 的推文：title 只是后台列表里显示的标题，不发出去；发出去的是 body + tags（#话题接在最后）。
 // 配图是 images（图片地址的 JSON 数组）；填了 video（素材库的 http(s) 地址，或本机文件 local:<名字>）就发视频推文：
@@ -403,7 +402,7 @@ async function dismissPromos(b: any) {
   for (const t of ['Maybe Later', 'Maybe later', '以后再说', '稍后再说']) if (await b.click({ text: t }, { timeout: 1500 }).then(() => true, () => false)) return
 }
 
-/** 打开发推框，等到输入框出来（发布和自检共用） */
+/** 打开发推框，等到输入框出来（发布用） */
 async function openComposer(ctx: any, b: any, ch: any) {
   await b.goto(SITE + '/compose/post')
   if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
@@ -629,58 +628,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, tweets: tweets.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不输入文字、不点发布、不点删除。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = xChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    const handle = await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      const h = await whoami(ctx, b)
-      if (!h) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      return h
-    })
-    let tl: any = null
-    await t.step('timeline', L(ctx, '读账号和最近的推文', 'Read the account and recent posts'), async () => {
-      const r = await readTimeline(ctx, b, handle, ch.platform_uid, 1)
-      if (!r.user) throw new Error(L(ctx, `读不到账号信息（${API.user} 的结构变了）`, `Couldn't read the account (${API.user} changed)`))
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      tl = r
-      if (!r.tweets.length && published) throw new Error(L(ctx, `读到 0 条推文，但这个账号发过：推文列表的接口（${API.tweets.join(' / ')}）可能改名了`, `Read 0 posts, but this account has posted: the timeline API (${API.tweets.join(' / ')}) may have been renamed`))
-      return L(ctx, `@${r.user.handle} · ${r.user.followers ?? '?'} 粉丝 · 读到 ${r.tweets.length} 条推文`, `@${r.user.handle} · ${r.user.followers ?? '?'} followers · ${r.tweets.length} posts`)
-    })
-    await t.soft('menu', L(ctx, '推文的「…」菜单（删除用）', 'Post menu (for deleting)'), async () => {
-      const last = tl.tweets[0]
-      if (!last) return L(ctx, '没有推文，跳过', 'No posts, skipped')
-      await b.goto(`${SITE}/${handle}/status/${last.id}`)
-      await b.waitFor(SEL.tweet, { timeout: 20000 })
-      await b.waitFor(SEL.caret, { timeout: 10000 }).catch(() => {
-        throw new Error(L(ctx, '推文上没找到「…」菜单（SEL.caret）', 'No "…" menu on the post (SEL.caret)'))
-      })
-      await dismissPromos(b)
-      // 打开菜单看有没有「删除」，按 Esc 关掉，不点
-      await b.click(SEL.caret)
-      await b.waitFor(SEL.menuItem, { timeout: 10000 })
-      const items: string[] = await b.eval(`[...document.querySelectorAll('${SEL.menuItem}')].map(e => e.innerText.trim())`)
-      await b.press('Escape')
-      if (!items.some((x) => /^(Delete|删除|刪除)$/.test(x))) throw new Error(L(ctx, `菜单里没有「删除」：${items.join('、')}`, `No "Delete" in the menu: ${items.join(', ')}`))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('composer', L(ctx, '打开发推框', 'Open the composer'), () => openComposer(ctx, b, ch))
-    await t.step('post_button', L(ctx, '找到发布按钮', 'Find the Post button'), async () => {
-      if (!(await b.exists(SEL.postBtn))) throw new Error(L(ctx, '发推框里没找到发布按钮（SEL.postBtn）', 'No Post button in the composer (SEL.postBtn)'))
-    })
-    await t.soft('media', L(ctx, '上传图片 / 视频的入口', 'Image / video upload'), async () => {
-      if (!(await b.exists(SEL.fileInput))) throw new Error(L(ctx, '发推框里没找到上传图片的 input（SEL.fileInput）', 'No image file input in the composer (SEL.fileInput)'))
-      // accept 没写或是 * 就什么都能选；写了的要带 video，视频推文才传得上去
-      const accept = String((await b.eval(`document.querySelector('${SEL.fileInput}')?.getAttribute('accept') || ''`).catch(() => '')) || '').trim()
-      if (accept && !/video|\*/.test(accept)) throw new Error(L(ctx, `上传的 input 不收视频（accept="${accept}"），视频推文发不了`, `The file input doesn't take video (accept="${accept}"), so video posts won't work`))
-      return accept ? L(ctx, `能传图片和视频（accept="${accept}"）`, `Takes images and video (accept="${accept}")`) : L(ctx, '能传图片和视频', 'Takes images and video')
-    })
-  })
 }

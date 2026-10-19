@@ -13,7 +13,7 @@ Use Content → New article → Image post, add the images and text, then Publis
 
 The upload page has both file inputs in its DOM, including the inactive panel. `_douyin_upload.ts` activates the visible tab, verifies its active state, then selects the input inside the current `role="tab-panel"`. Never use an unqualified file input. Image upload leads to `/creator-micro/content/post/image`; verify the expected number of uploaded image thumbnails, excluding the phone-preview carousel.
 
-The description editor uses Slate and can retain zero-width paragraph markers. Clear the bounded editor selection and paste the full description and hashtags as one block. Compare normalized visible text before continuing; a mismatch stops before Publish. Self-tests verify both upload modes without uploading files.
+The description editor uses Slate and can retain zero-width paragraph markers. Clear the bounded editor selection and paste the full description and hashtags as one block. Compare normalized visible text before continuing; a mismatch stops before Publish.
 
 Publishing, retry checks, scheduling and metrics continue through `douyin.ts`. Validate with browser fixtures and a logged-in account, stopping before the final Publish action when testing. Regression tests require `esbuild` on PATH and the `playwright` Node package; set `CHROME_PATH` to use installed Chrome and run `node --test tests/douyin-publishing.test.mjs`.
 

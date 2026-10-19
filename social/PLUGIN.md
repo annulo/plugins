@@ -1,7 +1,7 @@
 # 社媒插件（social）
 
 管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎的账号和帖子：默认用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），Facebook 公共主页也可选官方 API 通道，
-把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版时自检、交给助手修。
+把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版导致发布、采集失败时交给助手修。
 
 插件只管社媒这一段；**内容从哪来、页面怎么排是模板的事**。这份说明写给助手：项目要用社媒时照这里接。
 
@@ -27,7 +27,7 @@
 | `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
 | `social_daily` | 账号每天一行：粉丝和互动合计 |
 | `social_post_daily` | 帖子每天一行：当天最后一次采集的累计数 |
-| `social_health` | 浏览器自动化最近一次成没成：一个账号一类操作（自检、发布、删除、采集）一行 |
+| `social_health` | 浏览器自动化最近一次成没成：一个账号一类操作（发布、删除、采集）一行 |
 
 帖子的 `status`：`pending_review`（待审）→ `approved` → `scheduled`（排期，`scheduled_at`）→ `publishing` → `published` / `failed`；`rejected` 退回；`removed` 已从平台删除。
 审核、排期就是改这条的 `status`、`scheduled_at`（页面直接写表）；发布调 `social/social.publish`，到点的排期由定时任务发。
@@ -45,8 +45,7 @@
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
 | `social.publishScheduled({ post_id })` | 到点发一条排期（`schedules/publish.json` 调）：按帖子里存的内容发 |
 | `social.collect({ channel_id })` | 现在采集一个账号 |
-| `social.probe({ channel_id })` | 自检：走一遍登录、读数据、打开发帖框、找发布按钮，不真的发 |
-| `social.health()` | 各账号最近一次自检 / 发布 / 删除 / 采集成没成 |
+| `social.health()` | 各账号最近一次发布 / 删除 / 采集成没成 |
 | `social.elsewhereAll()` | 登录态在别的电脑上的账号 `{ [账号 id]: 那台电脑的名字 }` |
 | `social.openProfile({ channel_id })` | 用账号自己的浏览器打开它的主页 |
 | `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站） |
@@ -55,7 +54,7 @@
 Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。操作见 [Facebook API 授权与测试说明](docs/facebook-api.md)。启用 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api', account: '<连接账号 ID>', channel_id?: '<已有主页账号 ID>' })` 返回可选主页，页面用 `ChooseAccounts` 调 `social.addChosen`。已有主页沿用 id，只重新绑定当前目标，原浏览器登录保留；其它 API 主页不被浏览器重登覆盖。User/Page token 都不写进项目表，绑定的 OAuth 账号断开时必须重连。
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
-`social.collect`、`publish`、`probe`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
+`social.collect`、`publish`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
 
 ## 内容怎么变成帖子（`local/_content.ts`）
 
@@ -111,12 +110,12 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 ## 定时任务
 
 排期发布一个：`publish.json` 用 Annulo 的 `due`（按 `social_posts.scheduled_at` 到点，对每条 `status = scheduled` 的帖子调一次 `social.publishScheduled`），不轮询。
-每个平台一个 `<平台>.collect`（每 6 小时采集），再加 `probeAll`（每天自检一次）。没有这个平台的账号时什么都不做。
+每个平台一个 `<平台>.collect`（每 6 小时采集，顺带更新登录状态 `login_status`）。没有这个平台的账号时什么都不做。
 
 ## 平台改版了
 
-发布、采集、自检失败都记进 `social_health`，失败的那一步带着现场（截图、页面上的可操作元素）。页面上提示失败时，给一个「交给助手修」，开任务 `social/fix-platform`（参数 `{ "channel_id": "<账号 id>" }`）：
-助手照现场改 `plugins/social/local/<平台>.ts` 里的选择器和接口，改到自检通过。改的是这个项目里的插件文件，插件升级时三方合并。
+发布、删除、采集失败都记进 `social_health`，失败的那一步带着现场（截图、页面上的可操作元素）。页面上提示失败时，给一个「交给助手修」，开任务 `social/fix-platform`（参数 `{ "channel_id": "<账号 id>" }`）：
+助手照现场改 `plugins/social/local/<平台>.ts` 里的选择器和接口，改到真跑一次能成（采集直接再采；发布用演练 `dry_run`，没有演练的请用户点「重新发布」）。真做成功一次，这条失败才清掉。改的是这个项目里的插件文件，插件升级时三方合并。
 
 ## 模板怎么接
 

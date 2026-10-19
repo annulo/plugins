@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 import { assist } from './_assist'
 import * as pageApi from './_facebook_api'
 
@@ -15,7 +15,6 @@ import * as pageApi from './_facebook_api'
 //   facebook.publish / remove 发布、删除
 //   facebook.collect                       采集最近帖子的互动数据和粉丝数
 //   facebook.comments({ post_id, after? })  只读 API 公共主页帖子的评论正文和时间（post_id 是本机记录 id）
-//   facebook.probe({ channel_id })         自检：登录、读账号、读帖子、打开发帖框、找发布按钮，不真的发（local/_health.ts）
 //
 // 视频帖：social_posts.video 有值（素材的 http(s) 地址，或本机文件 local:<名字>）就发视频，不带图片；直接交给 b.upload，
 // Annulo 负责解析 local: 和流式下载地址（能力版本 12）。视频要等上传、处理完「Post / Next」才能点，最多等 10 分钟。
@@ -753,7 +752,7 @@ function expired(ctx: any, ch: any) {
 }
 
 /**
- * 打开发帖框，等到编辑框出来（发布和自检共用）：先切到渠道的身份（主页渠道切到主页），打开渠道的主页，
+ * 打开发帖框，等到编辑框出来（发布用）：先切到渠道的身份（主页渠道切到主页），打开渠道的主页，
  * 点「What's on your mind?」那一栏（按文字认），认不出再按 aria-label 点。
  * 开始听 graphql（发布后靠它认新帖子），所以要在打开主页之前。
  */
@@ -1164,87 +1163,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: ch.name, posts: posts.length, updated, added, followers: patch.followers, ...(apiMetrics ? { available_metrics: apiMetrics.available, warnings: apiMetrics.warnings } : {}) })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不输入文字、不点发布、不点删除（空的发帖框关掉也不会弹「保存草稿」）。主页渠道会切到主页身份（发布、删除也这么做）。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = fbChannel(ctx, input?.channel_id)
-  if (isApi(ch)) return runProbe(ctx, async (t) => {
-    await t.step('authorization', L(ctx, '检查公共主页授权', 'Check Page authorization'), () => pageApi.pageInfo(ctx, ch, false))
-    await t.step('posts', L(ctx, '读取公共主页帖子', 'Read Page posts'), () => pageApi.recentPosts(ctx, ch, 1))
-    await t.step('publish_credential', L(ctx, '检查发帖凭据', 'Check publishing credential'), async () => {
-      return pageApi.checkPublishAccess(ctx, ch)
-    })
-    const data = await t.soft('metrics', L(ctx, '检查数据采集权限', 'Check data collection access'), () => pageApi.collectData(ctx, ch, 1))
-    if (data) {
-      // A read-only probe checks access without changing collection snapshots.
-      for (const warning of data.state.warnings) await t.soft('metrics_' + warning.key, warning.name, async () => { throw new Error(warning.message) })
-    }
-  })
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => {
-      if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
-      return openBrowser(ctx, { profile: ch.browser_profile })
-    })
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      await b.goto(SITE + '/')
-      await ctx.sleep(3000)
-      if (!(await loggedIn(b))) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-    })
-    await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      await b.goto(channelUrl(ch))
-      await ctx.sleep(3000)
-      if (LOGGED_OUT.test(b.url())) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      const h = await readHeader(b)
-      if (!h.name) throw new Error(L(ctx, `读不到${isPage(ch) ? '主页' : '账号'}的名字（${channelUrl(ch)}），Facebook 的页面可能改了`, `Couldn't read the ${isPage(ch) ? 'Page' : 'account'} name (${channelUrl(ch)}) — Facebook's page may have changed`))
-      const followers = await followersOnPage(b)
-      return h.name + (h.handle ? ` @${h.handle}` : '') + (followers != null ? L(ctx, ` · ${followers} 粉丝`, ` · ${followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
-    })
-    const posts = await t.step('posts', L(ctx, '读最近的帖子', 'Read recent posts'), async () => {
-      const list = await readPosts(ctx, b, ch, 1)
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!list.length && published) throw new Error(L(ctx, '读到 0 条帖子，但这个账号发过：帖子数据的结构可能变了（postsOf）', 'Read 0 posts, but this account has posted: the post data may have changed (postsOf)'))
-      return list.sort((x, y) => (Date.parse(y.created) || 0) - (Date.parse(x.created) || 0))
-    })
-    await t.soft('menu', L(ctx, '帖子的「…」菜单（删除用）', 'Post menu (for deleting)'), async () => {
-      const last = posts?.[0]
-      if (!last) return L(ctx, '没有帖子，跳过', 'No posts, skipped')
-      // 删除前也是先切身份（主页的帖子只有以主页身份才有「删除」）
-      await actAs(ctx, b, ch)
-      await b.goto(last.url || postUrl(ch, last.id))
-      await b.waitFor(SEL.postMenu, { timeout: 20000 })
-      // 打开菜单看有没有「删除 / 移至回收站」，按 Esc 关掉，不点
-      await b.click(SEL.postMenu)
-      await ctx.sleep(1000)
-      const has = (await mark(b, { scope: '[role="menu"]', sel: '[role="menuitem"]', re: SEL.deleteItem, attr: 'data-shuttle-hit' })) || (await mark(b, { sel: '[role="menuitem"]', re: SEL.deleteItem, attr: 'data-shuttle-hit' }))
-      await b.press('Escape')
-      if (!has) throw new Error(L(ctx, '帖子菜单里没找到「删除 / 移至回收站」（SEL.deleteItem）', 'No "Delete / Move to trash" in the post menu (SEL.deleteItem)'))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('composer', L(ctx, '打开发帖框', 'Open the composer'), () => openComposer(ctx, b, ch))
-    await t.step('post_button', L(ctx, '找到发布按钮', 'Find the Post button'), async () => {
-      // The composer may expose both labels; publishing must follow Next first.
-      if (await mark(b, { scope: SEL.dialog, re: SEL.nextBtn, attr: 'data-shuttle-next' })) return L(ctx, '先是「下一步 / 下一页」按钮', 'A "Next" button comes first')
-      if (await mark(b, { scope: SEL.dialog, re: SEL.postBtn, attr: 'data-shuttle-post' })) return
-      throw new Error(L(ctx, '发帖框里没找到发布按钮（SEL.postBtn / SEL.nextBtn）', 'No Post button in the composer (SEL.postBtn / SEL.nextBtn)'))
-    })
-    await t.soft('media', L(ctx, '上传图片 / 视频的入口', 'Photo / video upload'), async () => {
-      if (await b.exists(SEL.fileInput).catch(() => false)) return
-      if (!(await mark(b, { scope: SEL.dialog, re: SEL.photoBtn, attr: 'data-shuttle-hit' }))) throw new Error(L(ctx, '发帖框里没找到「照片/视频」按钮（SEL.photoBtn）', 'No "Photo/video" button in the composer (SEL.photoBtn)'))
-    })
-    // 视频帖和发布同一条路：没有 input 就点「照片/视频」，再看 input 的 accept 收不收视频（不选文件）
-    await t.soft('video_input', L(ctx, '上传入口收视频', 'Upload accepts video'), async () => {
-      if (!(await b.exists(SEL.fileInput).catch(() => false))) await clickText(b, { scope: SEL.dialog, re: SEL.photoBtn })
-      await b.waitFor(SEL.fileInput, { timeout: 10000, visible: false }).catch(() => {
-        throw new Error(L(ctx, '发帖框里没找到上传文件的 input（SEL.fileInput）', 'No file input in the composer (SEL.fileInput)'))
-      })
-      const accepts: string[] = (await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.fileInput)})].map(e => e.getAttribute('accept') || '')`).catch(() => [])) || []
-      if (!accepts.some((a) => !a.trim() || /video|\*/i.test(a))) throw new Error(L(ctx, `上传的 input 不收视频（accept="${accepts.join(' | ')}"）`, `The file input doesn't take video (accept="${accepts.join(' | ')}")`))
-      return accepts.find((a) => /video/i.test(a)) ? L(ctx, '收视频', 'Takes video') : L(ctx, 'accept 没限制', 'accept is unrestricted')
-    })
-  })
 }

@@ -4,7 +4,7 @@ import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 import { selectUpload, waitImages } from './_xhs_upload'
 
 // 小红书渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。
@@ -15,11 +15,10 @@ import { selectUpload, waitImages } from './_xhs_upload'
 //   xhs.login / xhs.checkLogin                本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   xhs.publish / xhs.remove 发布、删除
 //   xhs.collect                               采集笔记数据和粉丝数
-//   xhs.probe({ channel_id })                 自检：登录、读账号和笔记、删除按钮、打开发布页、上传图片 / 视频的入口，不真的发（local/_health.ts）
 //
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
-// video 为空照旧发图文笔记。视频上传入口已在真实账号自检，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
+// video 为空照旧发图文笔记。视频上传入口已在真实账号验证过，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
 
 type Post = {
   id: string
@@ -515,54 +514,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, notes: notes.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，用和它们同一份选择器，
- * 不上传、不填字、不点发布、不点删除。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = ctx.db.get('social_accounts', input?.channel_id)
-  if (!ch || ch.type !== 'xiaohongshu') throw new Error(L(ctx, '要选一个小红书渠道', 'Pick a Xiaohongshu channel'))
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    b.listen(PERSONAL)
-    const u = await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      const u = await whoami(b)
-      if (!u) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      return u
-    })
-    let notes: any[] = []
-    await t.step('notes', L(ctx, '读账号和最近的笔记', 'Read the account and recent notes'), async () => {
-      const info = (await b.responses(PERSONAL, { min: 1, timeout: 15000 }).catch(() => []))[0]?.json?.data
-      b.listen(POSTED)
-      await b.goto(NOTE_MANAGER)
-      if (/\/login/.test(b.url())) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      const rs = await b.responses(POSTED, { min: 1, timeout: 20000 }).catch(() => [])
-      if (!rs.length) throw new Error(L(ctx, `笔记管理页没请求笔记列表（${POSTED}），接口可能改名了`, `Note management didn't request the note list (${POSTED}); the API may have been renamed`))
-      notes = rs.flatMap((r: any) => r.json?.data?.notes ?? [])
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!notes.length && published) throw new Error(L(ctx, `读到 0 篇笔记，但这个账号发过：笔记列表接口（${POSTED}）的结构可能改了`, `Read 0 notes, but this account has posted: the note list API (${POSTED}) may have changed`))
-      const fans = info?.fans_count ?? info?.grow_info?.fans_count ?? '?'
-      return L(ctx, `${u.userName ?? ch.name} · ${fans} 粉丝 · 读到 ${notes.length} 篇笔记`, `${u.userName ?? ch.name} · ${fans} followers · ${notes.length} notes`)
-    })
-    await t.soft('menu', L(ctx, '笔记的删除按钮（删除用）', 'Delete button on notes (for deleting)'), async () => {
-      if (!notes.length) return L(ctx, '没有笔记，跳过', 'No notes, skipped')
-      await b.waitFor(SEL.noteCard, { timeout: 20000 }).catch(() => {
-        throw new Error(L(ctx, '笔记管理里没找到笔记卡片（SEL.noteCard）', 'No note cards in Note management (SEL.noteCard)'))
-      })
-      if (!(await b.exists(`${SEL.noteCard} ${SEL.deleteBtn}`))) throw new Error(L(ctx, '笔记卡片上没找到删除按钮（SEL.deleteBtn）', 'No delete button on note cards (SEL.deleteBtn)'))
-      return L(ctx, '有删除按钮', 'Delete button found')
-    })
-    await t.step('publish_page', L(ctx, '打开发布页、上传图片的入口', 'Open the publish page and image upload'), async () => {
-      await b.goto(PUBLISH_URL)
-      if (/\/login/.test(b.url())) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      await selectUpload(ctx, b, 'image')
-    })
-    await t.soft('video_tab', L(ctx, '上传视频的入口（视频笔记）', 'Video upload (video notes)'), async () => {
-      await selectUpload(ctx, b, 'video')
-      return L(ctx, '有视频文件框', 'Video file input found')
-    })
-  })
 }

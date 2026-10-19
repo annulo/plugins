@@ -26,7 +26,7 @@ function graphError(ctx: any, body: any, status: number, token: string): Error {
     : [10, 200].includes(code) ? 'permission' : 'broken'
   const hint = kind === 'expired' ? L(ctx, 'Facebook 授权已失效，请重新连接。', 'Facebook authorization has expired; reconnect.')
     : kind === 'permission' ? L(ctx, 'Facebook 未允许读取或管理这项数据，请检查主页授权和应用权限。', 'Facebook has not allowed this operation. Check Page authorization and app permissions.')
-    : kind === 'restricted' ? L(ctx, 'Facebook 已限制当前账号或应用的 API 访问，请先在 Meta 后台处理限制，再重新自检。', 'Facebook has restricted API access. Resolve the restriction in Meta, then run the self-test again.')
+    : kind === 'restricted' ? L(ctx, 'Facebook 已限制当前账号或应用的 API 访问，请先在 Meta 后台处理限制，再重试。', 'Facebook has restricted API access. Resolve the restriction in Meta, then try again.')
     : kind === 'network' ? L(ctx, 'Facebook 服务暂时不可用或请求过于频繁，请稍后重试。', 'Facebook is temporarily unavailable or rate-limiting requests; try again later.') : ''
   const error = kind === 'expired' ? new Expired(`${hint} ${detail}`) : new Error(`${hint}${hint ? ' ' : ''}${detail}`)
   ;(error as any).kind = kind
@@ -116,22 +116,6 @@ export async function pageInfo(ctx: any, ch: any, includeFollowers = true): Prom
   const token = await pageToken(ctx, ch)
   const body = await request(ctx, `/${pageId(ch.page_id || ch.platform_uid)}`, token, { params: { fields: includeFollowers ? 'id,name,fan_count' : 'id,name' } })
   return { id: String(body.id), name: String(body.name ?? ''), fan_count: typeof body.fan_count === 'number' ? body.fan_count : undefined }
-}
-
-export async function checkPublishAccess(ctx: any, ch: any): Promise<string> {
-  await pageToken(ctx, ch)
-  if (ch.api_credential === 'oauth') {
-    const token = await ctx.oauth('facebook', { account: ch.oauth_account })
-    const body = await request(ctx, '/me/permissions', token)
-    const granted = new Set((body.data ?? []).filter((p: any) => p.status === 'granted').map((p: any) => p.permission))
-    const missing = ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts'].filter((p) => !granted.has(p))
-    if (missing.length) {
-      const error = new Error(L(ctx, '发帖授权缺少权限，请重新授权：', 'Publishing permissions are missing; reauthorize: ') + missing.join(', '))
-      ;(error as any).kind = 'permission'
-      throw error
-    }
-  }
-  return L(ctx, '发帖凭据和主页任务权限可用；自检不发布帖子。', 'Publishing credentials and Page tasks are available; the self-test does not publish a post.')
 }
 
 export async function recentPosts(ctx: any, ch: any, limit = 25, includeMetrics = false, includePhotos = false): Promise<{ id: string; message: string; created_time: string; permalink_url: string; likes: number; comments: number; shares: number; photo_ids: string[] }[]> {

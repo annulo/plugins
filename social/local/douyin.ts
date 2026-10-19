@@ -4,7 +4,7 @@ import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
-import { Expired, runProbe } from './_health'
+import { Expired } from './_health'
 import { selectUpload, waitImages } from './_douyin_upload'
 import { assist, markReady, readySel } from './_assist'
 
@@ -19,7 +19,6 @@ export { problems as draftProblems } from './_douyin_spec'
 //   douyin.login / douyin.checkLogin     本机浏览器登录抖音创作者中心（扫码，ctx.browser），登录态只在这台电脑上
 //   douyin.publish / remove 发布、删除作品
 //   douyin.collect                       采集粉丝数和最近作品的播放、点赞、评论、收藏、分享
-//   douyin.probe({ channel_id })         自检：登录、读账号、读作品、看删除入口、打开上传页，不真的上传（local/_health.ts）
 //
 // social_posts 里抖音的一条：title 是作品标题（≤30 字），body 是作品简介，tags 是话题（JSON 数组，发布时接在简介后面、逐个选成话题，
 // 简介连同话题 ≤1000 字），video 是视频（素材库的 http 地址，或 local:<名字> 的本机文件，原样交给 b.upload）；
@@ -524,7 +523,7 @@ async function uploadState(b: any): Promise<{ done: boolean; failed: boolean; pc
   return { done: TEXT.uploaded.test(t), failed: TEXT.uploadFailed.test(t), pct }
 }
 
-/** 打开上传页，等到选文件的 input 出来，并确认登录的是这个账号（发布和自检共用） */
+/** 打开上传页，等到选文件的 input 出来，并确认登录的是这个账号（发布用） */
 async function openUpload(ctx: any, b: any, ch: any, kind: 'image' | 'video' = 'video') {
   await b.goto(UPLOAD)
   if (loggedOut(b.url())) throw expired(ctx, ch)
@@ -850,7 +849,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 }
 
 /**
- * 打开作品管理页，找到这条作品的卡片，标出它的「删除作品」（删除和自检共用）。
+ * 打开作品管理页，找到这条作品的卡片，标出它的「删除作品」（删除用）。
  * 卡片里没有指向作品 id 的链接：按标题文字找到卡片，往上找到里面有「删除」或「更多」的那一层。
  * 「删除作品」在卡片上直接有就返回 direct: true；在「更多」菜单里就点开菜单，返回 direct: false。
  */
@@ -1015,57 +1014,4 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     out.push({ channel: patch.name ?? ch.name, videos: r.videos.length, updated, added, followers: patch.followers })
   }
   return { channels: out }
-}
-
-/**
- * 自检（local/_health.ts 的 runProbe）：按发布、删除、采集用到的顺序走一遍，每一步都用和它们同一份代码和选择器，
- * 不选文件、不点发布、不点删除（菜单按 Esc 关掉；上传页没选文件，不会留草稿）。
- * 标题框要选了文件才出现，所以不查。
- */
-export async function probe(input: { channel_id: string }, ctx: any) {
-  const ch = dyChannel(ctx, input?.channel_id)
-  return runProbe(ctx, async (t) => {
-    const b = await t.step('open', L(ctx, '打开浏览器', 'Open the browser'), () => openBrowser(ctx, { profile: ch.browser_profile }))
-    t.page = b
-    await t.step('login', L(ctx, '登录状态', 'Login'), async () => {
-      if (!ch.browser_profile || !ch.platform_uid) throw new Expired(L(ctx, '还没在这台电脑上登录过', "Hasn't logged in on this computer yet"))
-      await b.goto(HOME)
-      await ctx.sleep(2000)
-      const d = await whoami(b, ch)
-      if (!d) throw new Expired(L(ctx, '没登录（登录过期了）', 'Not logged in (login expired)'))
-      if (d.other) throw new Expired(L(ctx, `浏览器里登录的是另一个账号（${d.name}），不是这个账号`, `The browser is logged in to another account (${d.name}), not this one`))
-    })
-    await t.step('account', L(ctx, '读账号信息', 'Read the account'), async () => {
-      const u = await readUser(b)
-      if (!u) throw new Error(L(ctx, `读不到账号信息（${API.user} 的结构变了）`, `Couldn't read the account (${API.user} changed)`))
-      return `${u.name}` + (u.followers != null ? L(ctx, ` · ${u.followers} 粉丝`, ` · ${u.followers} followers`) : L(ctx, ' · 没读到粉丝数', ' · followers not found'))
-    })
-    let videos: DyVideo[] = []
-    await t.step('videos', L(ctx, '读最近的作品', 'Read recent videos'), async () => {
-      const r = await readVideos(ctx, b, 1)
-      if (r.loggedOut) throw new Expired(L(ctx, '打开作品管理被带去登录了（登录过期了）', 'Opening content management redirected to login (login expired)'))
-      if (!r.ok) throw new Error(L(ctx, `作品列表接口没返回数据：${API.works('0')}`, `The video list API returned nothing: ${API.works('0')}`))
-      const published = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 20 }).list.some((p: any) => p.post_id)
-      if (!r.videos.length && published) throw new Error(L(ctx, `读到 0 条作品，但这个账号发过：${API.works('0')} 的数据结构可能变了`, `Read 0 videos, but this account has published: ${API.works('0')} may have changed`))
-      videos = r.videos.filter((v) => !v.deleted).sort((x, y) => (Date.parse(y.created) || 0) - (Date.parse(x.created) || 0))
-      return L(ctx, `读到 ${videos.length} 条作品`, `${videos.length} videos`)
-    })
-    await t.soft('menu', L(ctx, '作品卡片上的删除入口', 'Delete on the video card'), async () => {
-      const last = videos[0]
-      if (!last) return L(ctx, '没有作品，跳过', 'No videos, skipped')
-      // 找到删除入口就按 Esc 关掉，不点
-      const menu = await openCardMenu(ctx, b, ch, last)
-      if (menu.direct) return L(ctx, '卡片上直接有删除', 'Delete is on the card')
-      const text = String(await b.eval(`document.body.innerText`).catch(() => ''))
-      await b.press('Escape').catch(() => {})
-      if (!TEXT.delete.some((x) => text.includes(x))) throw new Error(L(ctx, '「更多」菜单里没有「删除作品」（TEXT.delete）', 'No "删除作品" (Delete) in the More menu (TEXT.delete)'))
-      return L(ctx, '菜单里有删除', 'Delete is in the menu')
-    })
-    await t.step('upload', L(ctx, '打开上传页、找到选视频文件的入口', 'Open the upload page and find the file input'), async () => {
-      await openUpload(ctx, b, ch)
-    })
-    await t.step('image_upload', L(ctx, '打开图文上传入口', 'Open image-post upload'), async () => {
-      await openUpload(ctx, b, ch, 'image')
-    })
-  })
 }

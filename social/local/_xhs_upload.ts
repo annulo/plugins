@@ -5,7 +5,7 @@ const INPUT = {
   video: ['video', '.mp4', '.mov'].map(t => `input[type="file"][accept*="${t}" i]`).join(', '),
 }
 
-/** 发布、自检共用：确认真正切到了对应标签，并且文件框接收相应素材。 */
+/** 发布用：确认真正切到了对应标签，并且文件框接收相应素材。 */
 export async function selectUpload(ctx: any, b: any, kind: 'image' | 'video', timeoutMs = 15000): Promise<string> {
   const label = kind === 'image' ? '上传图文' : '上传视频'
   const deadline = Date.now() + timeoutMs
