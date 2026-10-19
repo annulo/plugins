@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.13
+  zh: "B站 删除稿件也交给浏览器助手：搜到这一条、打开菜单删掉，碰到验证码交给你；老的投稿脚本删掉了（要新版 Annulo）。"
+  en: "Deleting Bilibili videos is handed to the browser assistant too: it finds the video, opens its menu and deletes it, handing captchas to you. The old scripted upload flow is gone (needs a newer Annulo)."
 - version: 0.8.12
   zh: B站 投稿改由浏览器助手看着页面填写（需要新版 Annulo），页面改了也能自己找到；经验记在笔记里，越用越顺。
   en: "Bilibili uploads are now filled in by the browser assistant looking at the page (needs a newer Annulo), so page changes don't break them; what it learns is kept in notes."

@@ -24,16 +24,12 @@ export { problems as draftProblems } from './_bilibili_spec'
 // 账号和稿件数据都读 B站 自己的 JSON 接口（在登录着的页面里 fetch，带 cookie），不解析页面文字。
 // 页面结构和接口（2026-09）写成常量，B站 改版时只改这里。
 //
-// 2026-10-17 用真实账号投稿跑通过（投稿页 2026-10 改版后：子应用后加载、标签要逐个校验、创作声明和封面必填、分区只剩一级）。
-// 投稿按「填 → 读回来核对」做，必须的项不对不投、交给用户，标签没加上只提醒（见 publish 的说明）；publish({ dry_run: true }) 演练到点投稿之前。
-// B站 再改版时最可能要对着页面改的（这次的经过见 docs/publish-breakage.md）：
-//   1. 投稿页的选择器（SEL.fileInput / title / desc / tagInput / tagChip / submit），尤其简介框（新版是 Quill 编辑器）；
-//   2. 等上传完成的判断（TEXT.uploaded / uploading 的进度文字）；
-//   3. 选「自制」和选分区（SEL.categoryBtn / categoryItem；分区是一级还是两级、下拉的 class），没给 category 时不动；
-//   4. 投稿结果：监听 API.add（/x/vu/web/add、/x/vupre/web/add）的响应拿 bvid；没拿到再看 TEXT.success；
-//   5. 删除：稿件管理页里行的「更多」菜单（SEL.rowMore / 行怎么认）和确认框按钮（TEXT.confirm）；
-//   6. archives 接口的字段（arc_audits[].Archive / stat）。
-// 出错时先看报错里说的是哪一步（报错末尾有现场目录，看 outline.txt），再对照页面改下面的常量。
+// 投稿、删除稿件交给浏览器助手（b.agent，Annulo 能力版本 50）看着页面做，脚本只给它工具、守住收不回来的那一步（2026-10-19，做法见 docs/approach.md）：
+//   投稿：AI 上传视频、填标题、选创作声明和分区、选封面、关弹窗；脚本的工具填简介并读回核对、加标签、等上传完、核对后点「立即投稿」（publish 的 agentAttempt）；
+//   删除：AI 在稿件管理页搜到这一条、打开菜单点「删除稿件」；脚本的 confirm_delete 核对是确认框里的按钮才点，点完读接口确认没了（remove）。
+// 页面怎么认、有什么坑记在笔记里：插件自带的 notes/bilibili.publish.md、notes/bilibili.remove.md，项目学到的在 user/notes/social/ 下；B站 改版时先看、先改笔记，不用改选择器。
+// 下面的选择器只剩脚本自己还要认的几处（上传框、标签块、提示文字），接口在 API 里（投稿结果 API.add、稿件列表 API.archives）。
+// publish({ dry_run: true }) 演练到点投稿之前。
 
 type Post = {
   id: string
@@ -76,29 +72,16 @@ const API = {
 }
 const SEL = {
   fileInput: '.bcc-upload-wrapper input[type="file"], .upload-wrp input[type="file"], input[type="file"][accept*="mp4"], input[type="file"][accept*="video"], input[type="file"]',
-  progress: '.file-item-content-status-text, .upload-status, .progress-text, .file-item-content, .upload-list-wrp', // 上传进度那一块（读文字）
-  title: '.video-title input, input.input-val[placeholder*="标题"], input[placeholder*="稿件标题"], input[placeholder*="标题"]',
-  typeRadio: '.type-check-radio-wrp .check-radio-v2-container, .type-check-radio-wrp label, .check-radio-v2-container',
-  categoryBtn: '.video-human-type .select-controller, .type-select .select-controller, .select-container .select-controller, .video-type .select-controller, .select-controller',
-  categoryItem: '.drop-cascader-list-item, .select-item-cont, .drop-list-v2-item, .item-main, .select-dropdown-item, li',
-  tagInput: '.tag-input-wrp input, .tag-container input, input[placeholder*="回车"], input[placeholder*="Enter"]',
   tagChip: '.tag-pre-wrp .label-item-v2-container, .tag-container .label-item-v2-container, .label-item-v2-container, .tag-wrp .label-item',
   tagClose: '.close, .label-item-v2-close, [class*="close"]', // 标签块里的 ×（在 tagChip 里面找）
-  desc: '.desc-container .ql-editor, .archive-info-editor .ql-editor, .desc-v2-container .ql-editor, div.ql-editor[contenteditable="true"], textarea[placeholder*="简介"]',
-  submit: '.submit-add, span.submit-add, .submit-btn-group-add, button.submit-add',
-  rowMore: '.more-btn, .more-operation, [class*="more"]', // 稿件管理里一行的「⋮」按钮（在行里面找）；鼠标移上去才弹菜单，点击不弹（2026-09 实测）
-  menuItem: '.option-text, .option-footer, .more-list-item, .dropdown-item, [role="menuitem"]', // 弹出菜单里的项（「删除稿件」是 .option-text）
   // 点投稿后 B站 的提示（toast、通知、表单下的红字），没投出去时原样告诉用户
   notice: '[class*="toast"], [class*="Toast"], [class*="message"], [class*="notice"], [class*="error-tip"], [class*="err-tip"], [class*="warn-tip"]',
 }
 const TEXT = {
   uploaded: /上传完成|已上传|Upload(ed)? complete/,
   uploadFailed: /上传失败|上传出错|Upload failed/,
-  original: ['自制', '原创'],
   submit: ['立即投稿', '投稿'],
   success: /稿件投递成功|投稿成功|稿件已提交|提交成功/,
-  more: ['更多', '更多操作'],
-  delete: ['删除', '删除稿件'],
   confirm: ['确定', '确认', '确认删除', '删除'],
   dismiss: ['我知道了', '知道了', '跳过', '暂不'], // 新手引导、草稿恢复这类挡在前面的弹窗
 }
@@ -392,20 +375,6 @@ async function dismissPopups(ctx: any, b: any) {
   await ctx.sleep(300)
 }
 
-/** 页面上看得见的、文字正好是 text 的元素（在 sel 里找），打上 data-shuttle-mark=mark，返回找到没有 */
-function markByText(b: any, sel: string, text: string, mark: string) {
-  return b
-    .eval(`(() => {
-      document.querySelectorAll('[data-shuttle-mark=${JSON.stringify(mark)}]').forEach(e => e.removeAttribute('data-shuttle-mark'))
-      const want = ${JSON.stringify(text.replace(/\s+/g, ''))}
-      const hit = [...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent !== null && (e.innerText || '').replace(/\\s+/g, '') === want).pop()
-      if (!hit) return false
-      hit.setAttribute('data-shuttle-mark', ${JSON.stringify(mark)})
-      hit.scrollIntoView({ block: 'center' })
-      return true
-    })()`)
-    .catch(() => false)
-}
 
 /** 读输入框 / 编辑框里现在的文字 */
 const valueOf = (b: any, sel: string) => b.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).then((v: any) => String(v ?? ''), () => '')
@@ -450,13 +419,6 @@ async function notices(b: any): Promise<string[]> {
   return Array.isArray(list) ? list.map(String) : []
 }
 
-/** 上传进度：返回 { done, failed, pct }（pct 读不到是 -1） */
-async function uploadState(b: any): Promise<{ done: boolean; failed: boolean; pct: number }> {
-  const t = String((await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.progress)})].map(e => e.innerText).join(' ')`).catch(() => '')) || '')
-  const m = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(t)
-  const pct = m ? Number(m[1]) : -1
-  return { done: TEXT.uploaded.test(t), failed: TEXT.uploadFailed.test(t), pct }
-}
 
 /** 打开投稿页，等到选文件的 input 出来（发布用） */
 async function openUpload(ctx: any, b: any, ch: any) {
@@ -474,72 +436,8 @@ async function openUpload(ctx: any, b: any, ch: any) {
   if (ch.platform_uid && String(who.mid) !== String(ch.platform_uid)) throw new Expired(L(ctx, `浏览器里登录的是另一个 B站 账号（${who.uname}），不是「${ch.name}」，请重新登录`, `The browser is logged in to another Bilibili account (${who.uname}), not "${ch.name}" — log in again`))
 }
 
-/**
- * 封面（2026-10 起必填）：还空着就选 B站 推荐的第一张（从视频里截的画面），弹出裁剪框就点「完成」。
- * 推荐封面要等视频传上去一部分才出来，所以放在上传完之后。返回最后有没有封面（没有就不投稿，交给用户）。
- */
-async function chooseCover(ctx: any, b: any): Promise<boolean> {
-  const empty = () => b.exists('.cover-slot .cover-empty').catch(() => false)
-  if (!(await empty())) return true
-  ctx.progress({ message: L(ctx, '选封面…', 'Choosing a cover…') })
-  for (let i = 0; i < 20 && !(await b.exists('.img-item-cover').catch(() => false)); i++) await ctx.sleep(1500)
-  await b.click('.img-item-cover', { timeout: 5000 }).catch(() => {})
-  await ctx.sleep(1500)
-  for (const t of ['完成', '确定', '确认']) {
-    if ((await markByText(b, 'button, .bcc-button, [class*="btn"]', t, 'cover')) && (await b.click('[data-shuttle-mark="cover"]').then(() => true, () => false))) break
-  }
-  await ctx.sleep(1500)
-  return !(await empty())
-}
 
-/**
- * 创作声明（2026-10 起投稿页必填）：选「使用 AI 生成 / 合成」的那项（我们的视频都是 AI 辅助做的，平台要求如实声明）。
- * 没有这个下拉就跳过；有但认不出选项，返回要用户做什么（不投稿，交给用户），选上了返回空字符串。
- */
-async function chooseDeclaration(ctx: any, b: any): Promise<string> {
-  const box = 'input[placeholder*="创作声明"]'
-  if (!(await b.click(box, { timeout: 3000 }).then(() => true, () => false))) return ''
-  await ctx.sleep(1000)
-  const opts: string[] = await b.eval(`[...document.querySelectorAll('.bcc-option')].filter(e => e.offsetParent !== null && !e.querySelector('li')).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 40)`).catch(() => [])
-  const pick = opts.find((t) => /AI|人工智能/.test(t)) // 2026-10 的选项：含AI生成内容 / 含虚构演绎内容 / 个人观点，仅供参考 / 内容为转载
-  if (!pick || !(await markByText(b, '.bcc-option', pick, 'decl')) || !(await b.click('[data-shuttle-mark="decl"]').then(() => true, () => false))) {
-    await b.press('Escape').catch(() => {})
-    return L(ctx, `创作声明没选上：选「含AI生成内容」那项（可选的有：${[...new Set(opts)].slice(0, 20).join('、') || '没读到'}）`, `创作声明 (declaration) isn't set: pick the AI-generated option (options: ${[...new Set(opts)].slice(0, 20).join(', ') || 'none found'})`)
-  }
-  await ctx.sleep(600)
-  await b.press('Escape').catch(() => {}) // 下拉可以多选，选完收起来
-  await ctx.sleep(300)
-  return ''
-}
 
-/**
- * 选分区：category 可以是「科技」，也可以是两级「知识 / 科学科普」「知识 > 科学科普」，按层依次点；页面上没有第二级（2026-10 起只有一级）就停在第一级。
- * 选上了返回空字符串；选不上返回要用户做什么（不投稿，交给用户）。
- */
-async function chooseCategory(ctx: any, b: any, category: string): Promise<string> {
-  const levels = category.split(/\s*[/>›→·]\s*/).map((x) => x.trim()).filter(Boolean)
-  if (!levels.length) return ''
-  if (!(await b.click(SEL.categoryBtn, { timeout: 5000 }).then(() => true, () => false)) && !(await clickText(b, ['分区', '选择分区']))) {
-    return L(ctx, `分区没选上：选「${category}」`, `Category isn't set: pick "${category}"`)
-  }
-  await ctx.sleep(800)
-  for (const [i, name] of levels.entries()) {
-    if (!(await markByText(b, SEL.categoryItem, name, 'cat'))) {
-      // 2026-10 起投稿页只有一级分区：第一级选上了、第二级找不到，就停在第一级（「知识 / 财经商业」投到「知识」）
-      if (i > 0) {
-        await b.press('Escape').catch(() => {})
-        ctx.progress({ message: L(ctx, `B站 现在只有一级分区，投到「${levels.slice(0, i).join(' / ')}」`, `Bilibili only has top-level categories now; using "${levels.slice(0, i).join(' / ')}"`) })
-        return ''
-      }
-      const opts: string[] = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.categoryItem)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 12).slice(0, 40)`).catch(() => [])
-      await b.press('Escape').catch(() => {})
-      return L(ctx, `分区里没有「${name}」：选一个合适的（可选的有：${opts.join('、') || '没读到'}）`, `No category "${name}": pick a fitting one (options: ${opts.join(', ') || 'none found'})`)
-    }
-    await b.click('[data-shuttle-mark="cat"]').catch(() => b.eval(`document.querySelector('[data-shuttle-mark="cat"]').click()`))
-    await ctx.sleep(800)
-  }
-  return ''
-}
 
 /** 页面上现有的标签块文字 */
 const chipTexts = (b: any): Promise<string[]> =>
@@ -577,15 +475,10 @@ async function waitUploaded(ctx: any, b: any) {
 }
 
 /**
- * 填标签：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
+ * 填标签（add_tags 工具，标签输入框由浏览器助手认出来交给它）：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
  * 先删掉所有不在我们列表里的，加之前名额满了再删；每个标签要等 B站「请求校验」完、变成标签块，再打下一个。
  * 返回没加上的标签（B站 不收的词、或者找不到输入框时全部）：标签是尽量做的，没加上照样投稿，结果里提醒。
  */
-async function fillTags(ctx: any, b: any, tags: string[]): Promise<string[]> {
-  return fillTagsAt(ctx, b, SEL.tagInput, tags)
-}
-
-/** fillTags，标签输入框由调用方给（浏览器助手认出来的那个） */
 async function fillTagsAt(ctx: any, b: any, input: string, tags: string[]): Promise<string[]> {
   if (!tags.length) return []
   if (!(await b.waitFor(input, { timeout: 10000 }).then(() => true, () => false))) return tags
@@ -800,105 +693,9 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     ctx.progress({ message: L(ctx, '打开投稿页…', 'Opening the upload page…') })
     await openUpload(ctx, b, ch)
     b.listen(API.add)
-    if (typeof b.agent === 'function') return agentAttempt(b, warnings, handOver)
-    ctx.progress({ message: L(ctx, '读取视频并上传…', 'Reading the video and uploading…') })
-    // 投稿页是后加载的子应用（micro-app）：文件塞得太早，页面还没挂上监听，选了也没反应（2026-10 实测）。等一会儿再塞，20 秒没出表单就再塞一次
-    await ctx.sleep(4000)
-    const send = () => b.upload(SEL.fileInput, [p!.video], { timeout: 10 * 60_000 }).catch((e: any) => {
-      throw new Error(L(ctx, '视频没传上去（素材下载失败、本机文件找不到，或者超过 2GB）：', "The video didn't upload (couldn't fetch the asset, local file not found, or it's over 2GB): ") + (e?.message ?? e))
-    })
-    await send()
-    if (!(await b.waitFor(SEL.title, { timeout: 20000 }).then(() => true, () => false))) {
-      await dismissPopups(ctx, b)
-      await send()
-    }
-    if (!(await b.waitFor(SEL.title, { timeout: 120000 }).then(() => true, () => false))) {
-      // 表单可能被弹窗、引导挡住：请浏览器助手帮一步
-      const ok = await assist(ctx, b, '让填写稿件信息的表单出现（稿件标题输入框）；不要点投稿', { until: SEL.title, avoid: TEXT.submit })
-      if (!ok) throw new Error(L(ctx, '选了视频，但没出现填写标题的表单（视频格式 B站 不认，或者页面改了）', "Picked the video, but the details form didn't appear (Bilibili may not accept the format, or the page changed)"))
-    }
-    await ctx.sleep(1500)
-    await dismissPopups(ctx, b)
-
-    ctx.progress({ message: L(ctx, '填写标题、类型、分区、标签、简介…', 'Filling in title, type, category, tags and description…') })
-    const need: string[] = []
-    if (!(await fillText(ctx, b, SEL.title, p!.title))) need.push(titleWrong)
-    // 类型选「自制」：2026-10-19 的投稿页已经没有「自制 / 转载」这一项了，页面上有才选；有却选不上才交给用户
-    if (/自制[\s\S]{0,40}转载|转载[\s\S]{0,40}自制/.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) {
-      const typed = (await markByText(b, SEL.typeRadio, TEXT.original[0], 'type')) && (await b.click('[data-shuttle-mark="type"]').then(() => true, () => false))
-      if (!typed && !(await clickText(b, TEXT.original))) need.push(L(ctx, '类型没选上：选「自制」', 'Type isn\'t set: pick 自制 (original)'))
-    }
-    await ctx.sleep(500)
-    if (p!.category?.trim()) {
-      const why = await chooseCategory(ctx, b, p!.category.trim())
-      if (why) need.push(why)
-    }
-    const decl = await chooseDeclaration(ctx, b)
-    if (decl) need.push(decl)
-    const missing = await fillTags(ctx, b, tags)
-    if (missing.length) warnings.push(L(ctx, `这些标签没加上（B站 不收，或者找不到填标签的框）：${missing.join('、')}`, `These tags weren't added (Bilibili didn't accept them, or the tag box wasn't found): ${missing.join(', ')}`))
-    if (desc && !(await fillText(ctx, b, SEL.desc, desc))) need.push(descWrong)
-
-    // 等上传完：大视频要十几分钟，每半分钟报一次进度
-    const deadline = Date.now() + 30 * 60_000
-    let told = 0
-    let up = await uploadState(b)
-    while (!up.done && Date.now() < deadline) {
-      if (up.failed) throw new Error(L(ctx, 'B站 提示视频上传失败：到投稿页看一眼（网络、格式或文件太大）', 'Bilibili says the upload failed: check the upload page (network, format or file size)'))
-      if (Date.now() - told > 30000) {
-        told = Date.now()
-        ctx.progress({ message: up.pct >= 0 ? L(ctx, `上传中 ${up.pct}%…`, `Uploading ${up.pct}%…`) : L(ctx, '等视频上传完…', 'Waiting for the upload to finish…') })
-      }
-      await ctx.sleep(3000)
-      up = await uploadState(b)
-    }
-    if (!up.done) throw new Error(L(ctx, '等了 30 分钟视频还没传完（或者没认出「上传完成」）：到 B站 投稿页看一眼', "Waited 30 minutes and the upload isn't done (or \"上传完成\" wasn't recognized): check Bilibili's upload page"))
-
-    if (!(await chooseCover(ctx, b))) need.push(L(ctx, '封面没选上（B站 要求必须有封面）：在「封面」里选一张', "No cover (Bilibili requires one): pick one under 封面 (Cover)"))
-    // 后面的步骤（封面弹窗、标签校验）可能动到前面填好的：点投稿前再核对一遍标题、简介
-    if (!need.length) {
-      if (squash(await valueOf(b, SEL.title)) !== squash(p!.title)) need.push(titleWrong)
-      if (desc && squash(await valueOf(b, SEL.desc)) !== squash(desc)) need.push(descWrong)
-    }
-    if (input.dry_run) return { dry_run: true, need, warnings }
-    if (need.length) return handOver(need)
-
-    ctx.progress({ message: L(ctx, '投稿…', 'Submitting…') })
-    /** 点「立即投稿」：脚本找不到就请浏览器助手把按钮弄出来（关掉挡着的东西），投稿还是脚本点 */
-    const submit = async () => {
-      if (await b.click(SEL.submit, { timeout: 5000 }).then(() => true, () => false)) return true
-      if (await clickText(b, TEXT.submit)) return true
-      const stop = await markReady(b, 'submit', TEXT.submit)
-      try {
-        return (await assist(ctx, b, '让「立即投稿」按钮露出来、能点（不要点投稿）', { until: readySel('submit'), avoid: TEXT.submit })) && (await b.click(readySel('submit')).then(() => true, () => false))
-      } finally {
-        await stop()
-      }
-    }
-    if (!(await submit())) return handOver([L(ctx, '没找到能点的「立即投稿」按钮', 'No clickable 立即投稿 (Submit) button found')])
-    // 等投稿接口的响应（拿 bvid），或者页面出现「稿件投递成功」
-    const end = Date.now() + 90000
-    let res: Awaited<ReturnType<typeof addResult>> = null
-    let okText = false
-    const seen = new Set<string>()
-    while (Date.now() < end) {
-      await ctx.sleep(1500)
-      res = await addResult(b)
-      if (res) break
-      for (const n of await notices(b)) seen.add(n)
-      okText = TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
-      if (okText) {
-        await ctx.sleep(1500)
-        res = await addResult(b)
-        break
-      }
-    }
-    if (res && res.code !== 0) return handOver([L(ctx, `B站 没收下：${res.message || res.code}`, `Bilibili rejected it: ${res.message || res.code}`)])
-    if (!res && !okText) {
-      const said = [...seen].slice(0, 3).join(' / ')
-      return handOver([L(ctx, '点了「立即投稿」，但没看到投稿成功', 'Clicked 立即投稿 (Submit) but saw no success') + (said ? L(ctx, `（B站 提示：${said}）`, ` (Bilibili said: ${said})`) : '')])
-    }
-    return { b, res, okText, warnings }
+    // 表单交给浏览器助手（b.agent，Annulo 能力版本 50）；老的脚本流程 2026-10-19 删了（插件的 min_annulo_api 是 50）
+    if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（B站 投稿要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (Bilibili uploads need the browser assistant): Settings → About'))
+    return agentAttempt(b, warnings, handOver)
   }
 
   try {
@@ -935,67 +732,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 }
 
-/**
- * 打开稿件管理页，找到这条稿件的那一行，点开它的「更多」菜单（删除用）。
- * 行没有稳定的 class：从指向 BV 号的链接往上找，找到里面有「更多」按钮的那一层当作行。
- * 有的版本「删除」直接在行上（不在菜单里）：那就不点「更多」，返回 direct: true。
- */
-async function openRowMenu(ctx: any, b: any, ch: any, bvid: string): Promise<{ direct: boolean }> {
-  await b.goto(MANAGE)
-  if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
-  await b.waitFor(`a[href*="${bvid}"]`, { timeout: 30000 }).catch(() => {
-    throw new Error(L(ctx, '稿件管理第一页里没找到这条稿件（可能已经删了，或者页面改了）：', "Couldn't find this video on the first page of upload management (it may be deleted, or the page changed): ") + bvid)
-  })
-  const found = await b.eval(`(() => {
-    document.querySelectorAll('[data-shuttle-row]').forEach(e => e.removeAttribute('data-shuttle-row'))
-    const exact = (e, list) => list.includes((e.innerText || '').trim())
-    const link = document.querySelector('a[href*="${bvid}"]')
-    let row = link
-    for (let i = 0; row && i < 10; i++, row = row.parentElement) {
-      const els = [...row.querySelectorAll('*')]
-      const del = els.find(e => e.children.length === 0 && exact(e, ${JSON.stringify(TEXT.delete)}))
-      const more = row.querySelector(${JSON.stringify(SEL.rowMore)}) || els.find(e => e.children.length <= 1 && exact(e, ${JSON.stringify(TEXT.more)}))
-      if (del || more) {
-        row.scrollIntoView({ block: 'center' })
-        row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
-        row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
-        if (del) { del.setAttribute('data-shuttle-row', 'delete'); return 'direct' }
-        more.setAttribute('data-shuttle-row', 'more')
-        return 'more'
-      }
-    }
-    return ''
-  })()`).catch(() => '')
-  if (!found) throw new Error(L(ctx, '稿件那一行里没找到「更多」或「删除」（SEL.rowMore / TEXT.more），B站 的页面可能改了', 'No "更多" (More) or "删除" (Delete) in the video row (SEL.rowMore / TEXT.more) — Bilibili\'s page may have changed'))
-  if (found === 'direct') return { direct: true }
-  await ctx.sleep(400)
-  // 菜单是鼠标移到「⋮」上才弹的：在按钮本身上发 mouseover / mouseenter（点击不弹）
-  const hover = () => b.eval(`(() => { const m = document.querySelector('[data-shuttle-row="more"]'); if (!m) return false; ['mouseover', 'mouseenter'].forEach(t => m.dispatchEvent(new MouseEvent(t, { bubbles: true }))); return true })()`).catch(() => false)
-  const shown = () => b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.menuItem)})].some(e => e.offsetParent !== null)`).catch(() => false)
-  await hover()
-  await ctx.sleep(1000)
-  if (!(await shown())) {
-    await b.click('[data-shuttle-row="more"]').catch(() => {})
-    await hover()
-    await ctx.sleep(1000)
-  }
-  return { direct: false }
-}
 
 /** 从 B站 上删除一条稿件（不可恢复）。删完再读稿件列表核对：还在列表里就报错，不记成 removed */
-/** 页面上是不是在要人做验证（验证码、滑块、安全验证）：返回看到的那句话，没有返回空 */
-async function captchaText(b: any): Promise<string> {
-  return String(
-    (await b
-      .eval(`(() => {
-        const vis = e => { const r = e.getBoundingClientRect(); return r.width > 20 && r.height > 20 && getComputedStyle(e).visibility !== 'hidden' }
-        const box = [...document.querySelectorAll('[class*="geetest" i], [class*="captcha" i] iframe, iframe[src*="captcha" i], iframe[src*="geetest" i], [class*="verify-wrap" i], [class*="risk-verify" i]')].find(vis)
-        const m = /请完成(安全)?验证|安全验证|拖动(下方)?滑块|按顺序点击|请输入验证码|人机验证/.exec(document.body.innerText)
-        return box ? (m ? m[0] : '验证码') : m ? m[0] : ''
-      })()`)
-      .catch(() => '')) ?? '',
-  )
-}
 
 /**
  * 删除要人来处理（验证码、认不出的确认框）：把窗口调到前台告诉用户，然后不离开当前页面、隔几秒读一次稿件列表接口，
@@ -1016,59 +754,84 @@ async function handOverRemove(ctx: any, b: any, bvid: string, why: string): Prom
   return false
 }
 
-export async function remove(input: { post_id?: string; bvid?: string; channel_id?: string }, ctx: any) {
+/**
+ * 从 B站 删除一条稿件（不可恢复）：交给浏览器助手（b.agent）在稿件管理页找到这一条、打开菜单、点「删除稿件」；
+ * 确认框里的确认按钮它点不到，只能调 confirm_delete：脚本核对是确认框里的「确定 / 删除」才点，点完读接口确认这个 BV 号没了。
+ * 碰到验证码它交给用户；它没做完就把窗口交给用户（handOverRemove）。最后再读一次稿件列表核对，还在就报错、不记成 removed。
+ * dry_run：演练，走到确认框为止，confirm_delete 核对完不点，返回 { dry_run, ok, reason? }，什么都不删。
+ */
+export async function remove(input: { post_id?: string; bvid?: string; channel_id?: string; dry_run?: boolean }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const bvid = p?.post_id || input?.bvid
   const ch = biliChannel(ctx, p?.channel_id || input?.channel_id || '')
   if (!bvid || !ch.browser_profile) throw new Error(L(ctx, '要给出视频（post_id），或者 bvid + channel_id；发布时没认出 BV 号的稿件请到 B站 创作中心里删', 'Give a video post (post_id), or bvid + channel_id; videos published without a recognized BV id must be deleted in Bilibili\'s creator center'))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
-  const menu = await openRowMenu(ctx, b, ch, bvid)
-  if (menu.direct) await b.click('[data-shuttle-row="delete"]').catch(() => b.eval(`document.querySelector('[data-shuttle-row="delete"]').click()`))
-  else {
-    // 菜单项是「删除稿件」：按 TEXT.delete 的几种写法依次认，只在菜单项里找（页面上藏着的确认框里也有「删除」）
-    let hit = false
-    for (const t of TEXT.delete) {
-      if ((await markByText(b, SEL.menuItem, t, 'del')) && (await b.click('[data-shuttle-mark="del"]').then(() => true, () => b.eval(`document.querySelector('[data-shuttle-mark="del"]').click()`).then(() => true, () => false)))) {
-        hit = true
-        break
-      }
-    }
-    if (!hit) throw new Error(L(ctx, '「⋮」菜单里没有「删除稿件」（SEL.menuItem / TEXT.delete），B站 的页面可能改了', 'No "删除稿件" (Delete) in the ⋮ menu (SEL.menuItem / TEXT.delete) — Bilibili\'s page may have changed'))
+  if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（B站 删除稿件要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (deleting Bilibili videos needs the browser assistant): Settings → About'))
+  const removed = () => p && ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
+  const before = await readVideos(ctx, b, 3)
+  if (before.loggedOut) throw expired(ctx, ch)
+  const v = before.videos.find((x) => x.bvid === bvid)
+  if (!v || isDeleted(v)) {
+    if (before.ok) removed()
+    return { removed: bvid, verified: before.ok, already: true }
   }
-  await ctx.sleep(1000)
-  // B站 有时在删除前要做验证（验证码、滑块）：只有人能做，交给用户
-  const handOff = async (why: string) => {
-    if (await handOverRemove(ctx, b, bvid, why)) return
-    throw new Error(L(ctx, `没删掉：${why}。到页面上再点一次删除，会弹出 B站 窗口让你完成；也可以到 B站 创作中心里删`, `Not deleted: ${why}. Click delete on the page again and finish it in the Bilibili window that opens, or delete it in Bilibili's creator center`))
+  /** 不离开页面读一次稿件列表接口：这个 BV 号还在不在 */
+  const gone = async () => {
+    const j = await api(b, API.archives(1))
+    if (!j || j.code !== 0) return false
+    const m = new Map<string, BiliVideo>()
+    videosOf(j, m)
+    const x = [...m.values()].find((y) => y.bvid === bvid)
+    return !x || isDeleted(x)
   }
-  let captcha = await captchaText(b)
-  // 确认框：「确定」/「确认删除」（弹窗里最后出现的那个）
-  let confirmed = false
-  for (const t of captcha ? [] : TEXT.confirm) {
-    if (await markByText(b, 'button, .bcc-button, [role="button"], .btn, span, div', t, 'ok')) {
-      if (await b.click('[data-shuttle-mark="ok"]').then(() => true, () => false)) {
-        confirmed = true
-        break
-      }
-    }
+  const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
+  const tools = {
+    confirm_delete: {
+      description: `args { button_id }: the only way to confirm the deletion. Checks the element is the confirm button (${TEXT.confirm.join(' / ')}) inside the confirmation dialog, clicks it, and checks this video is gone.`,
+      params: { type: 'object', properties: { button_id: { type: 'integer', description: 'element number of the confirm button in the dialog' } }, required: ['button_id'] },
+      run: async (a: any) => {
+        const el = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); if (!e) return null; return { text: (e.innerText || '').trim(), dialog: !!e.closest('[role="dialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popover" i],[class*="confirm" i]') } })()`).catch(() => null)
+        if (!el) return `No element ${a.button_id}.`
+        if (!TEXT.confirm.includes(el.text)) return `Element ${a.button_id} says "${el.text}", not a confirm button (${TEXT.confirm.join(' / ')}).`
+        if (!el.dialog) return `Element ${a.button_id} is not inside the confirmation dialog; open the delete confirmation first.`
+        if (input.dry_run) return { finish: L(ctx, '演练：确认框和按钮都对，没点', 'Dry run: the dialog and button check out, not clicked') }
+        await b.click(at(a.button_id)).catch(() => b.eval(`document.querySelector(${JSON.stringify(at(a.button_id))}).click()`))
+        for (let i = 0; i < 8; i++) {
+          await ctx.sleep(1500)
+          if (await gone()) return { finish: L(ctx, `删掉了 ${bvid}`, `Deleted ${bvid}`) }
+        }
+        return 'Clicked, but the video is still listed. A verification (captcha) or another confirmation may be showing: handle it (ask_user for a captcha), then check again.'
+      },
+    },
   }
-  if (!confirmed) {
-    captcha = captcha || (await captchaText(b))
-    await handOff(captcha ? L(ctx, `B站 要先做验证（${captcha}）`, `Bilibili wants a verification first (${captcha})`) : L(ctx, '没认出删除的确认框', "The delete confirmation dialog wasn't recognized"))
-  } else {
-    await ctx.sleep(1500)
-    // 点了确定以后也可能要验证
-    captcha = await captchaText(b)
-    if (captcha) await handOff(L(ctx, `B站 要先做验证（${captcha}）`, `Bilibili wants a verification first (${captcha})`))
+  const task = [
+    `在 B站 创作中心的稿件管理页删掉这一条稿件（不可恢复，只删这一条，别的稿件一个都不要动）：`,
+    `- 标题「${v.title}」，BV 号 ${bvid}。`,
+    `- 在稿件管理页的搜索框里搜标题，确认列表里看到的是这一条（标题链接指向这个 BV 号）。`,
+    `- 这一行的「⋮ / 更多」鼠标移上去才弹菜单（用 hover），菜单里点「删除稿件」；有的版本「删除」直接在这一行上。`,
+    `- 弹出确认框后用 confirm_delete 工具点确认按钮（传按钮的编号），它会核对并确认删掉了。碰到验证码用 ask_user 交给用户。`,
+  ].join('\n')
+  await b.goto(MANAGE).catch(() => {})
+  if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
+  const r = await b.agent(task, { tools, avoid: TEXT.confirm, notes: 'bilibili.remove', maxSteps: 20 })
+  if (input.dry_run) {
+    const snap = await b.snapshot?.({ label: 'remove-dry-run' }).catch(() => null)
+    return { dry_run: true, ok: r.ok, reason: r.reason || r.summary, snapshot: snap?.dir, timing: r.timing?.summary }
   }
-  await ctx.sleep(1500)
+  if (!(await gone())) {
+    const why = r.ok ? L(ctx, '浏览器助手说删了，但稿件还在列表里', 'The browser assistant said it was deleted, but the video is still listed') : r.reason || L(ctx, '浏览器助手没删掉', "The browser assistant didn't delete it")
+    if (!(await handOverRemove(ctx, b, bvid, why))) throw new Error(L(ctx, `没删掉：${why}。到页面上再点一次删除，会弹出 B站 窗口交给你；也可以到 B站 创作中心里删`, `Not deleted: ${why}. Click delete on the page again and finish it in the Bilibili window that opens, or delete it in Bilibili's creator center`))
+  }
   // 核对：还在列表里（而且不是已删除状态）就不算删掉
-  const r = await readVideos(ctx, b, 1)
-  if (r.loggedOut) throw expired(ctx, ch)
-  const still = r.videos.find((v) => v.bvid === bvid)
+  const after = await readVideos(ctx, b, 3)
+  if (after.loggedOut) throw expired(ctx, ch)
+  const still = after.videos.find((x) => x.bvid === bvid)
   if (still && !isDeleted(still)) throw new Error(L(ctx, `点了删除，但稿件列表里还有这条（${still.stateDesc || still.state}），可能没删掉：到 B站 创作中心看一眼`, `Clicked delete, but the video is still listed (${still.stateDesc || still.state}) — it may not be deleted; check Bilibili's creator center`))
-  if (p) ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
-  return { removed: bvid, verified: r.ok }
+  // 别的稿件不该少：少了说明删错了，原样告诉用户（删掉的收不回来）
+  const lost = before.videos.filter((x) => x.bvid !== bvid && !isDeleted(x) && !after.videos.some((y) => y.bvid === x.bvid && !isDeleted(y)))
+  if (lost.length && after.ok) ctx.log(L(ctx, `注意：删除后这些稿件也不在列表里了：${lost.map((x) => x.title || x.bvid).join('、')}，到 B站 创作中心看一眼`, `Note: after deleting, these videos are no longer listed either: ${lost.map((x) => x.title || x.bvid).join(', ')} — check Bilibili's creator center`))
+  removed()
+  return { removed: bvid, verified: after.ok, ...(lost.length ? { also_missing: lost.map((x) => x.bvid) } : {}) }
 }
 
 /**

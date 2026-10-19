@@ -35,6 +35,8 @@ annulo run social/social.health --input '{}'          # 所有账号的记录，
 ## 3. 改平台文件
 
 平台文件在 `plugins/social/local/` 下：`linkedin.ts`（LinkedIn）、`x.ts`（X）、`facebook.ts`、`instagram.ts`、`youtube.ts`、`xhs.ts`（小红书）、`douyin.ts`（抖音）、`bilibili.ts`（B 站）、`zhihu.ts`（知乎）。
+B站 的投稿、删除已经交给浏览器助手看着页面做（`b.agent`，做法见 `plugins/social/docs/approach.md`）：它坏了先看现场和运行日志里它每一步看到了什么，
+多半是页面的规律变了，改笔记（项目自己的 `user/notes/social/bilibili.publish.md` / `bilibili.remove.md`）就行，不用改选择器；笔记解决不了再改脚本的工具。
 动手前先看 `plugins/social/docs/publish-breakage.md`：以前各平台卡过的地方和原因（SVG 点不动、清空输入框会删掉标签、页面后加载、新的必填项……），这次可能是同一种。
 页面元素在文件开头的 `SEL` 常量里，数据接口在 `API` 常量里；发布、删除、采集各自的流程在同名函数里（`publish`、`remove`、`collect`，打开发帖框这类公共步骤在 `openComposer` 这类函数里）。
 
