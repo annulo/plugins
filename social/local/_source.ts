@@ -5,6 +5,8 @@
 
 /** 能交给 b.upload 的素材地址：http(s)，或离线项目本机上传的 /_annulo/uploaded/…（不带端口，Annulo 能力版本 33 起） */
 export const isAssetUrl = (u: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/)\S+$/.test(String(u ?? '').trim())
+/** 视频封面：资料库地址，或本机文件 local:<name>（自媒体内容文件夹里的图发布时存成本机文件）；发布时原样交给 b.upload */
+export const isCoverRef = (u: any) => isAssetUrl(u) || /^local:[0-9a-f]{32}\.\w+$/.test(String(u ?? '').trim())
 
 /**
  * save 的 post_images：这条帖子要配的图（从内容的 images 里挑、按顺序），用户让「图都配上」「换成这几张」时给。

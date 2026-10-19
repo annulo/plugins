@@ -1,7 +1,7 @@
 // 抖音视频作品的规格。页面和本机函数都按这里检查，抖音改规则时只改这里。
 
 import { L } from './_i18n'
-import { isAssetUrl } from './_source'
+import { isCoverRef } from './_source'
 
 export const DOUYIN = {
   // 作品标题最多 30 个字；作品简介连同话题最多 1000 个字；话题最多 5 个；视频从素材库选（http 地址或 local: 本机文件）
@@ -39,7 +39,7 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; vi
   if (len > DOUYIN.descMax) out.push(L(ctx, `简介连同话题 ${len} 个字，最多 ${DOUYIN.descMax} 个`, `Description with hashtags is ${len} characters; max ${DOUYIN.descMax}`))
   if (video && images.length) out.push(L(ctx, '图片和视频只能选一种，请分别保存为图文或视频内容', 'Choose images or a video, and save them as separate content items'))
   if (video) {
-    if (d.video_cover && !isAssetUrl(d.video_cover)) out.push(L(ctx, '视频封面要使用资料库地址或本机上传的图片', 'Use a Library URL or locally uploaded image for the video cover'))
+    if (d.video_cover && !isCoverRef(d.video_cover)) out.push(L(ctx, '视频封面要使用资料库地址或本机上传的图片', 'Use a Library URL or locally uploaded image for the video cover'))
     if (!isVideoRef(video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (!images.length) out.push(L(ctx, '还没选素材：图文至少添加一张图片，或上传本机视频、从资料库选视频', 'No media yet: add at least one image, upload a video, or pick a video from the Library'))
   if (images.length > DOUYIN.imagesMax) out.push(L(ctx, `图片 ${images.length} 张，最多 ${DOUYIN.imagesMax} 张`, `${images.length} images; max ${DOUYIN.imagesMax}`))

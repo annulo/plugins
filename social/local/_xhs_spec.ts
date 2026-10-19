@@ -3,7 +3,7 @@
 // 视频笔记：social_posts.video 有值（素材地址 http(s) 或本机文件 local:<名字>）就发视频笔记，配图和封面大字不用。
 
 import { L } from './_i18n'
-import { isAssetUrl } from './_source'
+import { isCoverRef } from './_source'
 
 export const XHS = {
   titleMax: 20, // 标题最多 20 个字（按字符数，emoji 算 1–2 个）
@@ -42,7 +42,7 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; im
   const video = String(d.video ?? '').trim()
   // 视频笔记不用配图（封面由小红书从视频里自动选），只检查视频地址
   if (video) {
-    if (d.video_cover && !isAssetUrl(d.video_cover)) out.push(L(ctx, '视频封面要使用资料库地址或本机上传的图片', 'Use a Library URL or locally uploaded image for the video cover'))
+    if (d.video_cover && !isCoverRef(d.video_cover)) out.push(L(ctx, '视频封面要使用资料库地址或本机上传的图片', 'Use a Library URL or locally uploaded image for the video cover'))
     if (!isVideoRef(video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (d.images && d.images.length > XHS.imagesMax) out.push(L(ctx, `图片 ${d.images.length} 张，最多 ${XHS.imagesMax} 张`, `${d.images.length} images; max ${XHS.imagesMax}`))
   const text = `${d.title ?? ''}\n${d.body ?? ''}`

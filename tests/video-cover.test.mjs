@@ -43,6 +43,11 @@ for(const [platform,name] of [['xiaohongshu','xhs'],['douyin','douyin']]) {
     assert.equal(tables.social_posts[0].video_cover,cover)
     m.save({...input,post_id:id,video_cover:'https://assets.test/new.png'},ctx)
     assert.throws(()=>m.save({...input,post_id:id,video_cover:'file:///private/image.png'},ctx),/Library/)
+    assert.throws(()=>m.save({...input,post_id:id,video_cover:'local:../secret.png'},ctx),/Library/)
+    // 自媒体内容文件夹里的图发布时存成本机文件：也能当封面
+    const local='local:0123456789abcdef0123456789abcdef.png'
+    assert.deepEqual(m.save({...input,post_id:id,video_cover:local},ctx).problems,[]);assert.equal(tables.social_posts[0].video_cover,local)
+    m.save({...input,post_id:id,video_cover:'https://assets.test/new.png'},ctx)
     assert.equal(tables.social_posts[0].video_cover,'https://assets.test/new.png')
     m.save({...input,post_id:id,video_cover:''},ctx);assert.equal(tables.social_posts[0].video_cover,'')
   })
