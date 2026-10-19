@@ -3,6 +3,7 @@ import { sourceOf } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { BILI, descText, isVideoRef, problems } from './_bilibili_spec'
 import { Expired } from './_health'
+import { assist, markReady, readySel } from './_assist'
 
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_bilibili_spec'
@@ -24,6 +25,7 @@ export { problems as draftProblems } from './_bilibili_spec'
 // 页面结构和接口（2026-09）写成常量，B站 改版时只改这里。
 //
 // 2026-10-17 用真实账号投稿跑通过（投稿页 2026-10 改版后：子应用后加载、标签要逐个校验、创作声明和封面必填、分区只剩一级）。
+// 投稿按「填 → 读回来核对」做，必须的项不对不投、交给用户，标签没加上只提醒（见 publish 的说明）；publish({ dry_run: true }) 演练到点投稿之前。
 // B站 再改版时最可能要对着页面改的（这次的经过见 docs/publish-breakage.md）：
 //   1. 投稿页的选择器（SEL.fileInput / title / desc / tagInput / tagChip / submit），尤其简介框（新版是 Quill 编辑器）；
 //   2. 等上传完成的判断（TEXT.uploaded / uploading 的进度文字）；
@@ -86,6 +88,8 @@ const SEL = {
   submit: '.submit-add, span.submit-add, .submit-btn-group-add, button.submit-add',
   rowMore: '.more-btn, .more-operation, [class*="more"]', // 稿件管理里一行的「⋮」按钮（在行里面找）；鼠标移上去才弹菜单，点击不弹（2026-09 实测）
   menuItem: '.option-text, .option-footer, .more-list-item, .dropdown-item, [role="menuitem"]', // 弹出菜单里的项（「删除稿件」是 .option-text）
+  // 点投稿后 B站 的提示（toast、通知、表单下的红字），没投出去时原样告诉用户
+  notice: '[class*="toast"], [class*="Toast"], [class*="message"], [class*="notice"], [class*="error-tip"], [class*="err-tip"], [class*="warn-tip"]',
 }
 const TEXT = {
   uploaded: /上传完成|已上传|Upload(ed)? complete/,
@@ -406,30 +410,44 @@ function markByText(b: any, sel: string, text: string, mark: string) {
 /** 读输入框 / 编辑框里现在的文字 */
 const valueOf = (b: any, sel: string) => b.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).then((v: any) => String(v ?? ''), () => '')
 
-/** 填一个框（input 或 Quill 编辑器）：先 clear + 打字；没进去再在页面里 insertText；都不对就报错 */
-async function fill(ctx: any, b: any, sel: string, text: string, what: string) {
-  const same = async () => (await valueOf(b, sel)).replace(/\s+/g, '') === text.replace(/\s+/g, '')
-  await b.click(sel).catch(() => {})
+const squash = (s: string) => String(s ?? '').replace(/[\s\u200B-\u200D\uFEFF\u00a0]+/g, '')
+
+/**
+ * 填一个框（标题 input 或简介的 Quill 编辑器），填完读回来逐字核对，返回最后填对没有。
+ * 三种办法依次试：清空再打字；在页面里全选后 insertText；全选后粘贴（Quill 自己处理粘贴）。
+ */
+async function fillText(ctx: any, b: any, sel: string, text: string) {
+  const same = async () => squash(await valueOf(b, sel)) === squash(text)
   await b.type(sel, text, { clear: true }).catch(() => {})
   await ctx.sleep(600)
-  if (await same()) return
-  await b.eval(`(() => {
-    const el = document.querySelector(${JSON.stringify(sel)})
-    if (!el) return false
-    el.focus()
-    if ('value' in el && el.tagName !== 'DIV') {
-      const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set
-      set.call(el, ${JSON.stringify(text)})
-      el.dispatchEvent(new Event('input', { bubbles: true }))
-      el.dispatchEvent(new Event('change', { bubbles: true }))
-    } else {
+  if (await same()) return true
+  for (const how of ['insert', 'paste']) {
+    await b.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)})
+      if (!el) return false
+      el.focus()
+      if ('value' in el && el.tagName !== 'DIV') {
+        const set = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set
+        set.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      }
       document.execCommand('selectAll', false)
-      document.execCommand('insertText', false, ${JSON.stringify(text)})
-    }
-    return true
-  })()`).catch(() => {})
-  await ctx.sleep(600)
-  if (!(await same())) throw new Error(L(ctx, `${what}没填进去，B站 投稿页可能改了`, `Couldn't fill in the ${what} — Bilibili's upload page may have changed`))
+      if (${JSON.stringify(how)} === 'insert') return document.execCommand('insertText', false, ${JSON.stringify(text)})
+      const d = new DataTransfer(); d.setData('text/plain', ${JSON.stringify(text)})
+      return el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true }))
+    })()`).catch(() => {})
+    await ctx.sleep(600)
+    if (await same()) return true
+  }
+  return false
+}
+
+/** 页面上现在显示的提示（toast、通知、红字），没投出去时原样告诉用户 */
+async function notices(b: any): Promise<string[]> {
+  const list = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.notice)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 120)`).catch(() => [])
+  return Array.isArray(list) ? list.map(String) : []
 }
 
 /** 上传进度：返回 { done, failed, pct }（pct 读不到是 -1） */
@@ -458,11 +476,11 @@ async function openUpload(ctx: any, b: any, ch: any) {
 
 /**
  * 封面（2026-10 起必填）：还空着就选 B站 推荐的第一张（从视频里截的画面），弹出裁剪框就点「完成」。
- * 推荐封面要等视频传上去一部分才出来，所以放在上传完之后。选不上就停下，不投稿。
+ * 推荐封面要等视频传上去一部分才出来，所以放在上传完之后。返回最后有没有封面（没有就不投稿，交给用户）。
  */
-async function chooseCover(ctx: any, b: any) {
+async function chooseCover(ctx: any, b: any): Promise<boolean> {
   const empty = () => b.exists('.cover-slot .cover-empty').catch(() => false)
-  if (!(await empty())) return
+  if (!(await empty())) return true
   ctx.progress({ message: L(ctx, '选封面…', 'Choosing a cover…') })
   for (let i = 0; i < 20 && !(await b.exists('.img-item-cover').catch(() => false)); i++) await ctx.sleep(1500)
   await b.click('.img-item-cover', { timeout: 5000 }).catch(() => {})
@@ -471,33 +489,38 @@ async function chooseCover(ctx: any, b: any) {
     if ((await markByText(b, 'button, .bcc-button, [class*="btn"]', t, 'cover')) && (await b.click('[data-shuttle-mark="cover"]').then(() => true, () => false))) break
   }
   await ctx.sleep(1500)
-  if (await empty()) throw new Error(L(ctx, '封面没选上（B站 现在要求必须有封面）：推荐封面 .img-item-cover 点了没反应，页面可能改了', "Couldn't set a cover (Bilibili now requires one): clicking the suggested cover (.img-item-cover) did nothing — the page may have changed"))
+  return !(await empty())
 }
 
 /**
  * 创作声明（2026-10 起投稿页必填）：选「使用 AI 生成 / 合成」的那项（我们的视频都是 AI 辅助做的，平台要求如实声明）。
- * 没有这个下拉就跳过；有但认不出选项，就停下把可选项报回来，不投稿。
+ * 没有这个下拉就跳过；有但认不出选项，返回要用户做什么（不投稿，交给用户），选上了返回空字符串。
  */
-async function chooseDeclaration(ctx: any, b: any) {
+async function chooseDeclaration(ctx: any, b: any): Promise<string> {
   const box = 'input[placeholder*="创作声明"]'
-  if (!(await b.click(box, { timeout: 3000 }).then(() => true, () => false))) return
+  if (!(await b.click(box, { timeout: 3000 }).then(() => true, () => false))) return ''
   await ctx.sleep(1000)
   const opts: string[] = await b.eval(`[...document.querySelectorAll('.bcc-option')].filter(e => e.offsetParent !== null && !e.querySelector('li')).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 40)`).catch(() => [])
   const pick = opts.find((t) => /AI|人工智能/.test(t)) // 2026-10 的选项：含AI生成内容 / 含虚构演绎内容 / 个人观点，仅供参考 / 内容为转载
   if (!pick || !(await markByText(b, '.bcc-option', pick, 'decl')) || !(await b.click('[data-shuttle-mark="decl"]').then(() => true, () => false))) {
-    throw new Error(L(ctx, `创作声明里没认出「含AI生成内容」那项，可选的有：${[...new Set(opts)].slice(0, 20).join('、') || '（没读到）'}`, `Couldn't find the AI-generated option in 创作声明; options: ${[...new Set(opts)].slice(0, 20).join(', ') || '(none)'}`))
+    await b.press('Escape').catch(() => {})
+    return L(ctx, `创作声明没选上：选「含AI生成内容」那项（可选的有：${[...new Set(opts)].slice(0, 20).join('、') || '没读到'}）`, `创作声明 (declaration) isn't set: pick the AI-generated option (options: ${[...new Set(opts)].slice(0, 20).join(', ') || 'none found'})`)
   }
   await ctx.sleep(600)
   await b.press('Escape').catch(() => {}) // 下拉可以多选，选完收起来
   await ctx.sleep(300)
+  return ''
 }
 
-/** 选分区：category 可以是「科技」，也可以是两级「知识 / 科学科普」「知识 > 科学科普」，按层依次点；页面上没有第二级（2026-10 起只有一级）就停在第一级 */
-async function chooseCategory(ctx: any, b: any, category: string) {
+/**
+ * 选分区：category 可以是「科技」，也可以是两级「知识 / 科学科普」「知识 > 科学科普」，按层依次点；页面上没有第二级（2026-10 起只有一级）就停在第一级。
+ * 选上了返回空字符串；选不上返回要用户做什么（不投稿，交给用户）。
+ */
+async function chooseCategory(ctx: any, b: any, category: string): Promise<string> {
   const levels = category.split(/\s*[/>›→·]\s*/).map((x) => x.trim()).filter(Boolean)
-  if (!levels.length) return
+  if (!levels.length) return ''
   if (!(await b.click(SEL.categoryBtn, { timeout: 5000 }).then(() => true, () => false)) && !(await clickText(b, ['分区', '选择分区']))) {
-    throw new Error(L(ctx, '没找到选分区的下拉（SEL.categoryBtn），B站 的页面可能改了', "Couldn't find the category dropdown (SEL.categoryBtn) — Bilibili's page may have changed"))
+    return L(ctx, `分区没选上：选「${category}」`, `Category isn't set: pick "${category}"`)
   }
   await ctx.sleep(800)
   for (const [i, name] of levels.entries()) {
@@ -506,15 +529,16 @@ async function chooseCategory(ctx: any, b: any, category: string) {
       if (i > 0) {
         await b.press('Escape').catch(() => {})
         ctx.progress({ message: L(ctx, `B站 现在只有一级分区，投到「${levels.slice(0, i).join(' / ')}」`, `Bilibili only has top-level categories now; using "${levels.slice(0, i).join(' / ')}"`) })
-        return
+        return ''
       }
       const opts: string[] = await b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.categoryItem)})].filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t && t.length <= 12).slice(0, 40)`).catch(() => [])
       await b.press('Escape').catch(() => {})
-      throw new Error(L(ctx, `分区里没有「${name}」，可选的有：${opts.join('、') || '（没读到，SEL.categoryItem）'}`, `No category "${name}"; options: ${opts.join(', ') || '(none found, SEL.categoryItem)'}`))
+      return L(ctx, `分区里没有「${name}」：选一个合适的（可选的有：${opts.join('、') || '没读到'}）`, `No category "${name}": pick a fitting one (options: ${opts.join(', ') || 'none found'})`)
     }
     await b.click('[data-shuttle-mark="cat"]').catch(() => b.eval(`document.querySelector('[data-shuttle-mark="cat"]').click()`))
     await ctx.sleep(800)
   }
+  return ''
 }
 
 /** 页面上现有的标签块文字 */
@@ -538,11 +562,11 @@ async function dropForeignChip(b: any, want: Set<string>) {
 /**
  * 填标签：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
  * 先删掉所有不在我们列表里的，加之前名额满了再删；每个标签要等 B站「请求校验」完、变成标签块，再打下一个。
+ * 返回没加上的标签（B站 不收的词、或者找不到输入框时全部）：标签是尽量做的，没加上照样投稿，结果里提醒。
  */
-async function fillTags(ctx: any, b: any, tags: string[]) {
-  await b.waitFor(SEL.tagInput, { timeout: 10000 }).catch(() => {
-    throw new Error(L(ctx, '没找到填标签的输入框（SEL.tagInput），B站 的页面可能改了', "Couldn't find the tag input (SEL.tagInput) — Bilibili's page may have changed"))
-  })
+async function fillTags(ctx: any, b: any, tags: string[]): Promise<string[]> {
+  if (!tags.length) return []
+  if (!(await b.waitFor(SEL.tagInput, { timeout: 10000 }).then(() => true, () => false))) return tags
   const key = (t: string) => t.replace(/\s+/g, '')
   const want = new Set(tags.map(key))
   await ctx.sleep(2500) // 自动标签是陆续加上的，先等一会儿
@@ -551,8 +575,8 @@ async function fillTags(ctx: any, b: any, tags: string[]) {
     if ((await chipTexts(b)).map(key).includes(key(t))) continue
     for (let i = 0; i < 6 && (await chipTexts(b)).length >= BILI.tagsMax && (await dropForeignChip(b, want)); i++) await ctx.sleep(400)
     // 不要 clear：输入框是空的时候「清空」会按退格，把上一个刚加上的标签块删掉（2026-10 实测）
-    await b.type(SEL.tagInput, t)
-    await b.press('Enter')
+    if (!(await b.type(SEL.tagInput, t).then(() => true, () => false))) continue
+    await b.press('Enter').catch(() => {})
     for (let i = 0; i < 16; i++) {
       await ctx.sleep(400)
       const busy = /标签正在请求校验/.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
@@ -562,33 +586,44 @@ async function fillTags(ctx: any, b: any, tags: string[]) {
   await ctx.sleep(1500)
   for (let i = 0; i < 12 && (await dropForeignChip(b, want)); i++) await ctx.sleep(400) // 填的过程中又自动加上的
   const now2 = new Set((await chipTexts(b)).map(key))
-  const missing = tags.filter((t) => !now2.has(key(t)))
-  if (missing.length) throw new Error(L(ctx, `这些标签没加上：${missing.join('、')}（可能是敏感词或 B站 不认）`, `These tags weren't added: ${missing.join(', ')} (possibly blocked by Bilibili)`))
+  return tags.filter((t) => !now2.has(key(t)))
 }
 
-/** 投稿接口的响应：{ code, message, data: { aid, bvid } }；没等到返回 null */
+/** 投稿接口的响应：{ code, message, data: { aid, bvid } }；没等到返回 null。投过几次（用户在窗口里重试）时认成功的那次，没有就认最后一次 */
 async function addResult(b: any): Promise<{ code: number; message: string; bvid: string; aid: string } | null> {
   const rs = await b.responses(API.add, { min: 0 }).catch(() => [])
+  let last: { code: number; message: string; bvid: string; aid: string } | null = null
   for (const r of rs ?? []) {
     if (!r.json) continue
     const d = r.json.data ?? {}
-    return { code: Number(r.json.code ?? -1), message: String(r.json.message ?? ''), bvid: String(d.bvid ?? BV.exec(JSON.stringify(d))?.[1] ?? ''), aid: String(d.aid ?? '') }
+    last = { code: Number(r.json.code ?? -1), message: String(r.json.message ?? ''), bvid: String(d.bvid ?? BV.exec(JSON.stringify(d))?.[1] ?? ''), aid: String(d.aid ?? '') }
+    if (last.code === 0) return last
   }
-  return null
+  return last
 }
 
 /**
  * 发布一条视频（投稿）。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去稿件列表里找有没有同标题的稿件（含审核中），避免重复投稿。
  * 投稿后 B站 要审核：拿到 BV 号就记成已发布，采集会继续更新它的数据。
+ *
+ * 投稿页常改（2026-10 一次改了 6 处），脚本不可能每一步都认得。所以每一项都按「填 → 读回来核对」做，分两级（和抖音一样）：
+ *   - 必须对的（视频、标题、简介、类型「自制」、给了的分区、创作声明、封面）：不对就不点投稿；
+ *   - 尽量做的（标签）：没加上照样投，结果里带 warnings；
+ * 表单、投稿按钮认不出时先请浏览器助手（_assist.ts）帮一步；必须的项还是不对、或者点了投稿 B站 不收，
+ * 就把窗口调到前台交给用户（b.show，Annulo 能力版本 49）：别的都已填好，用户改好点「立即投稿」，这里等到结果照常记下。
+ * 调不到前台的（老版本 Annulo、后台定时任务）照原来报错，写清楚卡在哪。
+ *
+ * dry_run：演练，走完上传、填写、核对，停在点「立即投稿」之前，返回 { dry_run, need, warnings, snapshot }（need 是必须的项哪些不对），
+ * 不改这条的状态、不交给用户。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条视频：', 'No such video post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
-  // 视频上传要十几分钟：认领 30 分钟内的不重复发
+  // 视频上传要十几分钟：认领 60 分钟内的不重复发
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < 60 * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
-  if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
+  if (!input.dry_run && !['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = biliChannel(ctx, p.channel_id)
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
@@ -605,7 +640,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const claimedBefore = p.claimed_at
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (bvid: string, extra: object = {}) => {
     const url = bvid ? videoUrl(bvid) : MANAGE
     ctx.db.update('social_posts', p.id, { status: 'published', post_id: bvid || null, post_url: url, published_at: now(), updated_at: now(), error: null })
@@ -618,22 +653,47 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const hit = r.videos.find((v) => !isDeleted(v) && ((aid && v.aid === aid) || (norm(v.title) === norm(p.title) && (!v.created || Date.parse(v.created) >= sinceMs))))
     return hit?.bvid ?? ''
   }
-  try {
-    const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    if (interrupted) {
-      ctx.progress({ message: L(ctx, '上次没发完，先看看稿件列表里有没有这条…', "Last attempt didn't finish; checking your uploads for this video first…") })
-      const since = Date.parse(claimedBefore || '') - 60_000 || 0
-      const bvid = await lookup(b, since)
-      if (bvid) return done(bvid, { already: true })
+  const titleWrong = L(ctx, `标题没填对：改成「${p.title}」`, `The title isn't right: change it to "${p.title}"`)
+  const descWrong = L(ctx, '简介没填对：清空简介框，照 Annulo 里这条的简介重新填', "The description isn't right: clear it and paste this post's description from Annulo")
+  /** 报错：没投出去，卡在哪；窗口在用户眼前的会留着（Annulo 在函数失败时不关看得见的窗口） */
+  const stuck = (why: string[], kept: boolean) =>
+    new Error(
+      L(ctx, `没投出去：${why.join('；')}。`, `Not submitted: ${why.join('; ')}. `) +
+        (kept
+          ? L(ctx, 'B站 的窗口还开着，别的都已填好：在里面改好点「立即投稿」就行，之后点「采集」会把它对上这一条。', "Bilibili's window is still open with everything else filled in: fix it there and click 立即投稿 (Submit); collecting stats afterwards links it to this post.")
+          : L(ctx, '到页面上再点一次「发布」，卡住时会弹出 B站 窗口交给你接着弄；也可以到 B站 创作中心手动投稿。', "Click Publish on the page again — if it gets stuck, the Bilibili window opens for you to finish; or upload it in Bilibili's creator center."))
+    )
+  type Outcome = { b: any; res: Awaited<ReturnType<typeof addResult>>; okText: boolean; warnings: string[] }
+
+  const startedAt = Date.now() - 60_000
+  /** 在一个浏览器窗口里走一遍：上传、填写、核对、点投稿、等结果；卡住时交给用户 */
+  async function attempt(b: any): Promise<Outcome | { dry_run: true; need: string[]; warnings: string[] }> {
+    let shown = false
+    const warnings: string[] = []
+    /** 交给用户：把窗口调到前台，告诉他卡在哪，等他点「立即投稿」（最多 15 分钟）；等到结果照常记下，等不到报错、窗口留着 */
+    const handOver = async (why: string[]): Promise<Outcome> => {
+      if (!shown && typeof b.show === 'function') shown = await b.show().then(() => true, () => false)
+      if (!shown) throw stuck(why, false)
+      ctx.progress({ message: L(ctx, `要你在弹出的 B站 窗口里接手：${why.join('；')}。别的都已填好，改好后点「立即投稿」，投出去这里会自动记下`, `Over to you in the Bilibili window that opened: ${why.join('; ')}. Everything else is filled in — fix it and click 立即投稿 (Submit); it's recorded here once it goes out`) })
+      for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+        await ctx.sleep(2000)
+        const res = await addResult(b)
+        if (res?.code === 0) return { b, res, okText: false, warnings }
+        if (TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) {
+          await ctx.sleep(1500)
+          return { b, res: await addResult(b), okText: true, warnings }
+        }
+      }
+      throw stuck([...why, L(ctx, '15 分钟内没等到你投稿', 'No submission within 15 minutes')], true)
     }
-    const startedAt = Date.now() - 60_000
+
     ctx.progress({ message: L(ctx, '打开投稿页…', 'Opening the upload page…') })
     await openUpload(ctx, b, ch)
     b.listen(API.add)
     ctx.progress({ message: L(ctx, '读取视频并上传…', 'Reading the video and uploading…') })
     // 投稿页是后加载的子应用（micro-app）：文件塞得太早，页面还没挂上监听，选了也没反应（2026-10 实测）。等一会儿再塞，20 秒没出表单就再塞一次
     await ctx.sleep(4000)
-    const send = () => b.upload(SEL.fileInput, [p.video], { timeout: 10 * 60_000 }).catch((e: any) => {
+    const send = () => b.upload(SEL.fileInput, [p!.video], { timeout: 10 * 60_000 }).catch((e: any) => {
       throw new Error(L(ctx, '视频没传上去（素材下载失败、本机文件找不到，或者超过 2GB）：', "The video didn't upload (couldn't fetch the asset, local file not found, or it's over 2GB): ") + (e?.message ?? e))
     })
     await send()
@@ -641,22 +701,32 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       await dismissPopups(ctx, b)
       await send()
     }
-    await b.waitFor(SEL.title, { timeout: 120000 }).catch(() => {
-      throw new Error(L(ctx, '选了视频，但没出现填写标题的表单（视频格式 B站 不认，或者页面改了）', "Picked the video, but the details form didn't appear (Bilibili may not accept the format, or the page changed)"))
-    })
+    if (!(await b.waitFor(SEL.title, { timeout: 120000 }).then(() => true, () => false))) {
+      // 表单可能被弹窗、引导挡住：请浏览器助手帮一步
+      const ok = await assist(ctx, b, '让填写稿件信息的表单出现（稿件标题输入框）；不要点投稿', { until: SEL.title, avoid: TEXT.submit })
+      if (!ok) throw new Error(L(ctx, '选了视频，但没出现填写标题的表单（视频格式 B站 不认，或者页面改了）', "Picked the video, but the details form didn't appear (Bilibili may not accept the format, or the page changed)"))
+    }
     await ctx.sleep(1500)
     await dismissPopups(ctx, b)
 
     ctx.progress({ message: L(ctx, '填写标题、类型、分区、标签、简介…', 'Filling in title, type, category, tags and description…') })
-    await fill(ctx, b, SEL.title, p.title, L(ctx, '标题', 'title'))
-    // 类型选「自制」：先按选择器里的文字认，认不到再按文字点
-    const typed = (await markByText(b, SEL.typeRadio, TEXT.original[0], 'type')) && (await b.click('[data-shuttle-mark="type"]').then(() => true, () => false))
-    if (!typed && !(await clickText(b, TEXT.original))) throw new Error(L(ctx, '没找到类型「自制」，B站 的页面可能改了（SEL.typeRadio）', "Couldn't find the \"自制\" (original) type — Bilibili's page may have changed (SEL.typeRadio)"))
+    const need: string[] = []
+    if (!(await fillText(ctx, b, SEL.title, p!.title))) need.push(titleWrong)
+    // 类型选「自制」：2026-10-19 的投稿页已经没有「自制 / 转载」这一项了，页面上有才选；有却选不上才交给用户
+    if (/自制[\s\S]{0,40}转载|转载[\s\S]{0,40}自制/.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) {
+      const typed = (await markByText(b, SEL.typeRadio, TEXT.original[0], 'type')) && (await b.click('[data-shuttle-mark="type"]').then(() => true, () => false))
+      if (!typed && !(await clickText(b, TEXT.original))) need.push(L(ctx, '类型没选上：选「自制」', 'Type isn\'t set: pick 自制 (original)'))
+    }
     await ctx.sleep(500)
-    if (p.category?.trim()) await chooseCategory(ctx, b, p.category.trim())
-    await chooseDeclaration(ctx, b)
-    await fillTags(ctx, b, tags)
-    if (desc) await fill(ctx, b, SEL.desc, desc, L(ctx, '简介', 'description'))
+    if (p!.category?.trim()) {
+      const why = await chooseCategory(ctx, b, p!.category.trim())
+      if (why) need.push(why)
+    }
+    const decl = await chooseDeclaration(ctx, b)
+    if (decl) need.push(decl)
+    const missing = await fillTags(ctx, b, tags)
+    if (missing.length) warnings.push(L(ctx, `这些标签没加上（B站 不收，或者找不到填标签的框）：${missing.join('、')}`, `These tags weren't added (Bilibili didn't accept them, or the tag box wasn't found): ${missing.join(', ')}`))
+    if (desc && !(await fillText(ctx, b, SEL.desc, desc))) need.push(descWrong)
 
     // 等上传完：大视频要十几分钟，每半分钟报一次进度
     const deadline = Date.now() + 30 * 60_000
@@ -673,20 +743,38 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     if (!up.done) throw new Error(L(ctx, '等了 30 分钟视频还没传完（或者没认出「上传完成」）：到 B站 投稿页看一眼', "Waited 30 minutes and the upload isn't done (or \"上传完成\" wasn't recognized): check Bilibili's upload page"))
 
-    await chooseCover(ctx, b)
+    if (!(await chooseCover(ctx, b))) need.push(L(ctx, '封面没选上（B站 要求必须有封面）：在「封面」里选一张', "No cover (Bilibili requires one): pick one under 封面 (Cover)"))
+    // 后面的步骤（封面弹窗、标签校验）可能动到前面填好的：点投稿前再核对一遍标题、简介
+    if (!need.length) {
+      if (squash(await valueOf(b, SEL.title)) !== squash(p!.title)) need.push(titleWrong)
+      if (desc && squash(await valueOf(b, SEL.desc)) !== squash(desc)) need.push(descWrong)
+    }
+    if (input.dry_run) return { dry_run: true, need, warnings }
+    if (need.length) return handOver(need)
 
     ctx.progress({ message: L(ctx, '投稿…', 'Submitting…') })
-    if (!(await b.click(SEL.submit, { timeout: 5000 }).then(() => true, () => false)) && !(await clickText(b, TEXT.submit))) {
-      throw new Error(L(ctx, '没找到「立即投稿」按钮（SEL.submit），B站 的页面可能改了', "Couldn't find the \"立即投稿\" (Submit) button (SEL.submit) — Bilibili's page may have changed"))
+    /** 点「立即投稿」：脚本找不到就请浏览器助手把按钮弄出来（关掉挡着的东西），投稿还是脚本点 */
+    const submit = async () => {
+      if (await b.click(SEL.submit, { timeout: 5000 }).then(() => true, () => false)) return true
+      if (await clickText(b, TEXT.submit)) return true
+      const stop = await markReady(b, 'submit', TEXT.submit)
+      try {
+        return (await assist(ctx, b, '让「立即投稿」按钮露出来、能点（不要点投稿）', { until: readySel('submit'), avoid: TEXT.submit })) && (await b.click(readySel('submit')).then(() => true, () => false))
+      } finally {
+        await stop()
+      }
     }
+    if (!(await submit())) return handOver([L(ctx, '没找到能点的「立即投稿」按钮', 'No clickable 立即投稿 (Submit) button found')])
     // 等投稿接口的响应（拿 bvid），或者页面出现「稿件投递成功」
     const end = Date.now() + 90000
     let res: Awaited<ReturnType<typeof addResult>> = null
     let okText = false
+    const seen = new Set<string>()
     while (Date.now() < end) {
       await ctx.sleep(1500)
       res = await addResult(b)
       if (res) break
+      for (const n of await notices(b)) seen.add(n)
       okText = TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
       if (okText) {
         await ctx.sleep(1500)
@@ -694,17 +782,41 @@ export async function publish(input: { post_id: string; force_interval?: boolean
         break
       }
     }
-    if (res && res.code !== 0) throw new Error(L(ctx, `B站 没收下这次投稿：${res.message || res.code}`, `Bilibili rejected the submission: ${res.message || res.code}`))
-    if (res?.bvid) return done(res.bvid, { reviewing: true })
-    if (res || okText) {
-      // 投上了但没拿到 BV 号：去稿件列表里按 aid / 标题找
-      const bvid = await lookup(b, startedAt, res?.aid ?? '').catch(() => '')
-      return bvid ? done(bvid, { reviewing: true }) : done('', { unverified: true })
+    if (res && res.code !== 0) return handOver([L(ctx, `B站 没收下：${res.message || res.code}`, `Bilibili rejected it: ${res.message || res.code}`)])
+    if (!res && !okText) {
+      const said = [...seen].slice(0, 3).join(' / ')
+      return handOver([L(ctx, '点了「立即投稿」，但没看到投稿成功', 'Clicked 立即投稿 (Submit) but saw no success') + (said ? L(ctx, `（B站 提示：${said}）`, ` (Bilibili said: ${said})`) : '')])
     }
-    throw new Error(L(ctx, '点了「立即投稿」，但没看到投稿成功，可能没投出去：到 B站 创作中心看一眼（页面上可能有没填的必填项）', "Clicked Submit but saw no success — it may not have gone through: check Bilibili's creator center (a required field may be missing)"))
+    return { b, res, okText, warnings }
+  }
+
+  try {
+    const b = await openBrowser(ctx, { profile: ch.browser_profile })
+    if (input.dry_run) {
+      const r = await attempt(b)
+      const snap = await b.snapshot?.({ label: 'dry-run' }).catch(() => null)
+      await b.close().catch(() => {})
+      if (!('dry_run' in r)) throw new Error('unreachable')
+      return { dry_run: true, need: r.need, warnings: r.warnings, snapshot: snap?.dir }
+    }
+    if (interrupted) {
+      ctx.progress({ message: L(ctx, '上次没发完，先看看稿件列表里有没有这条…', "Last attempt didn't finish; checking your uploads for this video first…") })
+      const since = Date.parse(claimedBefore || '') - 60_000 || 0
+      const bvid = await lookup(b, since)
+      if (bvid) return done(bvid, { already: true })
+    }
+    const r = await attempt(b)
+    if ('dry_run' in r) throw new Error('unreachable')
+    const { res, okText, warnings } = r
+    const extra = warnings.length ? { warnings } : {}
+    if (warnings.length) ctx.log(L(ctx, '投出去了，有几项没弄好：', 'Submitted, but some things are missing: ') + warnings.join('; '))
+    if (res?.bvid) return done(res.bvid, { reviewing: true, ...extra })
+    // 投上了但没拿到 BV 号：去稿件列表里按 aid / 标题找
+    const bvid = res || okText ? await lookup(b, startedAt, res?.aid ?? '').catch(() => '') : ''
+    return bvid ? done(bvid, { reviewing: true, ...extra }) : done('', { unverified: true, ...extra })
   } catch (e: any) {
     const msg = e?.message ?? String(e)
-    ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
+    if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
     const err: any = new Error(msg)
     if (e instanceof Expired || e?.expired) err.expired = true
     if (e?.snapshot) err.snapshot = e.snapshot
@@ -831,18 +943,27 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     const day = localDay()
     const today = todayRows(ctx, ch.id, day)
     const totals = channelTotals(ctx, ch)
-    // 发布时没认出 BV 号的稿件：按标题对上
-    const unlinked: Post[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id)
+    // 发布时没认出 BV 号的稿件：按标题对上。没投出去、交给用户在 B站 窗口里接着投的（failed）也按标题对上，投稿时间要在开始发它之后
+    const unlinked: Post[] = [
+      ...ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id),
+      ...ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'failed' }, limit: 100 }).list,
+    ]
     let updated = 0
     let added = 0
     for (const v of r.videos) {
       if (isDeleted(v)) continue
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: v.bvid }, limit: 1 }).list[0]
       if (!hit) {
-        const u = unlinked.find((x) => norm(x.title) === norm(v.title))
+        const u = unlinked.find((x) => norm(x.title) === norm(v.title) && (x.status !== 'failed' || (!!v.created && Date.parse(v.created) >= Date.parse(x.claimed_at || '') - 60_000)))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: v.bvid, post_url: videoUrl(v.bvid) })
-          hit = { ...u, post_id: v.bvid }
+          const patch: any = { post_id: v.bvid, post_url: videoUrl(v.bvid) }
+          if (u.status === 'failed') {
+            Object.assign(patch, { status: 'published', published_at: v.created, error: null })
+            totals.posts++
+          }
+          ctx.db.update('social_posts', u.id, patch)
+          unlinked.splice(unlinked.indexOf(u), 1)
+          hit = { ...u, ...patch }
         }
       }
       if (!hit && !isOpen(v)) continue // 在 B站 上直接投的、还在审核或没通过的先不收

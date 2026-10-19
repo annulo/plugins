@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.11
+  zh: B站 投稿和抖音一样：标题、简介、创作声明、封面填完核对，不对就不投；标签没加上只提醒；卡住时把填好的窗口交给你。适配投稿页去掉「自制 / 转载」。
+  en: "Bilibili uploads now work like Douyin: title, description, declaration and cover are checked before submitting, missed tags only warn, and when stuck the filled-in window is handed to you. Adapted to the upload page dropping the original / repost choice."
 - version: 0.8.10
   zh: 去掉「自检」和每天 08:30 的定时自检：它只走到找到发布按钮，查不到真正会坏的步骤。账号状态只看真实的发布和采集，失败了交给助手修，改完真做一次确认。
   en: "Removed the self-test and its daily 08:30 run: it only got as far as finding the post button and missed the steps that actually break. Account status now comes from real publishing and collection; when one fails, have the assistant fix it and confirm by doing it for real once."
