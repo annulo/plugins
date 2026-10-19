@@ -559,14 +559,36 @@ async function dropForeignChip(b: any, want: Set<string>) {
   })()`).catch(() => false)
 }
 
+/** 等视频传完（读整页的文字，不靠进度条的 class）：返回给浏览器助手看的一句话 */
+async function waitUploaded(ctx: any, b: any) {
+  let told = 0
+  for (const end = Date.now() + 30 * 60_000; Date.now() < end; ) {
+    const t = String(await b.eval(`document.body.innerText`).catch(() => ''))
+    if (TEXT.uploadFailed.test(t)) return 'Bilibili says the upload failed.'
+    if (TEXT.uploaded.test(t)) return 'Upload complete.'
+    if (Date.now() - told > 30000) {
+      told = Date.now()
+      const pct = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(t)
+      ctx.progress({ message: pct ? L(ctx, `上传中 ${pct[1]}%…`, `Uploading ${pct[1]}%…`) : L(ctx, '等视频上传完…', 'Waiting for the upload to finish…') })
+    }
+    await ctx.sleep(3000)
+  }
+  return 'Still uploading after 30 minutes.'
+}
+
 /**
  * 填标签：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
  * 先删掉所有不在我们列表里的，加之前名额满了再删；每个标签要等 B站「请求校验」完、变成标签块，再打下一个。
  * 返回没加上的标签（B站 不收的词、或者找不到输入框时全部）：标签是尽量做的，没加上照样投稿，结果里提醒。
  */
 async function fillTags(ctx: any, b: any, tags: string[]): Promise<string[]> {
+  return fillTagsAt(ctx, b, SEL.tagInput, tags)
+}
+
+/** fillTags，标签输入框由调用方给（浏览器助手认出来的那个） */
+async function fillTagsAt(ctx: any, b: any, input: string, tags: string[]): Promise<string[]> {
   if (!tags.length) return []
-  if (!(await b.waitFor(SEL.tagInput, { timeout: 10000 }).then(() => true, () => false))) return tags
+  if (!(await b.waitFor(input, { timeout: 10000 }).then(() => true, () => false))) return tags
   const key = (t: string) => t.replace(/\s+/g, '')
   const want = new Set(tags.map(key))
   await ctx.sleep(2500) // 自动标签是陆续加上的，先等一会儿
@@ -575,7 +597,7 @@ async function fillTags(ctx: any, b: any, tags: string[]): Promise<string[]> {
     if ((await chipTexts(b)).map(key).includes(key(t))) continue
     for (let i = 0; i < 6 && (await chipTexts(b)).length >= BILI.tagsMax && (await dropForeignChip(b, want)); i++) await ctx.sleep(400)
     // 不要 clear：输入框是空的时候「清空」会按退格，把上一个刚加上的标签块删掉（2026-10 实测）
-    if (!(await b.type(SEL.tagInput, t).then(() => true, () => false))) continue
+    if (!(await b.type(input, t).then(() => true, () => false))) continue
     await b.press('Enter').catch(() => {})
     for (let i = 0; i < 16; i++) {
       await ctx.sleep(400)
@@ -666,6 +688,94 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   type Outcome = { b: any; res: Awaited<ReturnType<typeof addResult>>; okText: boolean; warnings: string[] }
 
   const startedAt = Date.now() - 60_000
+  let timing = '' // 浏览器助手的耗时汇总（b.agent 的 timing.summary），带进结果
+
+  /**
+   * 有 b.agent（Annulo 能力版本 50，docs/browser-agent.md）时：表单由 AI 看着页面填，脚本只给工具、守关卡。
+   * AI 上传视频、填标题、选分区和创作声明、选封面、处理弹窗；简介、标签、等上传完、投稿用下面的工具（脚本做得稳的、收不回来的）。
+   * 经验记在笔记 notes/bilibili.publish.md（插件自带）和 user/notes/social/bilibili.publish.md（这个项目学到的），不做机械重放。
+   * 投稿只能经 submit 工具：它先逐字核对标题、简介，按钮文字对得上才点。
+   */
+  async function agentAttempt(b: any, warnings: string[], handOver: (why: string[]) => Promise<Outcome>): Promise<Outcome | { dry_run: true; need: string[]; warnings: string[] }> {
+    const st = { verified: false, res: null as Awaited<ReturnType<typeof addResult>>, okText: false, problems: [] as string[] }
+    const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
+    /** 等投稿结果：接口响应或页面上的「投稿成功」，最多 ms 毫秒 */
+    const result = async (ms: number): Promise<string | { finish: string }> => {
+      for (const end = Date.now() + ms; Date.now() < end; ) {
+        st.res = await addResult(b)
+        if (st.res) break
+        st.okText = TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
+        if (st.okText) break
+        await ctx.sleep(1500)
+      }
+      if (st.res && st.res.code !== 0) return `Bilibili rejected it: ${st.res.message || st.res.code}. Fix what it says, then call submit again.`
+      if (st.res || st.okText) return { finish: L(ctx, '投稿成功', 'Submitted') + (st.res && st.res.bvid ? ` ${st.res.bvid}` : '') }
+      const said = (await notices(b)).slice(0, 4).join(' / ')
+      return `Clicked, but no result yet${said ? ` (page says: ${said})` : ''}. A confirmation dialog or a message about a missing field may be open: handle it, then call check_result (or submit again if the form needs changes).`
+    }
+    const id = (d: string) => ({ type: 'integer', description: d })
+    const tools = {
+      fill_description: {
+        params: { type: 'object', properties: { id: id('element number of the description (简介) editor') }, required: ['id'] },
+        description: `args { id }: put this post's description into the description (简介) editor with that element id and check it reads back exactly. Use this instead of typing.`,
+        run: async (a: any) => (!desc ? 'There is no description for this post; leave it empty.' : (await fillText(ctx, b, at(a.id), desc)) ? 'Filled and verified.' : 'It did not read back the same; check that the id is the description editor.'),
+      },
+      add_tags: {
+        params: { type: 'object', properties: { id: id('element number of the tag input') }, required: ['id'] },
+        description: `args { id }: add this post's tags one by one into the tag input with that element id (waits for Bilibili to validate each, removes tags Bilibili added on its own). Returns which were not accepted.`,
+        run: async (a: any) => {
+          if (!tags.length) return 'There are no tags for this post.'
+          const missing = await fillTagsAt(ctx, b, at(a.id), tags)
+          st.problems = missing
+          return missing.length ? `Not accepted: ${missing.join(', ')} (Bilibili refused them; that is fine, go on)` : 'All tags added.'
+        },
+      },
+      wait_upload: {
+        params: { type: 'object', properties: {} },
+        description: 'Wait until the video upload finishes (it can take many minutes for big files). Call it after uploading the video, before submitting.',
+        run: async () => waitUploaded(ctx, b),
+      },
+      submit: {
+        params: {
+          type: 'object',
+          properties: { title_id: id('element number of the title input'), description_id: id('element number of the description editor'), button_id: id(`element number of the ${TEXT.submit[0]} button`) },
+          required: ['title_id', 'button_id'],
+        },
+        description: `args { title_id, description_id, button_id }: the only way to submit. The script checks the title${desc ? ' and description' : ''} read back exactly and that the button says ${TEXT.submit[0]}, then clicks it and waits for the result. Call it once everything required is filled and the cover is set.`,
+        run: async (a: any) => {
+          const bad: string[] = []
+          if (squash(await valueOf(b, at(a.title_id))) !== squash(p!.title)) bad.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
+          if (desc && squash(await valueOf(b, at(a.description_id))) !== squash(desc)) bad.push(`the description (element ${a.description_id}) is not exactly the post's description; use fill_description`)
+          const label = squash(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
+          if (!TEXT.submit.map(squash).includes(label)) bad.push(`element ${a.button_id} is not the ${TEXT.submit[0]} button`)
+          if (bad.length) return `Not submitted: ${bad.join('; ')}.`
+          st.verified = true
+          if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点投稿', 'Dry run: everything checked, not submitted') }
+          await b.click(at(a.button_id))
+          return result(20000)
+        },
+      },
+      check_result: { params: { type: 'object', properties: {} }, description: 'Wait a little longer for the submission result after a confirmation dialog.', run: async () => result(20000) },
+    }
+    const task = [
+      `在 B站 投稿页上投一条视频（页面已经打开、已登录）。`,
+      `- 视频：把 Files 里的 video 传到视频的上传框；传完、出现填写稿件信息的表单后，调用 wait_upload 等它传完（可以先填表再等）。`,
+      `- 标题：「${p!.title}」（原样填，不改）。`,
+      p!.category?.trim() ? `- 分区：「${p!.category.trim()}」；只有一级就选对应的那一级。` : `- 分区：没指定，用 B站 自动推荐的，不用改。`,
+      `- 创作声明：用 select 选「含AI生成内容」。`,
+      tags.length ? `- 标签：${tags.join('、')}。用 add_tags 工具加（传标签输入框的编号）。` : `- 标签：没有。`,
+      desc ? `- 简介：用 fill_description 工具填（传简介编辑框的编号），不要自己打字。` : `- 简介：没有，空着。`,
+      `- 封面：空着就选 B站 推荐的第一张，弹出裁剪、确认之类的框就点完成、确定。`,
+      `- 最后用 submit 工具投稿（传标题框、简介框、「${TEXT.submit[0]}」按钮的编号）。拿不准某一项（比如封面有没有选上）时也直接调用：它会核对，B站 缺了什么也会提示，照它说的改了再调用。`,
+    ].join('\n')
+    const r = await b.agent(task, { tools, files: { video: p!.video }, avoid: TEXT.submit, notes: 'bilibili.publish', maxSteps: 40 })
+    if (r.timing?.summary) timing = r.timing.summary
+    if (st.problems.length) warnings.push(L(ctx, `这些标签没加上（B站 不收）：${st.problems.join('、')}`, `These tags weren't added (Bilibili didn't accept them): ${st.problems.join(', ')}`))
+    if (input.dry_run) return { dry_run: true, timing, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到投稿那一步', "The browser assistant didn't reach the submit step")], warnings }
+    if ((st.res && st.res.code === 0) || st.okText) return { b, res: st.res, okText: st.okText, warnings }
+    return handOver([r.ok ? L(ctx, '浏览器助手说做完了，但没看到投稿成功', 'The browser assistant said it was done, but no successful submission was seen') : r.reason || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")])
+  }
+
   /** 在一个浏览器窗口里走一遍：上传、填写、核对、点投稿、等结果；卡住时交给用户 */
   async function attempt(b: any): Promise<Outcome | { dry_run: true; need: string[]; warnings: string[] }> {
     let shown = false
@@ -690,6 +800,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     ctx.progress({ message: L(ctx, '打开投稿页…', 'Opening the upload page…') })
     await openUpload(ctx, b, ch)
     b.listen(API.add)
+    if (typeof b.agent === 'function') return agentAttempt(b, warnings, handOver)
     ctx.progress({ message: L(ctx, '读取视频并上传…', 'Reading the video and uploading…') })
     // 投稿页是后加载的子应用（micro-app）：文件塞得太早，页面还没挂上监听，选了也没反应（2026-10 实测）。等一会儿再塞，20 秒没出表单就再塞一次
     await ctx.sleep(4000)
@@ -797,7 +908,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       const snap = await b.snapshot?.({ label: 'dry-run' }).catch(() => null)
       await b.close().catch(() => {})
       if (!('dry_run' in r)) throw new Error('unreachable')
-      return { dry_run: true, need: r.need, warnings: r.warnings, snapshot: snap?.dir }
+      return { dry_run: true, need: r.need, warnings: r.warnings, snapshot: snap?.dir, ...(timing ? { timing } : {}) }
     }
     if (interrupted) {
       ctx.progress({ message: L(ctx, '上次没发完，先看看稿件列表里有没有这条…', "Last attempt didn't finish; checking your uploads for this video first…") })
@@ -808,7 +919,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const r = await attempt(b)
     if ('dry_run' in r) throw new Error('unreachable')
     const { res, okText, warnings } = r
-    const extra = warnings.length ? { warnings } : {}
+    const extra = { ...(warnings.length ? { warnings } : {}), ...(timing ? { timing } : {}) }
     if (warnings.length) ctx.log(L(ctx, '投出去了，有几项没弄好：', 'Submitted, but some things are missing: ') + warnings.join('; '))
     if (res?.bvid) return done(res.bvid, { reviewing: true, ...extra })
     // 投上了但没拿到 BV 号：去稿件列表里按 aid / 标题找
@@ -872,6 +983,39 @@ async function openRowMenu(ctx: any, b: any, ch: any, bvid: string): Promise<{ d
 }
 
 /** 从 B站 上删除一条稿件（不可恢复）。删完再读稿件列表核对：还在列表里就报错，不记成 removed */
+/** 页面上是不是在要人做验证（验证码、滑块、安全验证）：返回看到的那句话，没有返回空 */
+async function captchaText(b: any): Promise<string> {
+  return String(
+    (await b
+      .eval(`(() => {
+        const vis = e => { const r = e.getBoundingClientRect(); return r.width > 20 && r.height > 20 && getComputedStyle(e).visibility !== 'hidden' }
+        const box = [...document.querySelectorAll('[class*="geetest" i], [class*="captcha" i] iframe, iframe[src*="captcha" i], iframe[src*="geetest" i], [class*="verify-wrap" i], [class*="risk-verify" i]')].find(vis)
+        const m = /请完成(安全)?验证|安全验证|拖动(下方)?滑块|按顺序点击|请输入验证码|人机验证/.exec(document.body.innerText)
+        return box ? (m ? m[0] : '验证码') : m ? m[0] : ''
+      })()`)
+      .catch(() => '')) ?? '',
+  )
+}
+
+/**
+ * 删除要人来处理（验证码、认不出的确认框）：把窗口调到前台告诉用户，然后不离开当前页面、隔几秒读一次稿件列表接口，
+ * 等这条消失（最多 5 分钟）。调不到前台（后台定时任务、老版本 Annulo）返回 false。
+ */
+async function handOverRemove(ctx: any, b: any, bvid: string, why: string): Promise<boolean> {
+  if (typeof b.show !== 'function' || !(await b.show().then(() => true, () => false))) return false
+  ctx.progress({ message: L(ctx, `要你在弹出的 B站 窗口里接手：${why}。完成后点「确定」删掉这条，删掉了这里会自动记下`, `Over to you in the Bilibili window that opened: ${why}. When done, confirm the deletion; it's recorded here once it's gone`) })
+  for (const end = Date.now() + 5 * 60_000; Date.now() < end; ) {
+    await ctx.sleep(3000)
+    const j = await api(b, API.archives(1))
+    if (!j || j.code !== 0) continue
+    const m = new Map<string, BiliVideo>()
+    videosOf(j, m)
+    const v = [...m.values()].find((x) => x.bvid === bvid)
+    if (!v || isDeleted(v)) return true
+  }
+  return false
+}
+
 export async function remove(input: { post_id?: string; bvid?: string; channel_id?: string }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const bvid = p?.post_id || input?.bvid
@@ -892,9 +1036,15 @@ export async function remove(input: { post_id?: string; bvid?: string; channel_i
     if (!hit) throw new Error(L(ctx, '「⋮」菜单里没有「删除稿件」（SEL.menuItem / TEXT.delete），B站 的页面可能改了', 'No "删除稿件" (Delete) in the ⋮ menu (SEL.menuItem / TEXT.delete) — Bilibili\'s page may have changed'))
   }
   await ctx.sleep(1000)
+  // B站 有时在删除前要做验证（验证码、滑块）：只有人能做，交给用户
+  const handOff = async (why: string) => {
+    if (await handOverRemove(ctx, b, bvid, why)) return
+    throw new Error(L(ctx, `没删掉：${why}。到页面上再点一次删除，会弹出 B站 窗口让你完成；也可以到 B站 创作中心里删`, `Not deleted: ${why}. Click delete on the page again and finish it in the Bilibili window that opens, or delete it in Bilibili's creator center`))
+  }
+  let captcha = await captchaText(b)
   // 确认框：「确定」/「确认删除」（弹窗里最后出现的那个）
   let confirmed = false
-  for (const t of TEXT.confirm) {
+  for (const t of captcha ? [] : TEXT.confirm) {
     if (await markByText(b, 'button, .bcc-button, [role="button"], .btn, span, div', t, 'ok')) {
       if (await b.click('[data-shuttle-mark="ok"]').then(() => true, () => false)) {
         confirmed = true
@@ -902,8 +1052,16 @@ export async function remove(input: { post_id?: string; bvid?: string; channel_i
       }
     }
   }
-  if (!confirmed) throw new Error(L(ctx, '确认框里没找到「确定」按钮（TEXT.confirm），B站 的页面可能改了', 'No confirm button in the dialog (TEXT.confirm) — Bilibili\'s page may have changed'))
-  await ctx.sleep(3000)
+  if (!confirmed) {
+    captcha = captcha || (await captchaText(b))
+    await handOff(captcha ? L(ctx, `B站 要先做验证（${captcha}）`, `Bilibili wants a verification first (${captcha})`) : L(ctx, '没认出删除的确认框', "The delete confirmation dialog wasn't recognized"))
+  } else {
+    await ctx.sleep(1500)
+    // 点了确定以后也可能要验证
+    captcha = await captchaText(b)
+    if (captcha) await handOff(L(ctx, `B站 要先做验证（${captcha}）`, `Bilibili wants a verification first (${captcha})`))
+  }
+  await ctx.sleep(1500)
   // 核对：还在列表里（而且不是已删除状态）就不算删掉
   const r = await readVideos(ctx, b, 1)
   if (r.loggedOut) throw expired(ctx, ch)
