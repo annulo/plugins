@@ -22,11 +22,11 @@ export { problems as draftProblems } from './_zhihu_spec'
 // tags 是文章话题（最多 3 个，发布时在「发布设置」里按名字搜，只选名字完全一样的）。
 // post_id 存文章 id，post_url 是 https://zhuanlan.zhihu.com/p/<id>。
 //
-// 页面结构和接口（2026-10 用真实账号实测过发布、删除）写成常量，知乎改版时只改这里：
-//   - 写文章页打字后自动存草稿，地址变成 /p/<id>/edit；点「发布」成功后跳到 /p/<id>（同一个 id），以此认发布成功；
-//   - 正文是 Draft.js 编辑器：派发 paste 事件粘贴 HTML（标题、列表、加粗都保留）；外链图片知乎转存会失败，图片走编辑器的图片文件框上传，插在光标处；
-//   - 账号、文章数据读知乎自己的 JSON 接口（在登录着的页面里 fetch，带 cookie）；
-//   - 删除：创作中心「内容管理 → 文章」卡片的「更多 → 删除」，确认框按钮是「确认」。
+// 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-19，做法见 docs/approach.md）：
+//   发布：AI 填标题、处理弹窗；fill_body 填正文（Draft.js：派发 paste 粘贴 HTML；外链图知乎转存会失败，图片走编辑器的图片文件框上传、失败的点一下重传）、
+//         add_topics 在「发布设置」里按名字搜话题、只选一样的；publish 核对标题正文后点「发布」、点确认框，跳到 /p/<id> 算发出去，接口回 { code, toast_message } 是被拒；
+//   删除：AI 在「内容管理 → 文章」里找到这篇、点「更多 → 删除」；confirm_delete 核对确认框里的「确认」才点，读文章列表接口确认没了。
+// 页面的规律记在笔记里（notes/zhihu.publish.md、notes/zhihu.remove.md，项目学到的在 user/notes/social/）；账号、文章数据读知乎自己的 JSON 接口。
 
 type Post = {
   id: string
@@ -61,31 +61,24 @@ const PAGE = 20
 const API = {
   me: '/api/v4/me?include=follower_count,articles_count', // id、url_token、name、avatar_url、follower_count；没登录是 401
   // 创作中心的文章列表：data[].data { id, title, created_time（秒） } + data[].reaction { read_count, vote_up_count, like_count, comment_count, collect_count }
-  publish: '/api/v4/content/publish', // 写文章页点「发布」调的接口；被拒时回 { code, toast_message }
   articles: (offset: number) => `/api/v4/creators/creations/v2/article?start=0&end=0&limit=${PAGE}&offset=${offset}&need_co_creation=1&sort_type=created`,
 }
 const SEL = {
-  title: 'textarea[placeholder*="标题"]',
   editor: '.public-DraftEditor-content',
   // 编辑器工具栏「图片」的文件框（选了文件直接插进正文光标处）；封面的文件框只收 jpg / png，accept 里没有 webp，不会选错
   imageInput: 'input[type="file"][accept*="image/webp"]',
   topicSearch: 'input[placeholder*="搜索话题"]',
   topicItem: '.Popover-content button', // 搜话题后的联想列表，每项一个按钮，文字就是话题名
   publish: 'button.Button--primary', // 页面底部的「发布」（按文字认）
-  cardAction: '.CreationCard-ActionButton', // 内容管理里卡片上的「编辑 / 更多」
-  menuItem: 'button.Menu-item', // 「更多」弹出的菜单项（「删除」在最后）
   modal: '.Modal',
 }
 const TEXT = {
   addTopic: '添加话题',
   settings: '发布设置', // 页面底部的按钮：点开「发布设置」（封面、话题、创作声明），默认收起；话题那行要等存成草稿后才有
   publish: '发布',
-  more: '更多',
-  delete: '删除',
   confirm: /^(确认|确定)$/,
   publishConfirm: /^(发布|确认发布|继续发布|确定|确认)$/,
   uploadFailed: /上传失败/,
-  publishError: /[^\n]*(失败|违规|频繁|验证|不能|无法|请先|过多)[^\n]*/,
 }
 const LOGGED_OUT = /\/signin|\/login/
 const ARTICLE = /\/p\/(\d+)(\/edit)?/
@@ -296,10 +289,10 @@ function markByText(b: any, sel: string, text: string | RegExp, mark: string) {
     .catch(() => false)
 }
 
-/** 把一段 HTML 粘贴进正文编辑器（光标处，也就是正文末尾） */
-function pasteHtml(b: any, html: string) {
+/** 把一段 HTML 粘贴进正文编辑器（光标处，也就是正文末尾）；ed 是编辑框（浏览器助手认出来的那个） */
+function pasteHtml(b: any, html: string, ed = SEL.editor) {
   return b.eval(`(() => {
-    const ed = document.querySelector(${JSON.stringify(SEL.editor)})
+    const ed = document.querySelector(${JSON.stringify(ed)})
     if (!ed) return false
     ed.focus()
     const dt = new DataTransfer()
@@ -343,10 +336,10 @@ async function htmlSegments(b: any, html: string): Promise<Segment[]> {
  * 知乎选了图先插一张占位图（地址在 zhuanlan.zhihu.com 下，旁边「图片上传中」），传完才换成图床地址（2026-10 实测）：
  * 占位图不能算传好，不然没传完就粘贴下一段，这张图会丢。
  */
-const imageState = (b: any): Promise<{ done: number; pending: number; failed: boolean }> =>
+const imageState = (b: any, edSel = SEL.editor): Promise<{ done: number; pending: number; failed: boolean }> =>
   b
     .eval(`(() => {
-      const ed = document.querySelector(${JSON.stringify(SEL.editor)})
+      const ed = document.querySelector(${JSON.stringify(edSel)})
       if (!ed) return { done: 0, pending: 0, failed: false }
       const hosts = [...ed.querySelectorAll('img')].map(i => { try { return new URL(i.src).host } catch (e) { return '' } })
       const done = hosts.filter(h => /(^|\\.)zhimg\\.com$|^pic[\\w-]*\\.zhihu\\.com$/.test(h)).length
@@ -361,8 +354,8 @@ const imageState = (b: any): Promise<{ done: number; pending: number; failed: bo
  * 点一下失败的图，编辑器会自己重传（最多重试 IMAGE_RETRIES 次）；点完光标停在这张图上，按 ↓ 回到正文末尾，后面的文字和图才接得上。
  */
 const IMAGE_RETRIES = 3
-async function uploadImage(ctx: any, b: any, url: string, n: number) {
-  const before = (await imageState(b)).done
+async function uploadImage(ctx: any, b: any, url: string, n: number, ed = SEL.editor) {
+  const before = (await imageState(b, ed)).done
   await b.upload(SEL.imageInput, [url], { timeout: 120000 }).catch((e: any) => {
     throw new Error(L(ctx, `第 ${n} 张图没传上去（图片下载失败或者知乎的图片框变了，SEL.imageInput）：`, `Image ${n} didn't upload (couldn't fetch it, or Zhihu's image input changed — SEL.imageInput): `) + (e?.message ?? e))
   })
@@ -370,13 +363,13 @@ async function uploadImage(ctx: any, b: any, url: string, n: number) {
   let end = Date.now() + 120000
   while (Date.now() < end) {
     await ctx.sleep(1500)
-    const s = await imageState(b)
+    const s = await imageState(b, ed)
     if (s.failed) {
       if (retries >= IMAGE_RETRIES) throw new Error(L(ctx, `知乎提示第 ${n} 张图上传失败，重试了 ${retries} 次还是不行：过一会儿再发，或者换一张图（格式支持 jpg、png、webp、gif）`, `Zhihu says image ${n} failed to upload, still failing after ${retries} retries: try again later or use another image (jpg, png, webp, gif)`))
       retries++
       ctx.progress({ message: L(ctx, `第 ${n} 张图知乎没传成功，重试第 ${retries} 次…`, `Zhihu failed to upload image ${n}; retry ${retries}…`) })
       const marked = await b.eval(`(() => {
-        const f = [...document.querySelectorAll(${JSON.stringify(SEL.editor + ' figure')})].find(f => ${TEXT.uploadFailed}.test(f.innerText))
+        const f = [...document.querySelectorAll(${JSON.stringify(ed + ' figure')})].find(f => ${TEXT.uploadFailed}.test(f.innerText))
         if (!f) return false
         f.setAttribute('data-shuttle-mark', 'failed-image')
         return true
@@ -446,13 +439,18 @@ async function draftId(ctx: any, b: any, ms: number) {
 /**
  * 发布一篇文章到知乎专栏。只发审核通过（approved / scheduled）的；发布前检查平台规格；发布频率只是建议，超了照样发。
  * 上次中断过的先去文章列表里按标题找，避免重复发。
+ *
+ * 写文章页交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具（做法见 docs/approach.md）：
+ *   AI 填标题、点开「发布设置」、处理弹窗；fill_body 工具填正文（按图切段粘贴、传图、重试，读回核对）、add_topics 加话题（没加上只提醒）；
+ *   publish 工具核对标题、正文后才点「发布」，确认框也由它点，读接口和地址判断发没发出去。AI 没做完或知乎不收，把窗口交给用户。
+ * dry_run：演练，publish 工具核对完不点，返回 { dry_run, need, warnings, snapshot }。知乎打字就自动存草稿，演练会留一篇草稿。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这篇文章：', 'No such article: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < 15 * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
-  if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
+  if (!input.dry_run && !['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = zhihuChannel(ctx, p.channel_id)
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
@@ -469,7 +467,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
   const interrupted = p.status === 'publishing' || p.status === 'failed'
   const claimedBefore = p.claimed_at
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
   const done = (id: string, extra: object = {}) => {
     ctx.db.update('social_posts', p.id, { status: 'published', post_id: id, post_url: articleUrl(id), published_at: now(), updated_at: now(), error: null })
     return { id: p.id, post_id: id, ...extra }
@@ -480,9 +478,20 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (r.loggedOut) throw expired(ctx, ch)
     return r.list.find((a) => (id && a.id === id) || (norm(a.title) === norm(p.title) && (!a.created || Date.parse(a.created) >= sinceMs)))?.id ?? ''
   }
+  /** 报错：没发出去，卡在哪；窗口在用户眼前的会留着 */
+  const stuck = (why: string[], kept: boolean) =>
+    new Error(
+      L(ctx, `没发出去：${why.join('；')}。`, `Not published: ${why.join('; ')}. `) +
+        (kept
+          ? L(ctx, '知乎的窗口还开着，别的都已填好：在里面改好点「发布」就行，之后点「采集」会把它对上这一篇。', "Zhihu's window is still open with everything else filled in: fix it there and click 发布 (Publish); collecting stats afterwards links it to this article.")
+          : L(ctx, '到页面上再点一次「发布」，卡住时会弹出知乎窗口交给你；草稿还在知乎上。', "Click Publish on the page again — if it gets stuck, the Zhihu window opens for you; the draft is kept on Zhihu."))
+    )
+  // 正文怎么填：按图切段（文字段粘贴、图在原来的位置上传）。Markdown 写法里正文没写位置的图放最前面（当题图）
+  const plain = (h: string) => norm(h.replace(/<[^>]+>/g, '').replace(/&\w+;/g, ''))
   try {
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    if (interrupted) {
+    if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（知乎发布要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (Zhihu publishing needs the browser assistant): Settings → About'))
+    if (interrupted && !input.dry_run) {
       ctx.progress({ message: L(ctx, '上次没发完，先看看文章列表里有没有这篇…', "Last attempt didn't finish; checking your articles for this one first…") })
       const id = await lookup(b, Date.parse(claimedBefore || '') - 60_000 || 0)
       if (id) return done(id, { already: true })
@@ -490,79 +499,140 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     ctx.progress({ message: L(ctx, '打开写文章页…', 'Opening the editor…') })
     await b.goto(WRITE)
     if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
-    await b.waitFor(SEL.editor, { timeout: 30000 }).catch(() => {
-      throw new Error(L(ctx, '写文章页没出现正文编辑器（SEL.editor），知乎的页面可能改了', "The editor (SEL.editor) didn't appear on the write page — Zhihu's page may have changed"))
-    })
-
-    ctx.progress({ message: L(ctx, '填写标题和正文…', 'Filling in the title and text…') })
-    await b.type(SEL.title, p.title)
-    // 光标放进正文：图片插在光标处，粘贴也从这里开始
-    await b.click(SEL.editor)
-    // 按图切段：文字段粘贴，图在原来的位置上传。Markdown 写法里正文没写位置的图放最前面（当题图）
-    const parts: Segment[] = isHtml(p.body) ? await htmlSegments(b, p.body) : segments(p.body)
-    const placed = new Set(parts.flatMap((s) => ('image' in s ? [s.image] : [])))
-    const all = isHtml(p.body) ? parts : [...images.filter((u) => !placed.has(u)).map((image) => ({ image })), ...parts]
-    let n = 0
-    for (const s of all) {
-      if ('html' in s) {
-        if (!(await pasteHtml(b, s.html))) throw new Error(L(ctx, '正文没粘贴进去（SEL.editor），知乎的页面可能改了', "Couldn't paste the text into the editor (SEL.editor) — Zhihu's page may have changed"))
-        await ctx.sleep(800)
-      } else {
-        n++
-        ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
-        await uploadImage(ctx, b, s.image, n)
-      }
-    }
-    // 图都传好了才往下走：数一遍正文里传好的图，和要传的张数对上
-    if (n) {
-      const s = await imageState(b)
-      if (s.pending || s.done < n) throw new Error(L(ctx, `正文里应该有 ${n} 张图，传好的只有 ${s.done} 张${s.pending ? `，还有 ${s.pending} 张没传完` : ''}：没有发布，草稿还在`, `The text should have ${n} images but only ${s.done} uploaded${s.pending ? `, ${s.pending} still uploading` : ''}: nothing was published; the draft is kept`))
-    }
-    // 粘贴没生效（编辑器换了）时正文是空的：拿第一段文字核对一下
-    const plain = (h: string) => norm(h.replace(/<[^>]+>/g, '').replace(/&\w+;/g, ''))
-    const first = plain((parts.find((s) => 'html' in s && plain(s.html)) as { html: string } | undefined)?.html ?? '').slice(0, 6)
-    if (first && !norm(String(await b.text(SEL.editor).catch(() => ''))).includes(first)) throw new Error(L(ctx, '正文没填进去，知乎的编辑器可能改了', "The text didn't make it into the editor — Zhihu's editor may have changed"))
-
-    // 打字后知乎自动存草稿，地址变成 /p/<id>/edit；发布成功跳到 /p/<id>。话题那行也要有了草稿才出现
-    const id = await draftId(ctx, b, 20000)
-    const topics: string[] = []
-    if (tags.length) {
-      ctx.progress({ message: L(ctx, '添加话题…', 'Adding topics…') })
-      for (const t of tags.slice(0, ZHIHU.tagsMax)) if (await addTopic(ctx, b, t).catch(() => false)) topics.push(t)
-    }
-
-    ctx.progress({ message: L(ctx, '发布…', 'Publishing…') })
-    if (!(await markByText(b, SEL.publish, TEXT.publish, 'publish'))) throw new Error(L(ctx, '没找到「发布」按钮（SEL.publish），知乎的页面可能改了', "Couldn't find the Publish button (SEL.publish) — Zhihu's page may have changed"))
-    // 发布被拒（比如「近期发布频率过高，请24小时后重试~」，code 2011）只弹一个几秒就消失的提示，接口回 { code, toast_message }：从接口拿原话
     b.listen(API.publish)
-    await b.click('[data-shuttle-mark="publish"]')
-    const end = Date.now() + 60000
-    let confirmed = false
-    while (Date.now() < end) {
-      await ctx.sleep(1500)
-      const m = ARTICLE.exec(String(b.url() ?? ''))
-      if (m && !m[2]) return done(m[1], { topics })
-      const rejected = (await b.responses(API.publish, { timeout: 100 }).catch(() => []))
-        .map((r: any) => r.json)
-        .find((j: any) => j && j.code && (j.toast_message || j.message))
-      if (rejected) throw new Error(L(ctx, '知乎没让发：', 'Zhihu refused to publish: ') + (rejected.toast_message || rejected.message) + L(ctx, '（草稿还在）', ' (the draft is kept)'))
-      // 有时会弹一个确认框（比如提示内容来源、创作声明）：点里面的「发布 / 确认发布 / 确定」，只点一次
-      if (!confirmed && (await markByText(b, `${SEL.modal} button`, TEXT.publishConfirm, 'publish-confirm'))) {
-        confirmed = true
-        await b.click('[data-shuttle-mark="publish-confirm"]').catch(() => {})
-      }
+
+    const parts: Segment[] = isHtml(p.body) ? await htmlSegments(b, p.body) : segments(p.body)
+    const placed = new Set(parts.flatMap((x) => ('image' in x ? [x.image] : [])))
+    const all = isHtml(p.body) ? parts : [...images.filter((u) => !placed.has(u)).map((image) => ({ image })), ...parts]
+    const nImages = all.filter((x) => 'image' in x).length
+    const first = plain((parts.find((x) => 'html' in x && plain(x.html)) as { html: string } | undefined)?.html ?? '').slice(0, 12)
+    const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
+    const st = { body: '', id: '', topics: [] as string[], missing: [] as string[], verified: false, published: '', rejected: '' }
+    /** 正文填对了没有：第一段的字在、只出现一次（没粘贴两遍），传好的图够数 */
+    const bodyOk = async (ed: string) => {
+      const text = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); return e ? e.innerText : '' })()`).catch(() => '')))
+      const imgs = nImages ? await imageState(b, ed) : { done: 0, pending: 0, failed: false }
+      if (first && text.split(first).length !== 2) return false
+      return imgs.done >= nImages && !imgs.pending
     }
-    // 没跳转：可能弹了提示（违规、频繁、要验证），也可能其实发出去了，去列表里核对一次
-    const msg = String(await b.text().catch(() => '')).match(TEXT.publishError)?.[0]?.trim()
-    const snapshot = (await b.snapshot({ label: 'zhihu-publish' }).catch(() => null))?.dir
-    const found = await lookup(b, Date.now() - 10 * 60_000, id).catch(() => '')
-    if (found) return done(found, { topics })
-    const err: any = new Error(L(ctx, '点了发布，但页面没跳到文章页：', "Clicked Publish, but the page didn't go to the article: ") + (msg || L(ctx, '到知乎的写文章页看一眼（草稿还在）', 'check the draft on Zhihu (it is kept)')))
-    err.snapshot = snapshot
-    throw err
+    /** 等发布结果：跳到 /p/<id> 就是发出去了；接口回了 { code, toast_message } 就是被拒了；确认框由这里点（只点一次） */
+    const result = async (ms: number): Promise<string | { finish: string }> => {
+      let confirmed = false
+      for (const end = Date.now() + ms; Date.now() < end; ) {
+        await ctx.sleep(1500)
+        const m = ARTICLE.exec(String(b.url() ?? ''))
+        if (m && !m[2]) {
+          st.published = m[1]
+          return { finish: L(ctx, `发出去了 ${m[1]}`, `Published ${m[1]}`) }
+        }
+        const rej = (await b.responses(API.publish, { timeout: 100 }).catch(() => [])).map((r: any) => r.json).find((j: any) => j && j.code && (j.toast_message || j.message))
+        if (rej) {
+          st.rejected = String(rej.toast_message || rej.message)
+          return `Zhihu refused: ${st.rejected}. Fix what it says if you can (then call publish again); otherwise fail with this reason.`
+        }
+        if (!confirmed) {
+          const ok = await b.eval(`(() => { const btn = [...document.querySelectorAll(${JSON.stringify(SEL.modal + ' button')})].find(e => e.offsetParent !== null && ${TEXT.publishConfirm}.test((e.innerText || '').replace(/[\\s\\u200b]+/g, ''))); if (!btn) return false; btn.click(); return true })()`).catch(() => false)
+          if (ok) confirmed = true
+        }
+      }
+      return 'Clicked 发布, but no result yet. A dialog or message may be on the page: handle it (not the publish buttons), then call publish again.'
+    }
+    const id = (d: string) => ({ type: 'integer', description: d })
+    const tools = {
+      fill_body: {
+        description: 'args { id }: put the article body into the body editor with that element number (clears it first, pastes the text in parts and uploads the images in place, retrying failed ones), then checks it. Use this instead of typing the body; calling it again replaces the body.',
+        params: { type: 'object', properties: { id: id('element number of the body editor (contenteditable)') }, required: ['id'] },
+        run: async (a: any) => {
+          // 编号每看一次页面就重排：给编辑框打一个不变的标记，之后核对（publish）认它，不认编号
+          const marked = await b.eval(`(() => { document.querySelectorAll('[data-annulo-body]').forEach(e => e.removeAttribute('data-annulo-body')); const e = document.querySelector(${JSON.stringify(at(a.id))}); if (!e || !e.isContentEditable) return false; e.setAttribute('data-annulo-body', '1'); return true })()`).catch(() => false)
+          if (!marked) return `Element ${a.id} is not an editable area; pass the body editor's number.`
+          const ed = '[data-annulo-body="1"]'
+          // 先清空再粘贴：重试时不会把正文贴两遍
+          await b.click(ed).catch(() => {})
+          await b.eval(`(() => { const e = document.querySelector('[data-annulo-body="1"]'); e.focus(); document.execCommand('selectAll') })()`).catch(() => {})
+          await b.press('Backspace').catch(() => {})
+          await ctx.sleep(500)
+          let n = 0
+          for (const x of all) {
+            if ('html' in x) {
+              if (!(await pasteHtml(b, x.html, ed))) return `Couldn't paste into element ${a.id}; is it the body editor?`
+              await ctx.sleep(800)
+            } else {
+              n++
+              ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
+              try {
+                await uploadImage(ctx, b, x.image, n, ed)
+              } catch (e: any) {
+                return `Image ${n} failed: ${e?.message ?? e}`
+              }
+            }
+          }
+          st.body = ed
+          st.id = await draftId(ctx, b, 20000)
+          return (await bodyOk(ed)) ? `Body filled and checked (${nImages} images).` : 'The body did not check out (text missing, pasted twice, or images missing). Clear the editor and call fill_body again, or fail.'
+        },
+      },
+      add_topics: {
+        description: `Add this article's topics (${tags.join(', ') || 'none'}) in 发布设置: searches each and picks only the exact match. Topics the search doesn't have are skipped. Call it after the body is filled (the topic row appears once the draft is saved).`,
+        params: { type: 'object', properties: {} },
+        run: async () => {
+          if (!tags.length) return 'There are no topics for this article.'
+          for (const t of tags.slice(0, ZHIHU.tagsMax)) if (!st.topics.includes(t) && (await addTopic(ctx, b, t).catch(() => false))) st.topics.push(t)
+          st.missing = tags.slice(0, ZHIHU.tagsMax).filter((t) => !st.topics.includes(t))
+          return st.missing.length ? `Added: ${st.topics.join(', ') || 'none'}; not available: ${st.missing.join(', ')} (that's fine, go on).` : 'All topics added.'
+        },
+      },
+      publish: {
+        description: 'args { title_id, button_id }: the only way to publish. The script checks the title is exactly right, the body was filled by fill_body and still checks out, and the button says 发布; then clicks it, handles the confirmation dialog, and waits for the result.',
+        params: { type: 'object', properties: { title_id: id('element number of the title box'), button_id: id('element number of the 发布 button') }, required: ['title_id', 'button_id'] },
+        run: async (a: any) => {
+          const issues: string[] = []
+          if (norm(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.title_id))}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).catch(() => '')) !== norm(p!.title)) issues.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
+          if (!st.body) issues.push('the body has not been filled with fill_body yet')
+          else if (!(await bodyOk(st.body))) issues.push('the body no longer checks out (text missing or duplicated, or images missing)')
+          const label = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
+          if (label !== TEXT.publish) issues.push(`element ${a.button_id} is not the 发布 button`)
+          if (issues.length) return `Not published: ${issues.join('; ')}.`
+          st.verified = true
+          if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点发布', 'Dry run: everything checked, not published') }
+          await b.click(at(a.button_id))
+          return result(60000)
+        },
+      },
+    }
+    const task = [
+      `在知乎专栏的写文章页发一篇文章（页面已经打开、已登录）。`,
+      `- 标题：「${p.title}」（原样填，不改）。`,
+      `- 正文：用 fill_body 工具填（传正文编辑框的编号），不要自己打字。`,
+      tags.length ? `- 话题：正文填好后用 add_topics 工具加（它会自己点开「发布设置」）。` : `- 话题：没有。`,
+      `- 最后用 publish 工具发布（传标题框、「发布」按钮的编号），它会核对、点确认框、等结果；它说没核对过就照它说的改了再调用。`,
+    ].join('\n')
+    const r = await b.agent(task, { tools, avoid: ['发布', '确认发布', '继续发布'], notes: 'zhihu.publish', maxSteps: 30 })
+    const warnings = st.missing.length ? [L(ctx, `这些话题没加上（知乎搜不到一模一样的）：${st.missing.join('、')}`, `These topics weren't added (no exact match on Zhihu): ${st.missing.join(', ')}`)] : []
+    const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
+    if (input.dry_run) {
+      const snap = await b.snapshot?.({ label: 'dry-run' }).catch(() => null)
+      return { dry_run: true, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到发布那一步', "The browser assistant didn't reach the publish step")], warnings, snapshot: snap?.dir, ...extra }
+    }
+    if (st.published) return done(st.published, { topics: st.topics, ...extra })
+    // AI 没做完或知乎不收：把窗口交给用户，等他点发布（最多 15 分钟）
+    const why = [st.rejected ? L(ctx, `知乎没让发：${st.rejected}`, `Zhihu refused: ${st.rejected}`) : r.reason || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
+    const shown = typeof b.show === 'function' && (await b.show().then(() => true, () => false))
+    if (!shown) {
+      const found = await lookup(b, Date.now() - 10 * 60_000, st.id).catch(() => '')
+      if (found) return done(found, { topics: st.topics, ...extra })
+      throw stuck(why, false)
+    }
+    ctx.progress({ message: L(ctx, `要你在弹出的知乎窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Zhihu window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+    for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+      await ctx.sleep(2000)
+      const m = ARTICLE.exec(String(b.url() ?? ''))
+      if (m && !m[2]) return done(m[1], { topics: st.topics, ...extra })
+    }
+    throw stuck([...why, L(ctx, '15 分钟内没等到你发布', 'No publish within 15 minutes')], true)
   } catch (e: any) {
     const msg = e?.message ?? String(e)
-    ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
+    if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
     const err: any = new Error(msg)
     if (e instanceof Expired || e?.expired) err.expired = true
     if (e?.snapshot) err.snapshot = e.snapshot
@@ -572,51 +642,64 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
 // ---- 删除 ----
 
-/** 打开内容管理的文章页，找到这篇的卡片，点开它的「更多」菜单（删除用）。id 为空时用第一篇 */
-async function openCardMenu(ctx: any, b: any, ch: any, id: string) {
-  await b.goto(MANAGE)
-  if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
-  await b.waitFor(SEL.cardAction, { timeout: 30000 }).catch(() => {
-    throw new Error(L(ctx, '内容管理里没找到文章卡片的按钮（SEL.cardAction），知乎的页面可能改了', "No article card buttons in Content management (SEL.cardAction) — Zhihu's page may have changed"))
-  })
-  // 卡片没有稳定的 class：从指向 /p/<id> 的链接往上找，找到里面有操作按钮的那一层
-  const found = await b.eval(`(() => {
-    document.querySelectorAll('[data-shuttle-mark="more"]').forEach(e => e.removeAttribute('data-shuttle-mark'))
-    const id = ${JSON.stringify(id)}
-    const link = [...document.querySelectorAll('main a[href*="/p/"]')].find(a => !id || new RegExp('/p/' + id + '(/|$|\\\\?)').test(a.getAttribute('href') || ''))
-    let card = link
-    while (card && !card.querySelector(${JSON.stringify(SEL.cardAction)})) card = card.parentElement
-    if (!card) return 'nocard'
-    const more = [...card.querySelectorAll(${JSON.stringify(SEL.cardAction)})].find(e => (e.innerText || '').replace(/[\\s\\u200b]+/g, '') === ${JSON.stringify(TEXT.more)})
-    if (!more) return 'nomore'
-    more.setAttribute('data-shuttle-mark', 'more')
-    return 'ok'
-  })()`)
-  if (found === 'nocard') return false
-  if (found !== 'ok') throw new Error(L(ctx, '文章卡片上没找到「更多」按钮，知乎的页面可能改了', "No \"更多\" (More) button on the article card — Zhihu's page may have changed"))
-  await b.click('[data-shuttle-mark="more"]')
-  await ctx.sleep(1000)
-  if (!(await markByText(b, SEL.menuItem, TEXT.delete, 'delete'))) throw new Error(L(ctx, '「更多」菜单里没找到「删除」（SEL.menuItem），知乎的页面可能改了', "No \"删除\" (Delete) in the More menu (SEL.menuItem) — Zhihu's page may have changed"))
-  return true
-}
-
-/** 从知乎删除一篇已发布的文章（内容管理里的「更多 → 删除」），表里记成 removed 并清掉 post_id */
-export async function remove(input: { post_id?: string; zhihu_id?: string; channel_id?: string }, ctx: any) {
+/**
+ * 从知乎删除一篇已发布的文章（不可恢复）：交给浏览器助手在创作中心「内容管理 → 文章」里找到这篇、点「更多 → 删除」；
+ * 确认框里的按钮它点不到，只能调 confirm_delete：核对是确认框里的「确认 / 确定」才点，点完读文章列表接口确认这篇没了。
+ * 表里记成 removed 并清掉 post_id。dry_run：演练，走到确认框为止，confirm_delete 核对完不点。
+ */
+export async function remove(input: { post_id?: string; zhihu_id?: string; channel_id?: string; dry_run?: boolean }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const id = p?.post_id || input?.zhihu_id
   const ch = zhihuChannel(ctx, p?.channel_id || input?.channel_id || '')
   if (!id || !ch.browser_profile) throw new Error(L(ctx, '要给出文章（post_id），或者 zhihu_id + channel_id', 'Give an article (post_id), or zhihu_id + channel_id'))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
-  if (!(await openCardMenu(ctx, b, ch, id))) throw new Error(L(ctx, '内容管理里没找到这篇文章（可能已经删了）：', "Couldn't find this article in Content management (it may be deleted): ") + id)
-  await b.click('[data-shuttle-mark="delete"]')
-  await ctx.sleep(1000)
-  // 确认框：「删除文章 / 确定删除这篇文章？」，按钮「确认 / 取消」
-  if (!(await markByText(b, `${SEL.modal} button`, TEXT.confirm, 'confirm'))) throw new Error(L(ctx, '没出现删除确认框，知乎的页面可能改了', "The delete confirmation didn't appear — Zhihu's page may have changed"))
-  await b.click('[data-shuttle-mark="confirm"]')
-  await ctx.sleep(2500)
-  const left = await readArticles(b, 3)
-  if (left.list.some((a) => a.id === id)) throw new Error(L(ctx, '点了删除确认，但文章还在列表里，稍后刷新看看', 'Confirmed delete, but the article is still listed — refresh later'))
-  if (p) ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, removed_at: now(), updated_at: now() })
+  if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（知乎删除要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (deleting on Zhihu needs the browser assistant): Settings → About'))
+  await b.goto(MANAGE)
+  if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
+  const removed = () => p && ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, removed_at: now(), updated_at: now() })
+  const before = await readArticles(b, 3)
+  if (before.loggedOut) throw expired(ctx, ch)
+  const a0 = before.list.find((a) => a.id === id)
+  if (!a0) {
+    if (before.ok) removed()
+    return { removed: id, verified: before.ok, already: true }
+  }
+  const gone = async () => {
+    const r = await readArticles(b, 3)
+    return r.ok && !r.list.some((a) => a.id === id)
+  }
+  const at = (x: any) => `[data-annulo-act="${Number(x)}"]`
+  const tools = {
+    confirm_delete: {
+      description: 'args { button_id }: the only way to confirm the deletion. Checks the element is the 确认 / 确定 button inside the confirmation dialog, clicks it, and checks this article is gone.',
+      params: { type: 'object', properties: { button_id: { type: 'integer', description: 'element number of the confirm button in the dialog' } }, required: ['button_id'] },
+      run: async (a: any) => {
+        const el = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); if (!e) return null; return { text: (e.innerText || '').replace(/[\\s\\u200b]+/g, ''), dialog: !!e.closest('[role="dialog"],[aria-modal="true"],.Modal,[class*="modal" i],[class*="dialog" i]') } })()`).catch(() => null)
+        if (!el) return `No element ${a.button_id}.`
+        if (!TEXT.confirm.test(el.text)) return `Element ${a.button_id} says "${el.text}", not 确认 / 确定.`
+        if (!el.dialog) return `Element ${a.button_id} is not inside the confirmation dialog; open the delete confirmation first.`
+        if (input.dry_run) return { finish: L(ctx, '演练：确认框和按钮都对，没点', 'Dry run: the dialog and button check out, not clicked') }
+        await b.click(at(a.button_id)).catch(() => b.eval(`document.querySelector(${JSON.stringify(at(a.button_id))}).click()`))
+        for (let i = 0; i < 6; i++) {
+          await ctx.sleep(1500)
+          if (await gone()) return { finish: L(ctx, `删掉了 ${id}`, `Deleted ${id}`) }
+        }
+        return 'Clicked, but the article is still listed. A verification may be showing (ask_user), or check again.'
+      },
+    },
+  }
+  const task = [
+    `在知乎创作中心的「内容管理 → 文章」里删掉这一篇（不可恢复，只删这一篇，别的一篇都不要动）：`,
+    `- 标题「${a0.title}」，文章链接里有 /p/${id}。`,
+    `- 在这篇的卡片上点「更多」，菜单里点「删除」；弹出确认框后用 confirm_delete 工具点确认按钮（传按钮的编号）。碰到验证码用 ask_user。`,
+  ].join('\n')
+  const r = await b.agent(task, { tools, avoid: ['确认', '确定'], notes: 'zhihu.remove', maxSteps: 20 })
+  if (input.dry_run) {
+    const snap = await b.snapshot?.({ label: 'remove-dry-run' }).catch(() => null)
+    return { dry_run: true, ok: r.ok, reason: r.reason || r.summary, snapshot: snap?.dir, timing: r.timing?.summary }
+  }
+  if (!(await gone())) throw new Error(L(ctx, `没删掉：${r.reason || L(ctx, '浏览器助手说删了，但文章还在列表里', 'the browser assistant said it was deleted, but the article is still listed')}。到知乎创作中心看一眼`, `Not deleted: ${r.reason || 'the article is still listed'}. Check Zhihu's creator center`))
+  removed()
   return { removed: id }
 }
 
