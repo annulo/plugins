@@ -12,10 +12,10 @@ Since October 2026 the form after the upload is filled by the browser assistant 
 
 Browser regression tests require `esbuild` on PATH and the `playwright` Node package. Run `node --test tests/xhs-upload.test.mjs`; set `CHROME_PATH` to use an installed Chrome instead of Playwright's Chromium.
 
-## Custom video covers (pending live validation)
+## Custom video covers
 
 `video_cover` stores a Library URL or local uploaded-image URL, separately from image-post media and `cover_text`. Omitting it on edits preserves the previous value; an empty string removes it. `_content.fromContent` passes it only to supported video destinations, and scheduling reads the latest source value.
 
 `_video_cover_upload.ts` locates an unambiguous cover editor, uploads only to its image input, waits for a changed, loaded preview, and confirms inside that editor. Missing/ambiguous controls, rejected uploads or unchanged previews stop before publication. An explicitly selected cover never falls back to a default frame. Empty covers retain the existing publication flow.
 
-Local browser fixtures cover these safeguards. **The live Xiaohongshu and Douyin cover selectors have not yet been verified**: Chrome extension file access blocked the attempt, and the user requested code and local tests first. Before releasing, validate each platform with a disposable video and cover and stop before the final Publish button; adapt the scoped selectors to the observed UI if needed.
+Local browser fixtures cover these safeguards. The Xiaohongshu cover flow was verified on a live account on 2026-10-20 (the cover tile's background image changes, the page then says 封面效果评估通过, and the published note shows the uploaded cover). After the upload the page shows 重新上传 and 检测为高清视频…; while uploading it shows 取消上传 and 上传中 42%.

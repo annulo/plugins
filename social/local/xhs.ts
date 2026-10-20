@@ -18,7 +18,7 @@ import { selectUpload, waitImages } from './_xhs_upload'
 //
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
-// video 为空照旧发图文笔记。视频上传入口已在真实账号验证过，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
+// video 为空照旧发图文笔记。视频上传、上传状态（VIDEO_TEXT）、独立封面都在真实账号验证过（2026-10-20）。
 // 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-20，做法见 docs/approach.md）：
 //   发布：脚本打开发布页、选对图文 / 视频入口传素材（_xhs_upload.ts）；AI 填标题、处理弹窗；fill_body 填正文（tiptap：粘贴后读回核对）、
 //         话题输「#话题」后从候选里点选成话题块（SEL.topic）；publish 核对后点「发布」（在 closed shadow root 里，AI 点不到），监听 NOTE_API 拿笔记 id；
@@ -224,12 +224,12 @@ const TEXT = {
   confirm: ['确定', '确认', '删除', '确认删除'],
 }
 
-// 视频上传后发布页上的文字：进度是「上传中 45%」这类，传完出现「上传成功」「替换视频」，失败是「上传失败」。
-// 处理（转码）中可能显示「处理中」「转码中」，这时发布按钮点不了
+// 视频上传后发布页上的文字（2026-10 实测）：上传中是「取消上传」「上传中 42%」「剩余时间：8s」，传完是「重新上传」「检测为高清视频…」；
+// 失败是「上传失败」。处理（转码）中可能显示「处理中」「转码中」（还没见过），这时发布按钮点不了
 const VIDEO_TEXT = {
   uploading: /上传中|正在上传|uploading/i,
   processing: /处理中|转码中|视频处理|processing/i,
-  done: /上传成功|替换视频|更换视频|上传完成/,
+  done: /重新上传|上传成功|替换视频|更换视频|上传完成/,
   failed: /上传失败|转码失败|处理失败|格式不支持|不支持该格式|视频时长超|文件过大/,
 }
 const VIDEO_WAIT_MS = 10 * 60_000
@@ -558,6 +558,25 @@ export async function publish(input: { post_id: string; private?: boolean; force
       },
       check_result: { description: 'Wait for the publish result again (after a verification or a dialog).', params: { type: 'object', properties: {} }, run: async () => result(60000) },
     }
+    if (input.private) {
+      // 可见范围是小红书自己的下拉，展开后编号会变，AI 在里面来回点选不上（2026-10 视频页上点了 12 步）：脚本按文字选、读回核对
+      tools.set_private = {
+        description: 'Set visibility (可见范围) to 仅自己可见 and check it. If it says it could not find the control, set it yourself.',
+        params: { type: 'object', properties: {} },
+        run: async () => {
+          await b.press('Escape').catch(() => {})
+          const found = await b.eval(`(() => { document.querySelectorAll('[data-annulo-vis]').forEach(e => e.removeAttribute('data-annulo-vis')); const e = [...document.querySelectorAll(${JSON.stringify(SEL.visibility)})].find(x => /^(公开可见|仅自己可见|仅互关好友可见)$/.test(x.textContent.trim())); if (!e) return false; e.scrollIntoView({ block: 'center' }); e.setAttribute('data-annulo-vis', '1'); return true })()`).catch(() => false)
+          if (!found) return "Couldn't find the visibility control; set 仅自己可见 yourself."
+          if ((await visibilityOf(b)) === '仅自己可见') return 'Visibility is 仅自己可见.'
+          await b.click('[data-annulo-vis="1"]').catch(() => {})
+          await ctx.sleep(600)
+          await b.click({ text: '仅自己可见' }).catch(() => {})
+          await ctx.sleep(600)
+          const v = await visibilityOf(b)
+          return v === '仅自己可见' ? 'Visibility is 仅自己可见.' : `Visibility still shows "${v || '?'}"; try set_private again, or set it yourself.`
+        },
+      }
+    }
     if (video) {
       tools.wait_upload = {
         description: 'Wait until the video is uploaded and processed (can take many minutes). Call it before publishing; you can fill the form first.',
@@ -589,7 +608,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
       `- 正文${tags.length ? '和话题' : ''}：用 fill_body 工具填（传正文编辑框的编号），不要自己打字。`,
       video ? `- 视频还在传时可以先填表；发布前调用 wait_upload 等它传完。` : '',
       video && p.video_cover ? `- 封面：用 set_cover 工具换成这篇的封面。` : '',
-      input.private ? `- 可见范围：改成「仅自己可见」（试发）。` : `- 可见范围：保持「公开可见」。`,
+      input.private ? `- 可见范围：用 set_private 工具改成「仅自己可见」（试发）。` : `- 可见范围：保持「公开可见」。`,
       `- 别的选填项（地点、合集、声明、群聊）不用动。`,
       `- 最后用 publish 工具发布（传标题框的编号）；「发布」按钮你点不到。要验证（滑块、验证码）就用 ask_user 交给用户，之后调用 check_result。`,
     ].filter(Boolean).join('\n')
