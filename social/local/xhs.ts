@@ -19,6 +19,11 @@ import { selectUpload, waitImages } from './_xhs_upload'
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
 // video 为空照旧发图文笔记。视频上传入口已在真实账号验证过，转码状态（VIDEO_TEXT）还需要更多真实视频验证。
+// 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-20，做法见 docs/approach.md）：
+//   发布：脚本打开发布页、选对图文 / 视频入口传素材（_xhs_upload.ts）；AI 填标题、处理弹窗；fill_body 填正文（tiptap：粘贴后读回核对）、
+//         话题输「#话题」后从候选里点选成话题块（SEL.topic）；publish 核对后点「发布」（在 closed shadow root 里，AI 点不到），监听 NOTE_API 拿笔记 id；
+//   删除：open_delete 按笔记 id 点这篇卡片上的删除图标（图标没有文字，AI 看不到），AI 处理确认框；confirm_delete 核对点的是这篇、按钮在确认框里才点，读笔记列表确认没了。
+// 页面的规律记在笔记里（notes/xhs.publish.md、notes/xhs.remove.md，项目学到的在 user/notes/social/）。
 
 type Post = {
   id: string
@@ -191,27 +196,35 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
 }
 
 // ---- 发布 / 删除 / 采集 ----
-// 页面结构（2026-09 实测）写成常量，小红书改版时只改这里。
+// 发布、删除交给浏览器助手（b.agent）看着页面做（做法见 docs/approach.md），这里只留脚本自己要认的几处，小红书改版时先改笔记 notes/xhs.*.md。
 
 const PUBLISH_URL = CREATOR + '/publish/publish?source=official'
 const NOTE_MANAGER = CREATOR + '/new/note-manager'
 const PERSONAL = '/api/galaxy/creator/home/personal_info'
 const POSTED = '/api/galaxy/v2/creator/note/user/posted'
-const NOTE_API = '/web_api/sns/v2/note' // 发布成功返回 { data: { id } }
+const NOTE_API = '/web_api/sns/v2/note' // 发布成功返回 { data: { id } }，失败 { msg }
 const SEL = {
   title: 'input[placeholder*="标题"]',
   // 视频封面的入口：「设置封面」缩略图上的「编辑封面」，平时 display: none、鼠标移上去才显示（2026-10）
   coverEdit: '.cover-plugin-preview .cover-edit-entry',
-  body: '.tiptap.ProseMirror',
-  topicItem: '.items .item', // 输入 #话题 后的联想列表，.name 是「#话题」
-  visibility: '.d-select-content', // 页面上有好几个下拉，按文字「公开可见」认出可见范围那个
-  publish: '发布', // 在 closed shadow root 里（<xhs-publish-btn>），原语能按文字点到
-  noteCard: '.note-card',
+  // 正文是 tiptap（ProseMirror）。话题：输入「#话题」弹出候选 .items .item（.name 是「#话题」），点了才变成话题块
+  // <a class="tiptap-topic" data-topic='{"name":"话题",…}'>#话题<span class="content-hide">[话题]#</span></a>；只是文字的 #话题 小红书不认（2026-10 实测）
+  topic: 'a.tiptap-topic',
+  topicItem: '.items .item',
+  visibility: '.d-select-content', // 页面上有好几个下拉，按文字「公开可见」「仅自己可见」认出可见范围那个
+  noteCard: '.note-card', // 笔记管理的卡片，data-impression 里带笔记 id
+  // 卡片上的删除是只有图标的 <span>（没有文字，浏览器助手的元素清单里没有它，2026-10）：由 open_delete 工具按笔记 id 点
   deleteBtn: '.note-card__action-btn--del',
-  confirmModal: '.d-modal',
+}
+const TEXT = {
+  // 「发布」在 closed shadow root 里（<xhs-publish-btn>），浏览器助手看不到也点不到，只能由 publish 工具按文字点
+  submit: '发布',
+  success: /发布成功/,
+  verify: /安全验证|请完成验证|滑块|验证码/,
+  confirm: ['确定', '确认', '删除', '确认删除'],
 }
 
-// 视频上传后发布页上的文字（未实测）：进度是「上传中 45%」这类，传完出现「上传成功」「替换视频」，失败是「上传失败」。
+// 视频上传后发布页上的文字：进度是「上传中 45%」这类，传完出现「上传成功」「替换视频」，失败是「上传失败」。
 // 处理（转码）中可能显示「处理中」「转码中」，这时发布按钮点不了
 const VIDEO_TEXT = {
   uploading: /上传中|正在上传|uploading/i,
@@ -220,6 +233,14 @@ const VIDEO_TEXT = {
   failed: /上传失败|转码失败|处理失败|格式不支持|不支持该格式|视频时长超|文件过大/,
 }
 const VIDEO_WAIT_MS = 10 * 60_000
+
+const now = () => new Date().toISOString()
+const squash = (s: string) => String(s ?? '').replace(/[\s\u200B-\u200D\uFEFF\u00a0]+/g, '')
+
+function expired(ctx: any, ch: any) {
+  ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+  return new Expired(L(ctx, `「${ch.name}」的登录过期了，到「社媒」里点「重新登录」`, `The login for "${ch.name}" expired: click "Log in again" on the Social page`))
+}
 
 /** 发布页上视频的状态：从页面文字认，百分比取「上传中 45%」里的数字 */
 async function videoState(b: any): Promise<{ state: 'uploading' | 'processing' | 'done' | 'failed' | 'unknown'; pct: number; text: string }> {
@@ -234,28 +255,28 @@ async function videoState(b: any): Promise<{ state: 'uploading' | 'processing' |
   return { state: 'unknown', pct, text: '' }
 }
 
-/** 等视频上传、处理完：每 5 秒看一次，最多 10 分钟，边等边报进度 */
-async function waitVideo(ctx: any, b: any) {
+/** 等视频上传、处理完：每 5 秒看一次，最多 10 分钟，边等边报进度。返回给浏览器助手的一句话 */
+async function waitVideo(ctx: any, b: any): Promise<string> {
   const deadline = Date.now() + VIDEO_WAIT_MS
   const t0 = Date.now()
   let unknownSince = 0
   while (Date.now() < deadline) {
     const s = await videoState(b)
     const mins = Math.floor((Date.now() - t0) / 60_000)
-    if (s.state === 'failed') throw new Error(L(ctx, '小红书上传视频失败：', 'Xiaohongshu failed to upload the video: ') + s.text)
-    if (s.state === 'done') return
+    if (s.state === 'failed') return `Xiaohongshu says the upload failed: ${s.text}`
+    if (s.state === 'done') return 'Upload complete.'
     if (s.state === 'uploading') ctx.progress({ message: s.pct >= 0 ? L(ctx, `上传视频 ${s.pct}%…`, `Uploading the video ${s.pct}%…`) : L(ctx, `上传视频中（已 ${mins} 分钟）…`, `Uploading the video (${mins} min so far)…`) })
     else if (s.state === 'processing') ctx.progress({ message: L(ctx, `小红书在处理视频（已 ${mins} 分钟）…`, `Xiaohongshu is processing the video (${mins} min so far)…`) })
     else {
       // 认不出状态：标题框出来了、也没有进度和处理中的字样，等 30 秒还这样就当传完了（页面文字可能和上面写的不一样）
       if (!unknownSince) unknownSince = Date.now()
-      if (Date.now() - unknownSince > 30_000 && (await b.exists(SEL.title).catch(() => false))) return
+      if (Date.now() - unknownSince > 30_000 && (await b.exists(SEL.title).catch(() => false))) return 'Upload looks complete (no progress shown any more).'
       ctx.progress({ message: L(ctx, `等视频上传完（已 ${mins} 分钟）…`, `Waiting for the video upload (${mins} min so far)…`) })
     }
     if (s.state !== 'unknown') unknownSince = 0
     await ctx.sleep(5000)
   }
-  throw new Error(L(ctx, `等了 ${VIDEO_WAIT_MS / 60_000} 分钟视频还没上传、处理完：视频可能太大，或者网络太慢，稍后再发一次`, `The video still wasn't uploaded and processed after ${VIDEO_WAIT_MS / 60_000} minutes: it may be too large or the network too slow — try publishing again later`))
+  return `Still not uploaded and processed after ${VIDEO_WAIT_MS / 60_000} minutes.`
 }
 
 /** 没有配图时，用封面大字生成一张 3:4 的文字卡片 */
@@ -268,25 +289,100 @@ async function textCard(ctx: any, text: string) {
   return f
 }
 
-/** 可见范围下拉在页面上的标记 */
-async function openVisibility(b: any, ctx: any) {
-  const ok = await b.eval(`(() => { const e = [...document.querySelectorAll('${SEL.visibility}')].find(x => /^(公开可见|仅自己可见|仅互关好友可见)$/.test(x.textContent.trim())); if (!e) return false; e.setAttribute('data-shuttle-vis', '1'); return true })()`)
-  if (!ok) throw new Error(L(ctx, '发布页上没找到「可见范围」，小红书的页面可能改了', "Couldn't find the visibility setting on the publish page — Xiaohongshu's page may have changed"))
-  await b.click('[data-shuttle-vis="1"]')
+/** 正文框现在的内容：正文（去掉话题块）和已经变成话题块的话题；没有正文框返回 null */
+async function bodyState(b: any, ed: string): Promise<{ text: string; topics: string[] } | null> {
+  return b
+    .eval(`(() => {
+      const e = document.querySelector(${JSON.stringify(ed)})
+      if (!e) return null
+      const name = a => { try { return JSON.parse(a.getAttribute('data-topic')).name } catch { return (a.firstChild?.textContent || '').replace(/^#/, '') } }
+      const c = e.cloneNode(true)
+      c.querySelectorAll(${JSON.stringify(SEL.topic)}).forEach(m => m.remove())
+      return { text: c.textContent || '', topics: [...e.querySelectorAll(${JSON.stringify(SEL.topic)})].map(a => String(name(a) || '').replace(/[#\\s\\u00a0\\u200b]+/g, '')) }
+    })()`)
+    .catch(() => null)
 }
 
-async function addTopic(ctx: any, b: any, tag: string) {
-  await b.type(SEL.body, ` #${tag}`, { clear: false })
-  await ctx.sleep(1500)
-  // 联想列表里有完全一样的话题就选它；没有就留成普通文字（不乱选一个意思不同的）
-  const picked = await b.eval(`(() => { const it = [...document.querySelectorAll('${SEL.topicItem}')].find(e => (e.querySelector('.name')?.innerText || '').trim() === ${JSON.stringify('#' + tag)}); if (!it) return false; it.setAttribute('data-shuttle-topic', '1'); return true })()`)
-  if (picked) {
-    await b.click('[data-shuttle-topic="1"]')
-    await b.eval(`document.querySelector('[data-shuttle-topic]')?.removeAttribute('data-shuttle-topic')`)
-  } else {
-    await b.press('Escape')
+/**
+ * 清空正文框，把正文整段粘贴进去（tiptap 收 text/plain 粘贴，一行一段）。清空有两种办法：选中整个编辑区按退格；不灵再用 selectAll。
+ * 不直接打字：编辑器按光标位置插字，重试时会夹进原来的字中间。
+ */
+async function pasteBody(ctx: any, b: any, text: string, how: 'range' | 'command', ed: string) {
+  const sel = JSON.stringify(ed)
+  await b.click(ed).catch(() => {})
+  if (how === 'range') await b.eval(`(() => { const e = document.querySelector(${sel}); e.focus(); const r = document.createRange(); r.selectNodeContents(e); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); document.dispatchEvent(new Event('selectionchange')) })()`).catch(() => {})
+  else await b.eval(`(() => { document.querySelector(${sel}).focus(); document.execCommand('selectAll') })()`).catch(() => {})
+  await ctx.sleep(200)
+  await b.press('Backspace').catch(() => {})
+  await ctx.sleep(200)
+  if (text) await b.eval(`(() => { const e = document.querySelector(${sel}); e.focus(); const d = new DataTransfer(); d.setData('text/plain', ${JSON.stringify(text)}); e.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true })) })()`).catch(() => {})
+  await ctx.sleep(800)
+}
+
+/**
+ * 在正文的光标处（粘贴完就在末尾）输入「 #话题」，等候选出来，点名字一模一样的那个，变成话题块。
+ * 候选里没有一样的（没有这个话题）：删掉输入的字，返回 false，不乱选一个意思不同的。
+ */
+async function addTopic(ctx: any, b: any, tag: string, ed: string) {
+  const typed = ' #' + tag
+  // 焦点不在正文框里时 insertText 会写到别处：不输
+  const ok = await b
+    .eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); if (!e || !e.contains(document.activeElement)) return false; return document.execCommand('insertText', false, ${JSON.stringify(typed)}) })()`)
+    .catch(() => false)
+  if (!ok) return false
+  let hit = false
+  for (const end = Date.now() + 5000; !hit && Date.now() < end; ) {
+    await ctx.sleep(500)
+    hit = await b
+      .eval(`(() => {
+        document.querySelectorAll('[data-annulo-topic]').forEach(e => e.removeAttribute('data-annulo-topic'))
+        const it = [...document.querySelectorAll(${JSON.stringify(SEL.topicItem)})].find(e => (e.querySelector('.name')?.innerText || '').trim() === ${JSON.stringify('#' + tag)})
+        if (!it) return false
+        it.setAttribute('data-annulo-topic', '1')
+        return true
+      })()`)
+      .catch(() => false)
   }
-  return picked
+  if (hit && (await b.click('[data-annulo-topic="1"]').then(() => true, () => false))) {
+    await ctx.sleep(600)
+    return !!(await bodyState(b, ed))?.topics.includes(squash(tag))
+  }
+  for (let i = 0; i < [...typed].length; i++) await b.press('Backspace').catch(() => {})
+  await b.press('Escape').catch(() => {})
+  return false
+}
+
+/** 填正文和话题：粘贴后读回来逐字核对（不对换一种清空办法再来），再一个个加话题。返回正文对不对、哪些话题没加上 */
+async function fillBody(ctx: any, b: any, body: string, tags: string[], ed: string) {
+  let ok = false
+  for (const how of ['range', 'command'] as const) {
+    await pasteBody(ctx, b, body, how, ed)
+    const s = await bodyState(b, ed)
+    if (s && squash(s.text) === squash(body) && !s.topics.length) {
+      ok = true
+      break
+    }
+  }
+  if (!ok) return { body: false, missing: tags }
+  for (const t of tags) await addTopic(ctx, b, t, ed)
+  const s = await bodyState(b, ed)
+  return { body: !!s && squash(s.text) === squash(body), missing: tags.filter((t) => !s?.topics.includes(squash(t))) }
+}
+
+/** 可见范围下拉现在显示的文字（「公开可见」「仅自己可见」…）；认不出返回空 */
+const visibilityOf = (b: any) =>
+  b.eval(`([...document.querySelectorAll(${JSON.stringify(SEL.visibility)})].map(e => e.textContent.trim()).find(t => /^(公开可见|仅自己可见|仅互关好友可见)$/.test(t)) || '')`).then((v: any) => String(v ?? ''), () => '')
+
+/** 发布接口的响应：拿到笔记 id 的那次；都没拿到就给最后一次的原话。没响应返回 null */
+async function noteResult(b: any): Promise<{ id: string; message: string } | null> {
+  const rs = await b.responses(NOTE_API, { min: 0 }).catch(() => [])
+  let last: { id: string; message: string } | null = null
+  for (const r of rs ?? []) {
+    if (!r.json) continue
+    last = { id: String(r.json.data?.id ?? ''), message: String(r.json.msg ?? r.json.message ?? '') }
+    if (last.id) return last
+  }
+  return last
 }
 
 function recentPublished(ctx: any, channelId: string, sinceMs: number): Post[] {
@@ -294,28 +390,45 @@ function recentPublished(ctx: any, channelId: string, sinceMs: number): Post[] {
   return all.filter((p: any) => Date.parse(p.published_at || '') >= sinceMs)
 }
 
+/** 打开笔记管理页，读第一页笔记（接口 POSTED）；被带去登录了返回 null。b.responses 会带上这个页面之前记到的，只取这次打开以后的 */
+async function firstNotes(b: any): Promise<any[] | null> {
+  b.listen(POSTED)
+  const seen = (await b.responses(POSTED, { min: 0 }).catch(() => [])).length
+  await b.goto(NOTE_MANAGER)
+  if (/\/login/.test(b.url())) return null
+  const rs = await b.responses(POSTED, { min: seen + 1, timeout: 20000 }).catch(() => [])
+  return rs.slice(seen).flatMap((r: any) => r.json?.data?.notes ?? [])
+}
+
 /**
  * 发布一篇笔记到小红书。只发审核通过（approved / scheduled）的；发布前检查平台规格；发布频率只是建议，超了照样发。
- * private: true 发成「仅自己可见」（试发用）。
+ * private: true 发成「仅自己可见」（试发用）。上次发布中断过的，先去笔记管理里按标题找，避免重复发。
+ *
+ * 小红书的页面常改：脚本打开发布页、选对图文 / 视频入口传好素材（_xhs_upload.ts），表单交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面填，
+ * 脚本只当它的工具（做法见 docs/approach.md）：fill_body 填正文并读回核对、话题从候选里点选成话题块（尽量做的，没加上照发、带 warnings）；
+ * wait_upload 等视频传完；set_cover 换视频封面；publish 核对标题、正文、可见范围后才点「发布」，读接口拿笔记 id。
+ * AI 没做完或小红书不收，就把窗口调到前台交给用户（b.show）：用户改好点「发布」，这里等到发布结果照常记下；调不到前台的（后台定时任务）报错，写清楚卡在哪。
+ *
+ * dry_run：演练，走完上传、填写、核对，停在点「发布」之前，返回 { dry_run, need, warnings, snapshot }，不改这条的状态、不交给用户。
  */
-export async function publish(input: { post_id: string; private?: boolean; force_interval?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; private?: boolean; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这篇笔记：', 'No such note: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   const video = String(p.video ?? '').trim()
-  // 视频笔记上传、处理要好几分钟：认领 30 分钟内的不重复发
+  // 视频笔记上传、处理要好几分钟：认领 60 分钟内的不重复发
   const claimMs = (video ? 60 : 10) * 60_000
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < claimMs) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
-  if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
+  if (!input.dry_run && !['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = ctx.db.get('social_accounts', p.channel_id)
   if (!ch || ch.type !== 'xiaohongshu') throw new Error(L(ctx, '这篇笔记的渠道不是小红书账号', "This note's channel isn't a Xiaohongshu account"))
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social page first`))
   const tags: string[] = parse(p.tags, [])
-  let images: string[] = parse(p.images, [])
+  const images: string[] = parse(p.images, [])
   const bad = problems({ title: p.title, body: p.body, tags, images, video, video_cover: p.video_cover }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合小红书的规格：', "Doesn't meet Xiaohongshu's limits: ") + bad.join('; '))
 
-  if (!input.private) {
+  if (!input.private && !input.dry_run) {
     const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
     // 发布频率只是建议（_fields.ts 的 rate，页面上提示用户）：超了照样发，只记一笔日志
     if (day.length >= XHS.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 篇，上限 ${XHS.dailyMax} 篇，明天再发`, `"${ch.name}" already posted ${day.length} notes in 24 hours (limit ${XHS.dailyMax}); post again tomorrow`))
@@ -324,106 +437,282 @@ export async function publish(input: { post_id: string; private?: boolean; force
     if (wait > 0 && !input.force_interval) ctx.log(L(ctx, `「${ch.name}」上一篇刚发不久，两篇至少隔 ${XHS.minIntervalMinutes} 分钟，还要等 ${Math.ceil(wait / 60_000)} 分钟`, `"${ch.name}" posted recently; notes need at least ${XHS.minIntervalMinutes} minutes between them — wait ${Math.ceil(wait / 60_000)} more`))
   }
 
-  ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: new Date().toISOString(), error: null })
-  const fail = (msg: string) => {
-    ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: new Date().toISOString() })
-    return new Error(msg)
+  const interrupted = p.status === 'publishing' || p.status === 'failed'
+  if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  const done = (id: string, extra: object = {}) => {
+    ctx.db.update('social_posts', p.id, {
+      status: 'published', post_id: id || null, post_url: id ? `https://www.xiaohongshu.com/explore/${id}` : NOTE_MANAGER,
+      published_at: now(), updated_at: now(), error: null,
+    })
+    return { id: p.id, post_id: id, private: !!input.private, video: !!video, ...extra }
   }
+  /** 在笔记管理第一页里按标题找这篇，找到返回笔记 id */
+  const lookup = async (b: any) => {
+    const notes = await firstNotes(b)
+    if (!notes) throw expired(ctx, ch)
+    return String(notes.find((n: any) => n.display_title === p.title)?.id ?? '')
+  }
+  const body = String(p.body ?? '').trim()
+  /** 报错：没发出去，卡在哪；窗口在用户眼前的会留着（Annulo 在函数失败时不关看得见的窗口） */
+  const stuck = (why: string[], kept: boolean) =>
+    new Error(
+      L(ctx, `没发出去：${why.join('；')}。`, `Not published: ${why.join('; ')}. `) +
+        (kept
+          ? L(ctx, '小红书的窗口还开着，别的都已填好：在里面改好点「发布」就行，之后点「采集」会把它收进来。', "Xiaohongshu's window is still open with everything else filled in: fix it there and click 发布 (Publish); collecting stats afterwards brings it in.")
+          : L(ctx, '到页面上再点一次「发布」，卡住时会弹出小红书窗口交给你接着弄；也可以到小红书创作者中心手动发。', "Click Publish on the page again — if it gets stuck, the Xiaohongshu window opens for you to finish; or post it in Xiaohongshu's creator center."))
+    )
+
+  const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
+  const ED = '[data-annulo-body="1"]' // fill_body 给正文框打的标记：编号每看一次页面就重排，之后核对认它
+
   try {
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    // 上次发布中断过：先看平台上是不是已经有这篇了（可能其实发出去了），避免重复发
-    if (p.status === 'publishing' || p.status === 'failed') {
-      b.listen(POSTED)
-      await b.goto(NOTE_MANAGER)
-      const rs = await b.responses(POSTED, { min: 1, timeout: 20000 }).catch(() => [])
-      const hit = (rs[0]?.json?.data?.notes ?? []).find((n: any) => n.display_title === p.title)
-      if (hit) {
-        ctx.db.update('social_posts', p.id, { status: 'published', post_id: hit.id, post_url: `https://www.xiaohongshu.com/explore/${hit.id}`, published_at: new Date().toISOString(), error: null })
-        return { id: p.id, post_id: hit.id, already: true }
-      }
+    if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（小红书发布要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (Xiaohongshu publishing needs the browser assistant): Settings → About'))
+    if (interrupted && !input.dry_run) {
+      ctx.progress({ message: L(ctx, '上次没发完，先看看笔记管理里有没有这篇…', "Last attempt didn't finish; checking Note management for this one first…") })
+      const id = await lookup(b)
+      if (id) return done(id, { already: true })
     }
+    // 确定的部分脚本做：打开发布页、确认账号、传素材（图文、视频两个入口，选错会传错）
     ctx.progress({ message: L(ctx, '打开发布页…', 'Opening the publish page…') })
+    b.listen(USER_INFO)
     b.listen(NOTE_API)
     await b.goto(PUBLISH_URL)
-    if (/\/login/.test(b.url())) {
-      ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: new Date().toISOString() })
-      throw new Error(L(ctx, `「${ch.name}」的登录过期了，到「社媒」里点「重新登录」`, `The login for "${ch.name}" expired: click "Log in again" on the Social page`))
+    if (/\/login/.test(b.url())) throw expired(ctx, ch)
+    const who = (await b.responses(USER_INFO, { min: 1, timeout: 10000 }).catch(() => [])).find((r: any) => r.status === 200 && r.json?.data)?.json?.data
+    if (who?.userId && ch.platform_uid && String(who.userId) !== String(ch.platform_uid)) {
+      throw new Expired(L(ctx, `浏览器里登录的是另一个小红书账号（${who.userName ?? who.userId}），不是「${ch.name}」，请重新登录`, `The browser is logged in to another Xiaohongshu account (${who.userName ?? who.userId}), not "${ch.name}" — log in again`))
     }
     if (video) {
-      // 视频笔记：切到「上传视频」，传视频，等上传和处理完；配图、封面大字不用；自定义封面必须上传成功再继续
-      ctx.progress({ message: L(ctx, '切换到上传视频…', 'Switching to video upload…') })
       const sel = await selectUpload(ctx, b, 'video')
       ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
       await b.upload(sel, [video], { timeout: VIDEO_WAIT_MS })
-      await waitVideo(ctx, b)
-      await b.waitFor(SEL.title, { timeout: 60000 })
-      if (p.video_cover) {
-        // 「编辑封面」平时藏着，按文字找不到：这里把它交给 uploadVideoCover 直接点
-        const entry = (await b.exists(SEL.coverEdit).catch(() => false)) ? SEL.coverEdit : ''
-        await uploadVideoCover(ctx, b, p.video_cover, '小红书', 60000, { entry })
-      }
     } else {
-      ctx.progress({ message: L(ctx, '切换到上传图文…', 'Switching to image upload…') })
       const sel = await selectUpload(ctx, b, 'image')
-      ctx.progress({ message: L(ctx, '上传图片…', 'Uploading images…') })
       const files = images.length ? images : [await textCard(ctx, p.cover_text || p.title)]
+      ctx.progress({ message: L(ctx, `上传 ${files.length} 张图片…`, `Uploading ${files.length} images…`) })
       await b.upload(sel, files)
       await b.waitFor(SEL.title, { timeout: 90000 })
       await waitImages(ctx, b, files.length)
     }
-    ctx.progress({ message: L(ctx, '填写标题和正文…', 'Filling in the title and text…') })
-    await b.type(SEL.title, p.title)
-    await b.type(SEL.body, p.body)
-    const topics: string[] = []
-    for (const t of tags) if (await addTopic(ctx, b, t)) topics.push(t)
-    if (input.private) {
-      await openVisibility(b, ctx)
-      await ctx.sleep(600)
-      await b.click({ text: '仅自己可见' })
-      const v = await b.eval(`document.querySelector('[data-shuttle-vis]').textContent.trim()`)
-      if (v !== '仅自己可见') throw new Error(L(ctx, '没能把可见范围改成仅自己可见，没有发布', "Couldn't set visibility to Only me, so nothing was published"))
+
+    const st = { body: false, missing: [] as string[], cover: !(video && p.video_cover), verified: false, res: null as Awaited<ReturnType<typeof noteResult>>, okPage: false, said: '' }
+    const bodyOk = async () => {
+      const s = await bodyState(b, ED)
+      return !!s && squash(s.text) === squash(body)
     }
-    ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
-    await b.click({ text: SEL.publish })
-    const rs = await b.responses(NOTE_API, { min: 1, timeout: 60000 }).catch(() => [])
-    const r = rs.find((x: any) => x.json)
-    const noteId = r?.json?.data?.id
-    if (!noteId) {
-      const msg = r?.json?.msg || (await b.text()).match(/[^\n]*(失败|违规|频繁|验证)[^\n]*/)?.[0] || L(ctx, '点了发布，但没等到小红书的发布结果', "Clicked Publish, but Xiaohongshu's result never came back")
-      throw new Error(L(ctx, '发布失败：', 'Publish failed: ') + msg)
+    /** 等发布结果：接口拿到笔记 id、页面显示发布成功；要验证、被拒都把原话交给 AI */
+    const result = async (ms: number): Promise<string | { finish: string }> => {
+      for (const end = Date.now() + ms; Date.now() < end; ) {
+        await ctx.sleep(1500)
+        st.res = await noteResult(b)
+        if (st.res?.id) return { finish: L(ctx, '发出去了 ', 'Published ') + st.res.id }
+        if (st.res?.message) return `Xiaohongshu refused: ${st.res.message}. Fix what it says if you can, then call publish again; otherwise fail with this reason.`
+        const text = String(await b.eval(`document.body.innerText`).catch(() => ''))
+        if (TEXT.success.test(text)) {
+          st.okPage = true
+          await ctx.sleep(1500)
+          st.res = await noteResult(b)
+          return { finish: L(ctx, '发出去了', 'Published') }
+        }
+        if (TEXT.verify.test(text)) return 'Xiaohongshu wants a verification (captcha / slider / code): use ask_user, then call check_result.'
+      }
+      const said = String(await b.eval(`document.body.innerText`).catch(() => '')).match(/[^\n]*(失败|违规|频繁|验证|请)[^\n]*/)?.[0]?.trim() ?? ''
+      st.said = said
+      return `Clicked 发布, but no result yet${said ? ` (page says: ${said})` : ''}. A dialog or missing field may be on the page: handle it, then call publish again or check_result.`
     }
-    ctx.db.update('social_posts', p.id, {
-      status: 'published', post_id: noteId, post_url: `https://www.xiaohongshu.com/explore/${noteId}`,
-      published_at: new Date().toISOString(), updated_at: new Date().toISOString(), error: null,
-    })
-    return { id: p.id, post_id: noteId, topics, private: !!input.private, video: !!video }
+    const id = (d: string) => ({ type: 'integer', description: d })
+    const tools: Record<string, any> = {
+      fill_body: {
+        description: `args { id }: put this note's body${tags.length ? ' and hashtags' : ''} into the body editor with that element number: clears it, pastes the text, checks it reads back exactly${tags.length ? ', then adds each hashtag by typing # and picking the exact suggestion (that is what makes it a real topic)' : ''}. Use this instead of typing; calling it again replaces it.`,
+        params: { type: 'object', properties: { id: id('element number of the body editor (contenteditable)') }, required: ['id'] },
+        run: async (a: any) => {
+          const marked = await b.eval(`(() => { document.querySelectorAll('[data-annulo-body]').forEach(e => e.removeAttribute('data-annulo-body')); const e = document.querySelector(${JSON.stringify(at(a.id))}); if (!e || !e.isContentEditable) return false; e.setAttribute('data-annulo-body', '1'); return true })()`).catch(() => false)
+          if (!marked) return `Element ${a.id} is not an editable area; pass the body editor's number.`
+          const d = await fillBody(ctx, b, body, tags, ED)
+          st.body = d.body
+          st.missing = d.missing
+          if (!d.body) return 'The body did not read back exactly. Call fill_body again, or fail.'
+          return d.missing.length ? `Body filled; these hashtags had no exact suggestion and were left out: ${d.missing.join(', ')} (that's fine).` : 'Body and hashtags filled and checked.'
+        },
+      },
+      publish: {
+        description: 'args { title_id }: the only way to publish (the 发布 button is not clickable for you). The script checks the title is exactly right, the body was filled with fill_body and still checks out, the cover and the visibility are right; then clicks 发布 and waits for the result.',
+        params: { type: 'object', properties: { title_id: id('element number of the title input') }, required: ['title_id'] },
+        run: async (a: any) => {
+          const issues: string[] = []
+          const title = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.title_id))}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).then((v: any) => String(v ?? ''), () => '')
+          if (squash(title) !== squash(p!.title)) issues.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
+          if (!st.body) issues.push('the body has not been filled with fill_body yet')
+          else if (!(await bodyOk())) issues.push('the body no longer reads back exactly; call fill_body again')
+          if (!st.cover) issues.push('the cover is not set yet; call set_cover')
+          const vis = await visibilityOf(b)
+          if (input.private && vis !== '仅自己可见') issues.push(`visibility (可见范围) shows "${vis || '?'}", it must be 仅自己可见`)
+          if (!input.private && vis && vis !== '公开可见') issues.push(`visibility (可见范围) shows "${vis}", it must be 公开可见`)
+          if (issues.length) return `Not published: ${issues.join('; ')}.`
+          st.verified = true
+          if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点发布', 'Dry run: everything checked, not published') }
+          await b.click({ text: TEXT.submit })
+          return result(60000)
+        },
+      },
+      check_result: { description: 'Wait for the publish result again (after a verification or a dialog).', params: { type: 'object', properties: {} }, run: async () => result(60000) },
+    }
+    if (video) {
+      tools.wait_upload = {
+        description: 'Wait until the video is uploaded and processed (can take many minutes). Call it before publishing; you can fill the form first.',
+        params: { type: 'object', properties: {} },
+        run: async () => waitVideo(ctx, b),
+      }
+    }
+    if (video && p.video_cover) {
+      tools.set_cover = {
+        description: "Set this note's own cover image. Call it after wait_upload; it opens the cover editor, uploads the image and confirms.",
+        params: { type: 'object', properties: {} },
+        run: async () => {
+          await b.press('Escape').catch(() => {}) // 话题候选还开着会挡住封面区
+          try {
+            // 「编辑封面」平时藏着，按文字找不到：直接交给 uploadVideoCover 点
+            const entry = (await b.exists(SEL.coverEdit).catch(() => false)) ? SEL.coverEdit : ''
+            await uploadVideoCover(ctx, b, p!.video_cover!, '小红书', 60000, { entry })
+            st.cover = true
+            return 'Cover set.'
+          } catch (e: any) {
+            return `The cover was not set: ${e?.message ?? e}`
+          }
+        },
+      }
+    }
+    const task = [
+      `在小红书创作者中心的发布页发一篇${video ? '视频' : '图文'}笔记（${video ? '视频' : '图片'}已经传上去了，页面已登录）。`,
+      `- 标题：「${p.title}」（原样填，不改）。`,
+      `- 正文${tags.length ? '和话题' : ''}：用 fill_body 工具填（传正文编辑框的编号），不要自己打字。`,
+      video ? `- 视频还在传时可以先填表；发布前调用 wait_upload 等它传完。` : '',
+      video && p.video_cover ? `- 封面：用 set_cover 工具换成这篇的封面。` : '',
+      input.private ? `- 可见范围：改成「仅自己可见」（试发）。` : `- 可见范围：保持「公开可见」。`,
+      `- 别的选填项（地点、合集、声明、群聊）不用动。`,
+      `- 最后用 publish 工具发布（传标题框的编号）；「发布」按钮你点不到。要验证（滑块、验证码）就用 ask_user 交给用户，之后调用 check_result。`,
+    ].filter(Boolean).join('\n')
+    const r = await b.agent(task, { tools, avoid: [TEXT.submit], notes: 'xhs.publish', maxSteps: 30 })
+    const warnings = st.missing.length ? [L(ctx, `这些话题没加上（小红书的候选里没有一模一样的）：${st.missing.join('、')}`, `These hashtags weren't added (no exact match in Xiaohongshu's suggestions): ${st.missing.join(', ')}`)] : []
+    const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
+    if (input.dry_run) {
+      const snap = await b.snapshot?.({ label: 'dry-run' }).catch(() => null)
+      await b.close().catch(() => {})
+      return { dry_run: true, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到发布那一步', "The browser assistant didn't reach the publish step")], warnings, snapshot: snap?.dir, ...extra }
+    }
+    const published = async () => {
+      if (st.res?.id) return done(st.res.id, extra)
+      // 发上了但没拿到笔记 id：去笔记管理里按标题找
+      const found = await lookup(b).catch(() => '')
+      return found ? done(found, extra) : done('', { unverified: true, ...extra })
+    }
+    if (st.res?.id || st.okPage) return published()
+    // AI 没做完或者小红书不收：把窗口交给用户，等他点发布（最多 15 分钟）
+    const why = [r.reason || st.said || st.res?.message || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
+    const shown = typeof b.show === 'function' && (await b.show().then(() => true, () => false))
+    if (!shown) throw stuck(why, false)
+    ctx.progress({ message: L(ctx, `要你在弹出的小红书窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Xiaohongshu window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+    for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+      await ctx.sleep(2000)
+      st.res = await noteResult(b)
+      if (st.res?.id) return published()
+      if (TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) return published()
+    }
+    throw stuck([...why, L(ctx, '15 分钟内没等到你发布', 'No publish within 15 minutes')], true)
   } catch (e: any) {
-    throw fail(e?.message ?? String(e))
+    const msg = e?.message ?? String(e)
+    if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
+    const err: any = new Error(msg)
+    if (e instanceof Expired || e?.expired) err.expired = true
+    if (e?.snapshot) err.snapshot = e.snapshot
+    throw err
   }
 }
 
-/** 从小红书删除一篇已发布的笔记（笔记管理页上的删除），表里记成 removed 并清掉 post_id */
-export async function remove(input: { post_id?: string; note_id?: string; channel_id?: string }, ctx: any) {
+/**
+ * 从小红书删除一篇已发布的笔记（不可恢复）：交给浏览器助手（b.agent）在笔记管理页做，open_delete 工具按笔记 id 点这篇卡片上的删除图标；
+ * 确认框里的确认按钮它点不到，只能调 confirm_delete：核对点的是这篇的删除、按钮在确认框里才点，点完核对这篇没了。
+ * 碰到验证码它交给用户。dry_run：演练，走到确认框为止，confirm_delete 核对完不点。
+ */
+export async function remove(input: { post_id?: string; note_id?: string; channel_id?: string; dry_run?: boolean }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const noteId = p?.post_id || input?.note_id
   const ch = ctx.db.get('social_accounts', p?.channel_id || input?.channel_id)
   if (!noteId || !ch?.browser_profile) throw new Error(L(ctx, '要给出笔记（post_id），或者 note_id + channel_id', 'Give a note (post_id), or note_id + channel_id'))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
-  await b.goto(NOTE_MANAGER)
-  await b.waitFor(SEL.noteCard, { timeout: 20000 })
-  const found = await b.eval(`(() => { const c = [...document.querySelectorAll('${SEL.noteCard}')].find(e => (e.getAttribute('data-impression') || '').includes(${JSON.stringify(noteId)})); if (!c) return false; c.querySelector('${SEL.deleteBtn}').setAttribute('data-shuttle-del', '1'); return true })()`)
-  if (!found) throw new Error(L(ctx, '笔记管理里没找到这篇笔记（可能已经删了）：', "Couldn't find this note in Note management (it may be deleted): ") + noteId)
-  await b.click('[data-shuttle-del="1"]')
-  // 确认框：「删除笔记 / 删除后将无法恢复…」，底部「取消 / 确定」
-  await b.waitFor(SEL.confirmModal, { timeout: 10000 })
-  const marked = await b.eval(`(() => { const m = document.querySelector('${SEL.confirmModal}'); if (!m || !m.innerText.includes('删除')) return false; const ok = [...m.querySelectorAll('button')].find(x => x.innerText.trim() === '确定'); if (!ok) return false; ok.setAttribute('data-shuttle-ok', '1'); return true })()`)
-  if (!marked) throw new Error(L(ctx, '没出现删除确认框，小红书的页面可能改了', "The delete confirmation didn't appear — Xiaohongshu's page may have changed"))
-  await b.click('[data-shuttle-ok="1"]')
-  await ctx.sleep(2500)
-  const still = await b.eval(`[...document.querySelectorAll('${SEL.noteCard}')].some(e => (e.getAttribute('data-impression') || '').includes(${JSON.stringify(noteId)}))`)
-  if (still) throw new Error(L(ctx, '点了删除确认，但笔记还在笔记管理里，稍后刷新看看', 'Confirmed delete, but the note is still in Note management — refresh later'))
-  if (p) ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-  return { removed: noteId }
+  if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（小红书删除要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (deleting on Xiaohongshu needs the browser assistant): Settings → About'))
+  const notes = await firstNotes(b)
+  if (!notes) throw expired(ctx, ch)
+  const n = notes.find((x: any) => x.id === noteId)
+  const cardHas = () => b.eval(`[...document.querySelectorAll(${JSON.stringify(SEL.noteCard)})].some(e => (e.getAttribute('data-impression') || '').includes(${JSON.stringify(noteId)}))`).catch(() => false)
+  await b.waitFor(SEL.noteCard, { timeout: 20000 }).catch(() => {})
+  if (!n && !(await cardHas())) throw new Error(L(ctx, '笔记管理里没找到这篇笔记（可能已经删了）：', "Couldn't find this note in Note management (it may be deleted): ") + noteId)
+  // 记下最后点的是哪张卡片（卡片的 data-impression 带笔记 id）：确认删除前核对点的是这一篇
+  const watch = () => b.eval(`(() => { if (window.__annuloCardWatch) return; window.__annuloCardWatch = true; document.addEventListener('click', e => { const c = e.target?.closest?.('[data-impression]'); if (c && c.closest(${JSON.stringify(SEL.noteCard)})) window.__annuloLastCard = c.closest(${JSON.stringify(SEL.noteCard)}).getAttribute('data-impression') || '' }, true) })()`).catch(() => {})
+  await watch()
+  const gone = async () => !(await cardHas())
+  const removed = () => p && ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
+  const at = (x: any) => `[data-annulo-act="${Number(x)}"]`
+  const tools = {
+    open_delete: {
+      description: "Open the delete confirmation for this note: finds this note's card by its id and clicks the card's delete icon (the icon has no text, so you can't see it). If it says the card isn't on the page, search or scroll to it first, then call it again.",
+      params: { type: 'object', properties: {} },
+      run: async () => {
+        const ok = await b.eval(`(() => {
+          document.querySelectorAll('[data-annulo-del]').forEach(e => e.removeAttribute('data-annulo-del'))
+          const c = [...document.querySelectorAll(${JSON.stringify(SEL.noteCard)})].find(e => (e.getAttribute('data-impression') || '').includes(${JSON.stringify(noteId)}))
+          const d = c?.querySelector(${JSON.stringify(SEL.deleteBtn)})
+          if (!d) return c ? 'nobutton' : 'nocard'
+          d.setAttribute('data-annulo-del', '1')
+          d.scrollIntoView({ block: 'center' })
+          return 'ok'
+        })()`).catch(() => 'nocard')
+        if (ok === 'nocard') return "This note's card is not on the page."
+        if (ok === 'nobutton') return "Found this note's card but no delete icon on it; look for 删除 on the card yourself (hover it first)."
+        await b.click('[data-annulo-del="1"]').catch(() => b.eval(`document.querySelector('[data-annulo-del="1"]').click()`))
+        await ctx.sleep(800)
+        return 'Clicked the delete icon; the confirmation dialog should be open now. Use confirm_delete with its confirm button.'
+      },
+    },
+    confirm_delete: {
+      description: `args { button_id }: the only way to confirm the deletion. Checks the element is a confirm button (${TEXT.confirm.join(' / ')}) inside the confirmation dialog and that the delete you opened is this note's, clicks it, and checks the note is gone.`,
+      params: { type: 'object', properties: { button_id: { type: 'integer', description: 'element number of the confirm button in the dialog' } }, required: ['button_id'] },
+      run: async (a: any) => {
+        const el = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); if (!e) return null; return { text: (e.innerText || '').replace(/\\s+/g, ''), dialog: !!e.closest('.d-modal,[role="dialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popconfirm" i],[class*="popover" i]'), card: window.__annuloLastCard ?? null } })()`).catch(() => null)
+        if (!el) return `No element ${a.button_id}.`
+        if (!TEXT.confirm.includes(el.text)) return `Element ${a.button_id} says "${el.text}", not a confirm button (${TEXT.confirm.join(' / ')}).`
+        if (!el.dialog) return `Element ${a.button_id} is not inside the confirmation dialog; open the delete confirmation first.`
+        if (el.card != null && !String(el.card).includes(noteId)) return 'The delete you opened belongs to a different note: cancel this dialog and use the 删除 on the right note\'s card.'
+        if (input.dry_run) return { finish: L(ctx, '演练：确认框和按钮都对，没点', 'Dry run: the dialog and button check out, not clicked') }
+        await b.click(at(a.button_id)).catch(() => b.eval(`document.querySelector(${JSON.stringify(at(a.button_id))}).click()`))
+        for (let i = 0; i < 6; i++) {
+          await ctx.sleep(1500)
+          if (await gone()) return { finish: L(ctx, `删掉了 ${noteId}`, `Deleted ${noteId}`) }
+        }
+        return 'Clicked, but the note is still listed. A verification may be showing (ask_user), or another confirmation.'
+      },
+    },
+  }
+  const title = n?.display_title || p?.title || ''
+  const task = [
+    `在小红书创作者中心的笔记管理页删掉这一篇笔记（不可恢复，只删这一篇，别的一篇都不要动）：`,
+    `- 标题「${title}」${n?.time ? `，发布于 ${n.time}` : ''}。`,
+    `- 用 open_delete 工具打开这一篇的删除确认框（卡片上的删除是个没有文字的图标，你看不到）；弹出确认框后用 confirm_delete 工具点确认按钮（传按钮的编号）。碰到验证码用 ask_user。`,
+  ].join('\n')
+  const r = await b.agent(task, { tools, avoid: TEXT.confirm, notes: 'xhs.remove', maxSteps: 20 })
+  if (input.dry_run) {
+    const snap = await b.snapshot?.({ label: 'remove-dry-run' }).catch(() => null)
+    return { dry_run: true, ok: r.ok, reason: r.reason || r.summary, snapshot: snap?.dir, timing: r.timing?.summary }
+  }
+  // 重新打开笔记管理再核对一次（页面上的卡片可能只是没刷新）
+  const after = await firstNotes(b)
+  await b.waitFor(SEL.noteCard, { timeout: 10000 }).catch(() => {})
+  if (!after || after.some((x: any) => x.id === noteId) || !(await gone())) {
+    throw new Error(L(ctx, `没删掉：${r.reason || '笔记还在笔记管理里'}。到小红书创作者中心看一眼`, `Not deleted: ${r.reason || 'the note is still in Note management'}. Check Xiaohongshu's creator center`))
+  }
+  removed()
+  return { removed: noteId, verified: true }
 }
 
 /**

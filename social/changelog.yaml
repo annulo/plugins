@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.15
+  zh: "小红书发布、删除也改由浏览器助手看着页面做：正文读回核对、话题点选成话题块，卡住时把填好的窗口交给你。要新版 Annulo。"
+  en: "Xiaohongshu publishing and deleting are now done by the browser assistant looking at the page: the body is read back and checked, hashtags are picked as real topics, and when stuck the filled-in window is handed to you. Needs a newer Annulo."
 - version: 0.8.14
   zh: "抖音发布、删除也改由浏览器助手看着页面做：简介读回核对、话题点选成话题块，卡住时把填好的窗口交给你。要新版 Annulo。"
   en: "Douyin publishing and deleting are now done by the browser assistant looking at the page: the description is read back and checked, hashtags are picked as real topics, and when stuck the filled-in window is handed to you. Needs a newer Annulo."

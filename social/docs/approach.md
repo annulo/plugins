@@ -14,7 +14,7 @@
 | 收不回来的那一下：发布、确认删除 | 脚本的工具，核对过才点 | AI 点不到（`avoid`），出错的代价太大 |
 | 判断发没发出去、删没删掉 | 脚本读平台接口 | 页面上的字不可靠 |
 
-插件写的是「要做成什么样 + 验收标准」（任务说明、工具、要传的文件、不许点的按钮），不写每一步怎么点。B站、知乎、抖音已经这么做了（`local/bilibili.ts`、`local/zhihu.ts`、`local/douyin.ts` 的 `publish`、`remove`）。
+插件写的是「要做成什么样 + 验收标准」（任务说明、工具、要传的文件、不许点的按钮），不写每一步怎么点。B站、知乎、抖音、小红书已经这么做了（`local/bilibili.ts`、`local/zhihu.ts`、`local/douyin.ts`、`local/xhs.ts` 的 `publish`、`remove`）。
 
 ## 二、几条原则
 
@@ -69,10 +69,12 @@
 | 删除时要拖滑块 | 平台风控 | AI 交给人（`ask_user`） |
 | 抖音删作品兜圈：去筛日期、搜索，认不出是哪一条 | 卡片标题是纯文字，AI 只看到两个一样的「删除作品」 | Annulo：看页面时列出列表的行（行里的标题、日期），元素标 `row=<n>` |
 | 抖音发布按钮核对永远不过 | `<button>.value` 是空串，`??` 不会退到 innerText | 插件：按钮读 innerText（测试抓到的） |
+| 小红书「发布」AI 看不到 | 按钮在 closed shadow root 里（`<xhs-publish-btn>`） | 插件：publish 工具不要按钮编号，核对后按文字点 |
+| 小红书删除时 AI 原地打转 | 卡片上的删除是没有文字的 `<span>` 图标，不在元素清单里 | 插件：`open_delete` 工具按笔记 id 点；确认仍经 `confirm_delete` |
 
 ## 六、接下来
 
-- 小红书改成 `b.agent`（话题点选、富文本核对做成工具）。X、LinkedIn、Facebook、Instagram、YouTube 也按需迁。
+- X、LinkedIn、Facebook、Instagram、YouTube 按需迁到 `b.agent`。
 - 采集读平台接口，本来就稳，不用改。
 - Claude Code 这类本机 agent 当浏览器助手时，改成把整件事交给它、浏览器动作作为 MCP 工具（现在退回文字 JSON）。
 - 模型并行：等上传这类慢工具在跑时，同时问模型下一步、写笔记。

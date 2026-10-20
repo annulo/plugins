@@ -8,7 +8,7 @@ Select the `.creator-tab` with the exact label whose center is hit-testable and 
 
 The editor appears while image uploads are still in progress. Wait for all expected image previews and for their upload masks to disappear before filling the note. Dismiss only the recognized image-editing feature guide (`.feature-guide`); upload errors and timeouts stop before Publish.
 
-To validate against a logged-in account, prepare an approved post through image upload and title/body entry while stopping before the final Publish action.
+Since October 2026 the form after the upload is filled by the browser assistant (`b.agent`, see `approach.md`); the upload step above stays in the script. To validate against a logged-in account, run `xhs.publish({ post_id, dry_run: true })`, which stops before the final Publish action.
 
 Browser regression tests require `esbuild` on PATH and the `playwright` Node package. Run `node --test tests/xhs-upload.test.mjs`; set `CHROME_PATH` to use an installed Chrome instead of Playwright's Chromium.
 
