@@ -252,7 +252,7 @@ async function localPhoto(ctx: any, source: string, token: string, endpoint: str
   const res = await fetch(source)
   if (!res.ok) throw new Error(L(ctx, '本机图片无法读取，请重新上传图片', 'The local image cannot be read; upload it again'))
   const bytes = new Uint8Array(await res.arrayBuffer())
-  if (res.truncated || !bytes.length || bytes.length > FB.apiPhotoMaxMB * 1024 * 1024) throw new Error(L(ctx, `Facebook API 图片须为非空文件，单张不超过 ${FB.apiPhotoMaxMB} MB`, `Facebook API images must be nonempty and at most ${FB.apiPhotoMaxMB} MB each`))
+  if ((res as Response & { truncated?: boolean }).truncated || !bytes.length || bytes.length > FB.apiPhotoMaxMB * 1024 * 1024) throw new Error(L(ctx, `Facebook API 图片须为非空文件，单张不超过 ${FB.apiPhotoMaxMB} MB`, `Facebook API images must be nonempty and at most ${FB.apiPhotoMaxMB} MB each`))
   const contentType = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
   if (!PHOTO_TYPES.includes(contentType)) throw new Error(L(ctx, 'Facebook API 图片支持 JPEG、PNG、GIF、BMP、TIFF，请转换格式后重试', 'Facebook API images support JPEG, PNG, GIF, BMP and TIFF; convert this image and retry'))
   if (!ctx.exec) throw new Error(L(ctx, '本机图片上传需要支持 ctx.exec 的 Annulo 版本', 'Local image uploads require an Annulo version with ctx.exec'))

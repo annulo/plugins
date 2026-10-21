@@ -589,7 +589,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
    * 经验记在笔记 notes/bilibili.publish.md（插件自带）和 user/notes/social/bilibili.publish.md（这个项目学到的），不做机械重放。
    * 投稿只能经 submit 工具：它先逐字核对标题、简介，按钮文字对得上才点。
    */
-  async function agentAttempt(b: any, warnings: string[], handOver: (why: string[]) => Promise<Outcome>): Promise<Outcome | { dry_run: true; need: string[]; warnings: string[] }> {
+  async function agentAttempt(b: any, warnings: string[], handOver: (why: string[]) => Promise<Outcome>): Promise<Outcome | { dry_run: true; timing?: string; need: string[]; warnings: string[] }> {
     const st = { verified: false, res: null as Awaited<ReturnType<typeof addResult>>, okText: false, problems: [] as string[] }
     const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
     /** 等投稿结果：接口响应或页面上的「投稿成功」，最多 ms 毫秒 */
@@ -670,7 +670,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   }
 
   /** 在一个浏览器窗口里走一遍：上传、填写、核对、点投稿、等结果；卡住时交给用户 */
-  async function attempt(b: any): Promise<Outcome | { dry_run: true; need: string[]; warnings: string[] }> {
+  async function attempt(b: any): Promise<Outcome | { dry_run: true; timing?: string; need: string[]; warnings: string[] }> {
     let shown = false
     const warnings: string[] = []
     /** 交给用户：把窗口调到前台，告诉他卡在哪，等他点「立即投稿」（最多 15 分钟）；等到结果照常记下，等不到报错、窗口留着 */

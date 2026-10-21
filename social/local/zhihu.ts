@@ -62,6 +62,7 @@ const API = {
   me: '/api/v4/me?include=follower_count,articles_count', // id、url_token、name、avatar_url、follower_count；没登录是 401
   // 创作中心的文章列表：data[].data { id, title, created_time（秒） } + data[].reaction { read_count, vote_up_count, like_count, comment_count, collect_count }
   articles: (offset: number) => `/api/v4/creators/creations/v2/article?start=0&end=0&limit=${PAGE}&offset=${offset}&need_co_creation=1&sort_type=created`,
+  publish: '/api/v4/content/publish', // 写文章页点「发布」调的接口；被拒时回 { code, toast_message }
 }
 const SEL = {
   editor: '.public-DraftEditor-content',

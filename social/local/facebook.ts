@@ -667,7 +667,7 @@ function postsOf(json: any, into: Map<string, FbPost>) {
     }
     return p
   }
-  const max = (a: number, b: any) => (typeof b === 'number' && b > a ? b : a)
+  const max = (a = 0, b: any) => (typeof b === 'number' && b > a ? b : a)
   const walk = (o: any, cur: FbPost | null, depth: number) => {
     if (!o || typeof o !== 'object' || depth > 80) return
     if (Array.isArray(o)) {
