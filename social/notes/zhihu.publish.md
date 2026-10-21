@@ -3,8 +3,8 @@
 插件自带的初始笔记：给浏览器助手（b.agent）看的经验。页面以当时看到的为准；这个项目新学到的记在 user/notes/social/zhihu.publish.md。
 
 ## 表单
-- 标题：最上面的大输入框（textarea，提示「请输入标题」），最多 100 字。
-- 正文：标题下面的编辑区（Draft.js，contenteditable），用 fill_body 工具填，不要自己打字。
+- 标题：最上面的大输入框（textarea，提示「请输入标题」），最多 100 字。用 fill 放 title。
+- 正文：标题下面的编辑区（Draft.js，contenteditable），用 fill 放 body，不要自己打字。
 - 打字后自动存草稿，地址变成 /p/<id>/edit。
 - 话题：在页面底部「发布设置」里（默认收起），有了草稿才出现「添加话题」；用 add_topics 工具加。
 - 「发布设置」里还有封面、创作声明，没要求就不用动。

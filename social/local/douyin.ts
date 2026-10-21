@@ -25,8 +25,10 @@ export { problems as draftProblems } from './_douyin_spec'
 // social_accounts.platform_uid 存 sec_uid（主页地址 https://www.douyin.com/user/<sec_uid> 要用它），handle 是抖音号。
 // 账号和作品数据都读创作者中心自己的 JSON 接口（在登录着的页面里 fetch，带 cookie），不解析页面文字。
 // 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-19，做法见 docs/approach.md）：
-//   发布：脚本打开上传页、选对图文 / 视频入口传素材（_douyin_upload.ts）；AI 填标题、处理弹窗；fill_description 填简介（Slate：粘贴后读回核对）、
-//         话题输「#话题」后从候选里点选成话题块（SEL.topicOption / SEL.mention）；wait_upload、set_cover；publish 核对后点「发布」，监听 API.create 拿作品 id；
+//   发布：脚本打开上传页、选对图文 / 视频入口传素材（_douyin_upload.ts）；AI 处理弹窗，用 fill 把标题、简介放进框（content，能力版本 54，原文不经过 AI）：
+//         简介是这里自己填（Slate：粘贴后读回核对），话题输「#话题」后从候选里点选成话题块（SEL.topicOption / SEL.mention）；
+//         视频是 prefilled（脚本传的），AI 用 wait 等它传完；自己的封面是 content.cover，fill 时打开封面编辑器上传；
+//         publish 用 b.filled 核对后点「发布」，监听 API.create 拿作品 id；
 //   删除：AI 在作品管理页找到这一条、点「删除作品」；confirm_delete 核对确认框里的按钮才点，读作品列表接口（API.works / worksOld）确认没了。
 // 页面的规律记在笔记里（notes/douyin.publish.md、notes/douyin.remove.md，项目学到的在 user/notes/social/）。
 
@@ -528,9 +530,10 @@ async function createResult(b: any): Promise<{ code: number; message: string; id
  * 上次发布中断过的，先去作品列表里找有没有同标题的作品（含审核中），避免重复发。
  * 发布后抖音要审核：拿到作品 id 就记成已发布，采集会继续更新它的数据。
  *
- * 抖音的页面常改、还有 A/B 测试：传完素材，表单交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面填，脚本只当它的工具（做法见 docs/approach.md）：
- *   fill_description 填简介并读回核对、话题从候选里点选成话题块（尽量做的，没加上照发、带 warnings）；wait_upload 等视频传完；set_cover 换自定义封面；
- *   publish 核对标题、简介、封面后才点「发布」，读接口拿作品 id；要验证本人、要封面、被拒都把原话交给 AI（验证由它交给用户）。
+ * 抖音的页面常改、还有 A/B 测试：传完素材，表单交给浏览器助手（b.agent，Annulo 能力版本 54）看着页面填，脚本只当它的工具（做法见 docs/approach.md）：
+ *   标题、简介放 content，AI 只能用 fill 按名字放进某个框，碰不到原文：标题由 Annulo 填并读回核对；简介由这里填（粘贴后读回核对、话题从候选里点选成话题块，
+ *   话题是尽量做的，没加上照发、带 warnings）；视频由脚本传（content.video 标 prefilled），AI 用 wait 等它传完；自己的封面是 content.cover，fill 时打开编辑器上传；
+ *   publish 用 b.filled 核对标题、简介，再核对封面和按钮才点「发布」，读接口拿作品 id；要验证本人、要封面、被拒都把原话交给 AI（验证由它交给用户）。
  * AI 没做完或抖音不收，就把窗口调到前台交给用户（b.show）：别的都已填好，用户改好点「发布」，这里等到发布结果照常记下。
  * 调不到前台的（后台定时任务）报错，写清楚卡在哪。
  *
@@ -585,7 +588,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     )
 
   const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
-  const ED = '[data-annulo-desc="1"]' // fill_description 给简介框打的标记：编号每看一次页面就重排，之后核对认它
 
   try {
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
@@ -606,12 +608,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     })
     if (!video) await waitImages(ctx, b, images.length)
 
-    const st = { desc: false, missing: [] as string[], cover: !(video && p.video_cover), verified: false, res: null as Awaited<ReturnType<typeof createResult>>, okPage: false, said: '' }
-    const descOk = async () => {
-      if (!body && !tags.length) return true
-      const s = await descState(b, ED)
-      return !!s && squash(s.text) === squash(body)
-    }
+    const st = { missing: [] as string[], cover: !(video && p.video_cover), verified: false, res: null as Awaited<ReturnType<typeof createResult>>, okPage: false, said: '' }
+    const hasDesc = !!(body || tags.length)
     /** 等发布结果：接口拿到作品 id、跳到作品管理页、页面显示发布成功；要验证、要封面、被拒都把原话交给 AI */
     const result = async (ms: number): Promise<string | { finish: string }> => {
       const seen = new Set<string>()
@@ -628,7 +626,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
           return { finish: L(ctx, '发出去了', 'Published') }
         }
         if (TEXT.verify.test(text)) return 'Douyin wants to verify it is the account owner (SMS code or scan): use ask_user, then call check_result.'
-        if (TEXT.needCover.test(text)) return p!.video_cover ? "Douyin didn't take the cover: call set_cover again, then publish." : 'Douyin requires a cover: open 选择封面, keep the default frame and confirm (完成), then call publish again.'
+        if (TEXT.needCover.test(text)) return p!.video_cover ? "Douyin didn't take the cover: fill content \"cover\" again, then publish." : 'Douyin requires a cover: open 选择封面, keep the default frame and confirm (完成), then call publish again.'
         for (const n of await notices(b)) seen.add(n)
       }
       const said = [...seen].slice(0, 3).join(' / ')
@@ -637,28 +635,15 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     const id = (d: string) => ({ type: 'integer', description: d })
     const tools: Record<string, any> = {
-      fill_description: {
-        description: `args { id }: put this post's description${tags.length ? ' and hashtags' : ''} into the description editor with that element number: clears it, pastes the text, checks it reads back exactly${tags.length ? ', then adds each hashtag by typing # and picking the exact suggestion (that is what makes it a real topic)' : ''}. Use this instead of typing; calling it again replaces it.`,
-        params: { type: 'object', properties: { id: id('element number of the description editor (contenteditable)') }, required: ['id'] },
-        run: async (a: any) => {
-          const marked = await b.eval(`(() => { document.querySelectorAll('[data-annulo-desc]').forEach(e => e.removeAttribute('data-annulo-desc')); const e = document.querySelector(${JSON.stringify(at(a.id))}); if (!e || !e.isContentEditable) return false; e.setAttribute('data-annulo-desc', '1'); return true })()`).catch(() => false)
-          if (!marked) return `Element ${a.id} is not an editable area; pass the description editor's number.`
-          const d = await fillDesc(ctx, b, body, tags, ED)
-          st.desc = d.body
-          st.missing = d.missing
-          if (!d.body) return 'The description did not read back exactly. Call fill_description again, or fail.'
-          return d.missing.length ? `Description filled; these hashtags had no exact suggestion and were left out: ${d.missing.join(', ')} (that's fine).` : 'Description and hashtags filled and checked.'
-        },
-      },
       publish: {
-        description: 'args { title_id, button_id }: the only way to publish. The script checks the title is exactly right, the description was filled with fill_description and still checks out, the cover is set when required, and the button says 发布; then clicks it and waits for the result.',
-        params: { type: 'object', properties: { title_id: id('element number of the title input'), button_id: id('element number of the 发布 button') }, required: ['title_id', 'button_id'] },
+        description: 'args { button_id }: the only way to publish. The script checks the title and description were put in with fill and still read back exactly, the video finished uploading, the cover is set when required, and the button says 发布; then clicks it and waits for the result.',
+        params: { type: 'object', properties: { button_id: id('element number of the 发布 button') }, required: ['button_id'] },
         run: async (a: any) => {
           const issues: string[] = []
-          if (squash(await valueOf(b, at(a.title_id))) !== squash(p!.title)) issues.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
-          if ((body || tags.length) && !st.desc) issues.push('the description has not been filled with fill_description yet')
-          else if (!(await descOk())) issues.push('the description no longer reads back exactly; call fill_description again')
-          if (!st.cover) issues.push('the cover is not set yet; call set_cover')
+          if (!(await b.filled('title'))) issues.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
+          if (hasDesc && !(await b.filled('description'))) issues.push('the description has not been put in with fill (content "description"), or it no longer reads back exactly')
+          if (video && !(await b.filled('video'))) issues.push('the video is still uploading; wait with content "video" first')
+          if (!st.cover) issues.push('the cover is not set yet; fill content "cover" into the 选择封面 under 竖封面3:4')
           const label = squash(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
           if (label !== TEXT.submit[0]) issues.push(`element ${a.button_id} is not the 发布 button`)
           if (issues.length) return `Not published: ${issues.join('; ')}.`
@@ -670,52 +655,60 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       },
       check_result: { description: 'Wait for the publish result again (after a verification or a dialog).', params: { type: 'object', properties: {} }, run: async () => result(60000) },
     }
-    if (video) {
-      tools.wait_upload = {
-        description: 'Wait until the video upload finishes (can take many minutes). Call it before publishing; you can fill the form first.',
-        params: { type: 'object', properties: {} },
-        run: async () => {
-          let told = 0
-          for (const end = Date.now() + 30 * 60_000; Date.now() < end; ) {
-            const t = String(await b.eval(`document.body.innerText`).catch(() => ''))
-            if (TEXT.uploadFailed.test(t)) return 'Douyin says the upload failed.'
-            if (TEXT.uploaded.test(t)) return 'Upload complete.'
-            if (Date.now() - told > 30000) {
-              told = Date.now()
-              const pct = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(t)
-              ctx.progress({ message: pct ? L(ctx, `上传中 ${pct[1]}%…`, `Uploading ${pct[1]}%…`) : L(ctx, '等视频上传完…', 'Waiting for the upload to finish…') })
-            }
-            await ctx.sleep(3000)
-          }
-          return 'Still uploading after 30 minutes.'
-        },
-      }
-    }
-    if (video && p.video_cover) {
-      tools.set_cover = {
-        description: "Set this post's own cover image (the vertical 3:4 cover). Call it after the upload finished and the description is done; it opens the cover editor, uploads the image and confirms.",
-        params: { type: 'object', properties: {} },
-        run: async () => {
-          await b.press('Escape').catch(() => {}) // 话题候选还开着会挡住封面区
-          try {
-            await uploadVideoCover(ctx, b, p!.video_cover!, '抖音', 60000, { entry: await markCoverEntry(b) })
-            st.cover = true
-            return 'Cover set.'
-          } catch (e: any) {
-            return `The cover was not set: ${e?.message ?? e}`
-          }
-        },
-      }
-    }
     const task = [
       `在抖音创作者中心的发布页发一条${video ? '视频' : '图文'}作品（${video ? '视频' : `${images.length} 张图片`}已经传上去了，页面已登录）。`,
-      `- 标题：「${p.title}」（原样填，不改）。`,
-      body || tags.length ? `- 简介${tags.length ? '和话题' : ''}：用 fill_description 工具填（传简介编辑框的编号），不要自己打字。` : `- 简介：没有。`,
-      video ? `- 视频还在传时可以先填表；发布前调用 wait_upload 等它传完。` : '',
-      video && p.video_cover ? `- 封面：用 set_cover 工具换成这条的封面。` : video ? `- 封面：不用管，用抖音默认的；抖音要求设置封面时，打开「选择封面」用默认的那一帧点「完成」。` : '',
-      `- 最后用 publish 工具发布（传标题框、「发布」按钮的编号）。要验证是本人（短信、扫码）就用 ask_user 交给用户，之后调用 check_result。`,
+      `- 标题：用 fill 把 title 放进标题框。`,
+      hasDesc ? `- 简介${tags.length ? '和话题' : ''}：用 fill 把 description 放进简介编辑框${tags.length ? '（话题由它一起加）' : ''}。` : `- 简介：没有。`,
+      video ? `- 视频（video）脚本已经开始传了：先填表，发布前用 wait 等 video 传完。` : '',
+      video && p.video_cover ? `- 封面：视频传完、简介填好后，用 fill 把 cover 放进「竖封面3:4」下面的「选择封面」（打开编辑器、上传、确认都由它做）。` : video ? `- 封面：不用管，用抖音默认的；抖音要求设置封面时，打开「选择封面」用默认的那一帧点「完成」。` : '',
+      `- 最后用 publish 工具发布（传「发布」按钮的编号）。要验证是本人（短信、扫码）就用 ask_user 交给用户，之后调用 check_result。`,
     ].filter(Boolean).join('\n')
-    const r = await b.agent(task, { tools, avoid: TEXT.submit, notes: 'douyin.publish', maxSteps: 30 })
+    // 标题、简介交给 Annulo 的 fill：AI 只选放进哪个框，原文不经过它。简介是 Slate 编辑器、话题要点选成话题块，自己填、自己核对
+    const content: Record<string, any> = { title: p.title }
+    // 视频：脚本选好入口传的（选错面板会传错），AI 只能等；读整页文字认传完没有，不靠进度条的 class
+    let told = 0
+    if (video)
+      content.video = {
+        prefilled: true,
+        check: async () => {
+          const t = String(await b.eval(`document.body.innerText`).catch(() => ''))
+          if (TEXT.uploadFailed.test(t)) throw new Error('Douyin says the video upload failed')
+          if (TEXT.uploaded.test(t)) return true
+          if (Date.now() - told > 30000) {
+            told = Date.now()
+            const pct = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(t)
+            ctx.progress({ message: pct ? L(ctx, `上传中 ${pct[1]}%…`, `Uploading ${pct[1]}%…`) : L(ctx, '等视频上传完…', 'Waiting for the upload to finish…') })
+          }
+          return false
+        },
+      }
+    // 自己的封面（竖封面 3:4）：打开封面编辑器、上传、确认；入口由脚本认（markCoverEntry），认不出让 uploadVideoCover 自己找
+    if (video && p.video_cover)
+      content.cover = {
+        file: p.video_cover,
+        fill: async () => {
+          await b.press('Escape').catch(() => {}) // 话题候选还开着会挡住封面区
+          await uploadVideoCover(ctx, b, p!.video_cover!, '抖音', 60000, { entry: await markCoverEntry(b) })
+          st.cover = true
+          return 'cover set'
+        },
+        check: async () => st.cover,
+      }
+    if (hasDesc)
+      content.description = {
+        text: body,
+        fill: async (sel: string) => {
+          const d = await fillDesc(ctx, b, body, tags, sel)
+          st.missing = d.missing
+          if (!d.body) return 'the description did not read back exactly'
+          return d.missing.length ? `these hashtags had no exact suggestion and were left out: ${d.missing.join(', ')} (that's fine)` : tags.length ? 'description and hashtags checked' : 'description checked'
+        },
+        check: async (sel: string) => {
+          const s = await descState(b, sel)
+          return !!s && squash(s.text) === squash(body)
+        },
+      }
+    const r = await b.agent(task, { tools, content, avoid: TEXT.submit, notes: 'douyin.publish', maxSteps: 30 })
     const warnings = st.missing.length ? [L(ctx, `这些话题没加上（抖音的候选里没有一模一样的）：${st.missing.join('、')}`, `These hashtags weren't added (no exact match in Douyin's suggestions): ${st.missing.join(', ')}`)] : []
     const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
     if (input.dry_run) {

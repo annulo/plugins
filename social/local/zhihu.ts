@@ -23,7 +23,7 @@ export { problems as draftProblems } from './_zhihu_spec'
 // post_id 存文章 id，post_url 是 https://zhuanlan.zhihu.com/p/<id>。
 //
 // 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-19，做法见 docs/approach.md）：
-//   发布：AI 填标题、处理弹窗；fill_body 填正文（Draft.js：派发 paste 粘贴 HTML；外链图知乎转存会失败，图片走编辑器的图片文件框上传、失败的点一下重传）、
+//   发布：AI 处理弹窗，用 fill 放标题、正文（content，Annulo 能力版本 54，原文不经过 AI）；正文自己填（Draft.js：派发 paste 粘贴 HTML；外链图知乎转存会失败，图片走编辑器的图片文件框上传、失败的点一下重传）、
 //         add_topics 在「发布设置」里按名字搜话题、只选一样的；publish 核对标题正文后点「发布」、点确认框，跳到 /p/<id> 算发出去，接口回 { code, toast_message } 是被拒；
 //   删除：AI 在「内容管理 → 文章」里找到这篇、点「更多 → 删除」；confirm_delete 核对确认框里的「确认」才点，读文章列表接口确认没了。
 // 页面的规律记在笔记里（notes/zhihu.publish.md、notes/zhihu.remove.md，项目学到的在 user/notes/social/）；账号、文章数据读知乎自己的 JSON 接口。
@@ -442,7 +442,7 @@ async function draftId(ctx: any, b: any, ms: number) {
  * 上次中断过的先去文章列表里按标题找，避免重复发。
  *
  * 写文章页交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具（做法见 docs/approach.md）：
- *   AI 填标题、点开「发布设置」、处理弹窗；fill_body 工具填正文（按图切段粘贴、传图、重试，读回核对）、add_topics 加话题（没加上只提醒）；
+ *   AI 用 fill 放标题、正文（content.body 自己填：按图切段粘贴、传图、重试，读回核对），点开「发布设置」、处理弹窗、add_topics 加话题（没加上只提醒）；
  *   publish 工具核对标题、正文后才点「发布」，确认框也由它点，读接口和地址判断发没发出去。AI 没做完或知乎不收，把窗口交给用户。
  * dry_run：演练，publish 工具核对完不点，返回 { dry_run, need, warnings, snapshot }。知乎打字就自动存草稿，演练会留一篇草稿。
  */
@@ -508,7 +508,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     const nImages = all.filter((x) => 'image' in x).length
     const first = plain((parts.find((x) => 'html' in x && plain(x.html)) as { html: string } | undefined)?.html ?? '').slice(0, 12)
     const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
-    const st = { body: '', id: '', topics: [] as string[], missing: [] as string[], verified: false, published: '', rejected: '' }
+    const st = { id: '', topics: [] as string[], missing: [] as string[], verified: false, published: '', rejected: '' }
     /** 正文填对了没有：第一段的字在、只出现一次（没粘贴两遍），传好的图够数 */
     const bodyOk = async (ed: string) => {
       const text = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); return e ? e.innerText : '' })()`).catch(() => '')))
@@ -540,39 +540,6 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     const id = (d: string) => ({ type: 'integer', description: d })
     const tools = {
-      fill_body: {
-        description: 'args { id }: put the article body into the body editor with that element number (clears it first, pastes the text in parts and uploads the images in place, retrying failed ones), then checks it. Use this instead of typing the body; calling it again replaces the body.',
-        params: { type: 'object', properties: { id: id('element number of the body editor (contenteditable)') }, required: ['id'] },
-        run: async (a: any) => {
-          // 编号每看一次页面就重排：给编辑框打一个不变的标记，之后核对（publish）认它，不认编号
-          const marked = await b.eval(`(() => { document.querySelectorAll('[data-annulo-body]').forEach(e => e.removeAttribute('data-annulo-body')); const e = document.querySelector(${JSON.stringify(at(a.id))}); if (!e || !e.isContentEditable) return false; e.setAttribute('data-annulo-body', '1'); return true })()`).catch(() => false)
-          if (!marked) return `Element ${a.id} is not an editable area; pass the body editor's number.`
-          const ed = '[data-annulo-body="1"]'
-          // 先清空再粘贴：重试时不会把正文贴两遍
-          await b.click(ed).catch(() => {})
-          await b.eval(`(() => { const e = document.querySelector('[data-annulo-body="1"]'); e.focus(); document.execCommand('selectAll') })()`).catch(() => {})
-          await b.press('Backspace').catch(() => {})
-          await ctx.sleep(500)
-          let n = 0
-          for (const x of all) {
-            if ('html' in x) {
-              if (!(await pasteHtml(b, x.html, ed))) return `Couldn't paste into element ${a.id}; is it the body editor?`
-              await ctx.sleep(800)
-            } else {
-              n++
-              ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
-              try {
-                await uploadImage(ctx, b, x.image, n, ed)
-              } catch (e: any) {
-                return `Image ${n} failed: ${e?.message ?? e}`
-              }
-            }
-          }
-          st.body = ed
-          st.id = await draftId(ctx, b, 20000)
-          return (await bodyOk(ed)) ? `Body filled and checked (${nImages} images).` : 'The body did not check out (text missing, pasted twice, or images missing). Clear the editor and call fill_body again, or fail.'
-        },
-      },
       add_topics: {
         description: `Add this article's topics (${tags.join(', ') || 'none'}) in 发布设置: searches each and picks only the exact match. Topics the search doesn't have are skipped. Call it after the body is filled (the topic row appears once the draft is saved).`,
         params: { type: 'object', properties: {} },
@@ -584,13 +551,12 @@ export async function publish(input: { post_id: string; force_interval?: boolean
         },
       },
       publish: {
-        description: 'args { title_id, button_id }: the only way to publish. The script checks the title is exactly right, the body was filled by fill_body and still checks out, and the button says 发布; then clicks it, handles the confirmation dialog, and waits for the result.',
-        params: { type: 'object', properties: { title_id: id('element number of the title box'), button_id: id('element number of the 发布 button') }, required: ['title_id', 'button_id'] },
+        description: 'args { button_id }: the only way to publish. The script checks the title and body were put in with fill and still check out, and the button says 发布; then clicks it, handles the confirmation dialog, and waits for the result.',
+        params: { type: 'object', properties: { button_id: id('element number of the 发布 button') }, required: ['button_id'] },
         run: async (a: any) => {
           const issues: string[] = []
-          if (norm(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.title_id))}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).catch(() => '')) !== norm(p!.title)) issues.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
-          if (!st.body) issues.push('the body has not been filled with fill_body yet')
-          else if (!(await bodyOk(st.body))) issues.push('the body no longer checks out (text missing or duplicated, or images missing)')
+          if (!(await b.filled('title'))) issues.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
+          if (!(await b.filled('body'))) issues.push('the body has not been put in with fill (content "body"), or it no longer checks out (text missing or duplicated, or images missing)')
           const label = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
           if (label !== TEXT.publish) issues.push(`element ${a.button_id} is not the 发布 button`)
           if (issues.length) return `Not published: ${issues.join('; ')}.`
@@ -603,12 +569,42 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     const task = [
       `在知乎专栏的写文章页发一篇文章（页面已经打开、已登录）。`,
-      `- 标题：「${p.title}」（原样填，不改）。`,
-      `- 正文：用 fill_body 工具填（传正文编辑框的编号），不要自己打字。`,
+      `- 标题：用 fill 把 title 放进标题框。`,
+      `- 正文：用 fill 把 body 放进正文编辑框（分段粘贴、在原位传图都由它做）。`,
       tags.length ? `- 话题：正文填好后用 add_topics 工具加（它会自己点开「发布设置」）。` : `- 话题：没有。`,
-      `- 最后用 publish 工具发布（传标题框、「发布」按钮的编号），它会核对、点确认框、等结果；它说没核对过就照它说的改了再调用。`,
+      `- 最后用 publish 工具发布（传「发布」按钮的编号），它会核对、点确认框、等结果；它说没核对过就照它说的改了再调用。`,
     ].join('\n')
-    const r = await b.agent(task, { tools, avoid: ['发布', '确认发布', '继续发布'], notes: 'zhihu.publish', maxSteps: 30 })
+    // 标题、正文交给 Annulo 的 fill：AI 只选放进哪个框，原文不经过它。正文要分段粘贴、在原位传图，自己填、自己核对
+    const content = {
+      title: p.title,
+      body: {
+        text: isHtml(p.body) ? p.body.replace(/<[^>]+>/g, ' ').replace(/&\w+;/g, ' ') : p.body, // 给 AI 看的预览；核对用 check
+        fill: async (ed: string) => {
+          // 先清空再粘贴：重试时不会把正文贴两遍
+          await b.click(ed).catch(() => {})
+          await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); e.focus(); document.execCommand('selectAll') })()`).catch(() => {})
+          await b.press('Backspace').catch(() => {})
+          await ctx.sleep(500)
+          let n = 0
+          for (const x of all) {
+            if ('html' in x) {
+              if (!(await pasteHtml(b, x.html, ed))) throw new Error("couldn't paste into it; is it the body editor?")
+              await ctx.sleep(800)
+            } else {
+              n++
+              ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
+              await uploadImage(ctx, b, x.image, n, ed).catch((e: any) => {
+                throw new Error(`image ${n} failed: ${e?.message ?? e}`)
+              })
+            }
+          }
+          st.id = await draftId(ctx, b, 20000)
+          return `body pasted (${nImages} images)`
+        },
+        check: bodyOk, // 第一段的字在、只出现一次，传好的图够数；不对时 AI 再 fill 一次（先清空）
+      },
+    }
+    const r = await b.agent(task, { tools, content, avoid: ['发布', '确认发布', '继续发布'], notes: 'zhihu.publish', maxSteps: 30 })
     const warnings = st.missing.length ? [L(ctx, `这些话题没加上（知乎搜不到一模一样的）：${st.missing.join('、')}`, `These topics weren't added (no exact match on Zhihu): ${st.missing.join(', ')}`)] : []
     const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
     if (input.dry_run) {

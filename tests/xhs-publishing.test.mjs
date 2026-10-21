@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { agentKit } from './_agent.mjs'
 
 const { chromium } = createRequire(import.meta.url)('playwright')
 const dir = mkdtempSync(join(tmpdir(), 'xhs-publishing-test-'))
@@ -87,12 +88,13 @@ async function fixture(ctx, opts = {}) {
     agent: async (task, opts) => {
       b.agentRuns.push({ task, opts })
       await page.evaluate(() => [document.querySelector('input[placeholder*="标题"]'), document.querySelector('.tiptap')].forEach((e, i) => e?.setAttribute('data-annulo-act', String(i + 1))))
-      await page.locator('[data-annulo-act="1"]').fill(ctx.rows.get('post').title)
+      const A = agentKit(page, b, opts)
+      await A.fill(1, 'title')
       if (/仅自己可见/.test(task)) await page.evaluate(() => { document.getElementById('vis').textContent = '仅自己可见' })
-      const call = (name, args = {}) => opts.tools[name]?.run(args)
-      await call('fill_body', { id: 2 })
-      await call('wait_upload')
-      const r = await call('publish', { title_id: 1 })
+      if (opts.content.body) await A.fill(2, 'body')
+      if (opts.content.video) await A.wait('video')
+      if (opts.content.cover) await A.fill(2, 'cover')
+      const r = await A.call('publish')
       return r?.finish ? { ok: true, summary: r.finish } : { ok: false, reason: String(r) }
     },
     agentRuns: [],

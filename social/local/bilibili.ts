@@ -458,24 +458,24 @@ async function dropForeignChip(b: any, want: Set<string>) {
 }
 
 /** 等视频传完（读整页的文字，不靠进度条的 class）：返回给浏览器助手看的一句话 */
-async function waitUploaded(ctx: any, b: any) {
+/** 视频传完没有（content.video 的 check，AI 用 wait 等它）：读整页文字，B站 说传失败就抛错；每 30 秒在进度里报一次百分比 */
+function uploadCheck(ctx: any, b: any) {
   let told = 0
-  for (const end = Date.now() + 30 * 60_000; Date.now() < end; ) {
+  return async () => {
     const t = String(await b.eval(`document.body.innerText`).catch(() => ''))
-    if (TEXT.uploadFailed.test(t)) return 'Bilibili says the upload failed.'
-    if (TEXT.uploaded.test(t)) return 'Upload complete.'
+    if (TEXT.uploadFailed.test(t)) throw new Error('Bilibili says the upload failed')
+    if (TEXT.uploaded.test(t)) return true
     if (Date.now() - told > 30000) {
       told = Date.now()
       const pct = /(\d{1,3}(?:\.\d+)?)\s*%/.exec(t)
       ctx.progress({ message: pct ? L(ctx, `上传中 ${pct[1]}%…`, `Uploading ${pct[1]}%…`) : L(ctx, '等视频上传完…', 'Waiting for the upload to finish…') })
     }
-    await ctx.sleep(3000)
+    return false
   }
-  return 'Still uploading after 30 minutes.'
 }
 
 /**
- * 填标签（add_tags 工具，标签输入框由浏览器助手认出来交给它）：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
+ * 填标签（content.tags 的 fill，标签输入框由浏览器助手认出来交给它）：B站 会自动往里加几个（分区、标题推出来的，2026-10 一次加了 5 个），会占满 10 个名额。
  * 先删掉所有不在我们列表里的，加之前名额满了再删；每个标签要等 B站「请求校验」完、变成标签块，再打下一个。
  * 返回没加上的标签（B站 不收的词、或者找不到输入框时全部）：标签是尽量做的，没加上照样投稿，结果里提醒。
  */
@@ -584,10 +584,10 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   let timing = '' // 浏览器助手的耗时汇总（b.agent 的 timing.summary），带进结果
 
   /**
-   * 有 b.agent（Annulo 能力版本 50，docs/browser-agent.md）时：表单由 AI 看着页面填，脚本只给工具、守关卡。
-   * AI 上传视频、填标题、选分区和创作声明、选封面、处理弹窗；简介、标签、等上传完、投稿用下面的工具（脚本做得稳的、收不回来的）。
-   * 经验记在笔记 notes/bilibili.publish.md（插件自带）和 user/notes/social/bilibili.publish.md（这个项目学到的），不做机械重放。
-   * 投稿只能经 submit 工具：它先逐字核对标题、简介，按钮文字对得上才点。
+   * 表单由 AI 看着页面填（b.agent，docs/browser-agent.md），脚本只给工具、守关卡。
+   * 视频、标题、简介、标签放 content（Annulo 能力版本 54）：AI 只能用 fill 按名字放进某个元素，碰不到原文、选不了别的文件；视频在后台传，AI 用 wait 等它。
+   * AI 自己选分区和创作声明、选封面、处理弹窗。经验记在笔记 notes/bilibili.publish.md（插件自带）和 user/notes/social/bilibili.publish.md（这个项目学到的），不做机械重放。
+   * 投稿只能经 submit 工具：它用 b.filled 核对标题、简介、视频传完，按钮文字对得上才点。
    */
   async function agentAttempt(b: any, warnings: string[], handOver: (why: string[]) => Promise<Outcome>): Promise<Outcome | { dry_run: true; timing?: string; need: string[]; warnings: string[] }> {
     const st = { verified: false, res: null as Awaited<ReturnType<typeof addResult>>, okText: false, problems: [] as string[] }
@@ -608,37 +608,14 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     const id = (d: string) => ({ type: 'integer', description: d })
     const tools = {
-      fill_description: {
-        params: { type: 'object', properties: { id: id('element number of the description (简介) editor') }, required: ['id'] },
-        description: `args { id }: put this post's description into the description (简介) editor with that element id and check it reads back exactly. Use this instead of typing.`,
-        run: async (a: any) => (!desc ? 'There is no description for this post; leave it empty.' : (await fillText(ctx, b, at(a.id), desc)) ? 'Filled and verified.' : 'It did not read back the same; check that the id is the description editor.'),
-      },
-      add_tags: {
-        params: { type: 'object', properties: { id: id('element number of the tag input') }, required: ['id'] },
-        description: `args { id }: add this post's tags one by one into the tag input with that element id (waits for Bilibili to validate each, removes tags Bilibili added on its own). Returns which were not accepted.`,
-        run: async (a: any) => {
-          if (!tags.length) return 'There are no tags for this post.'
-          const missing = await fillTagsAt(ctx, b, at(a.id), tags)
-          st.problems = missing
-          return missing.length ? `Not accepted: ${missing.join(', ')} (Bilibili refused them; that is fine, go on)` : 'All tags added.'
-        },
-      },
-      wait_upload: {
-        params: { type: 'object', properties: {} },
-        description: 'Wait until the video upload finishes (it can take many minutes for big files). Call it after uploading the video, before submitting.',
-        run: async () => waitUploaded(ctx, b),
-      },
       submit: {
-        params: {
-          type: 'object',
-          properties: { title_id: id('element number of the title input'), description_id: id('element number of the description editor'), button_id: id(`element number of the ${TEXT.submit[0]} button`) },
-          required: ['title_id', 'button_id'],
-        },
-        description: `args { title_id, description_id, button_id }: the only way to submit. The script checks the title${desc ? ' and description' : ''} read back exactly and that the button says ${TEXT.submit[0]}, then clicks it and waits for the result. Call it once everything required is filled and the cover is set.`,
+        params: { type: 'object', properties: { button_id: id(`element number of the ${TEXT.submit[0]} button`) }, required: ['button_id'] },
+        description: `args { button_id }: the only way to submit. The script checks the video finished uploading, the title${desc ? ' and description' : ''} were put in with fill and still read back exactly, and that the button says ${TEXT.submit[0]}, then clicks it and waits for the result. Call it once everything required is filled and the cover is set.`,
         run: async (a: any) => {
           const bad: string[] = []
-          if (squash(await valueOf(b, at(a.title_id))) !== squash(p!.title)) bad.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
-          if (desc && squash(await valueOf(b, at(a.description_id))) !== squash(desc)) bad.push(`the description (element ${a.description_id}) is not exactly the post's description; use fill_description`)
+          if (!(await b.filled('video'))) bad.push('the video has not been put in with fill, or it is still uploading (wait with content "video")')
+          if (!(await b.filled('title'))) bad.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
+          if (desc && !(await b.filled('description'))) bad.push('the description has not been put in with fill (content "description"), or it no longer reads back exactly')
           const label = squash(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
           if (!TEXT.submit.map(squash).includes(label)) bad.push(`element ${a.button_id} is not the ${TEXT.submit[0]} button`)
           if (bad.length) return `Not submitted: ${bad.join('; ')}.`
@@ -652,16 +629,37 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     }
     const task = [
       `在 B站 投稿页上投一条视频（页面已经打开、已登录）。`,
-      `- 视频：把 Files 里的 video 传到视频的上传框；传完、出现填写稿件信息的表单后，调用 wait_upload 等它传完（可以先填表再等）。`,
-      `- 标题：「${p!.title}」（原样填，不改）。`,
+      `- 视频：用 fill 把 video 放进视频的上传框；它在后台传，出现填写稿件信息的表单后先填表，投稿前用 wait 等 video 传完。`,
+      `- 标题：用 fill 把 title 放进标题框。`,
       p!.category?.trim() ? `- 分区：「${p!.category.trim()}」；只有一级就选对应的那一级。` : `- 分区：没指定，用 B站 自动推荐的，不用改。`,
       `- 创作声明：用 select 选「含AI生成内容」。`,
-      tags.length ? `- 标签：${tags.join('、')}。用 add_tags 工具加（传标签输入框的编号）。` : `- 标签：没有。`,
-      desc ? `- 简介：用 fill_description 工具填（传简介编辑框的编号），不要自己打字。` : `- 简介：没有，空着。`,
+      tags.length ? `- 标签：用 fill 把 tags 放进标签输入框（逐个加、等 B站 校验、删掉它自动加的，都由它做）。` : `- 标签：没有。`,
+      desc ? `- 简介：用 fill 把 description 放进简介编辑框。` : `- 简介：没有，空着。`,
       `- 封面：空着就选 B站 推荐的第一张，弹出裁剪、确认之类的框就点完成、确定。`,
-      `- 最后用 submit 工具投稿（传标题框、简介框、「${TEXT.submit[0]}」按钮的编号）。拿不准某一项（比如封面有没有选上）时也直接调用：它会核对，B站 缺了什么也会提示，照它说的改了再调用。`,
+      `- 最后用 submit 工具投稿（传「${TEXT.submit[0]}」按钮的编号）。拿不准某一项（比如封面有没有选上）时也直接调用：它会核对，B站 缺了什么也会提示，照它说的改了再调用。`,
     ].join('\n')
-    const r = await b.agent(task, { tools, files: { video: p!.video }, avoid: TEXT.submit, notes: 'bilibili.publish', maxSteps: 40 })
+    // 视频、标题、简介、标签交给 Annulo 的 fill：AI 只选放进哪里，原文、文件不经过它。简介（Quill）用 fillText 填并读回；标签要逐个加、等校验，是尽量做的
+    const content: Record<string, any> = {
+      video: { file: p!.video, check: uploadCheck(ctx, b) },
+      title: p!.title,
+    }
+    if (desc)
+      content.description = {
+        text: desc,
+        fill: async (sel: string) => ((await fillText(ctx, b, sel, desc)) ? 'filled and checked' : 'it did not read back the same; is this the description editor?'),
+        check: async (sel: string) => squash(await valueOf(b, sel)) === squash(desc),
+      }
+    if (tags.length)
+      content.tags = {
+        text: tags.join('、'),
+        fill: async (sel: string) => {
+          const missing = await fillTagsAt(ctx, b, sel, tags)
+          st.problems = missing
+          return missing.length ? `not accepted: ${missing.join(', ')} (Bilibili refused them; that is fine, go on)` : 'all tags added'
+        },
+        check: async () => true, // 尽量做的：没加上的只提醒，不拦投稿
+      }
+    const r = await b.agent(task, { tools, content, avoid: TEXT.submit, notes: 'bilibili.publish', maxSteps: 40 })
     if (r.timing?.summary) timing = r.timing.summary
     if (st.problems.length) warnings.push(L(ctx, `这些标签没加上（B站 不收）：${st.problems.join('、')}`, `These tags weren't added (Bilibili didn't accept them): ${st.problems.join(', ')}`))
     if (input.dry_run) return { dry_run: true, timing, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到投稿那一步', "The browser assistant didn't reach the submit step")], warnings }

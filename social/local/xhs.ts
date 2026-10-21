@@ -20,7 +20,8 @@ import { selectUpload, waitImages } from './_xhs_upload'
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
 // video 为空照旧发图文笔记。视频上传、上传状态（VIDEO_TEXT）、独立封面都在真实账号验证过（2026-10-20）。
 // 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-20，做法见 docs/approach.md）：
-//   发布：脚本打开发布页、选对图文 / 视频入口传素材（_xhs_upload.ts）；AI 填标题、处理弹窗；fill_body 填正文（tiptap：粘贴后读回核对）、
+//   发布：脚本打开发布页、选对图文 / 视频入口传素材（_xhs_upload.ts）；AI 处理弹窗，用 fill 放标题、正文、封面（content，Annulo 能力版本 54，原文不经过 AI）；
+//         正文自己填（tiptap：粘贴后读回核对）、
 //         话题输「#话题」后从候选里点选成话题块（SEL.topic）；publish 核对后点「发布」（在 closed shadow root 里，AI 点不到），监听 NOTE_API 拿笔记 id；
 //   删除：open_delete 按笔记 id 点这篇卡片上的删除图标（图标没有文字，AI 看不到），AI 处理确认框；confirm_delete 核对点的是这篇、按钮在确认框里才点，读笔记列表确认没了。
 // 页面的规律记在笔记里（notes/xhs.publish.md、notes/xhs.remove.md，项目学到的在 user/notes/social/）。
@@ -256,27 +257,27 @@ async function videoState(b: any): Promise<{ state: 'uploading' | 'processing' |
 }
 
 /** 等视频上传、处理完：每 5 秒看一次，最多 10 分钟，边等边报进度。返回给浏览器助手的一句话 */
-async function waitVideo(ctx: any, b: any): Promise<string> {
-  const deadline = Date.now() + VIDEO_WAIT_MS
+/**
+ * 视频传完、处理完没有（content.video 的 check，AI 用 wait 等它）：小红书说失败就抛错；认不出状态时（标题框出来了、没有进度和处理中的字样）
+ * 持续 30 秒就当传完了（页面文字可能和这里写的不一样）。顺带在进度里报上传百分比、处理了几分钟。
+ */
+function videoCheck(ctx: any, b: any) {
   const t0 = Date.now()
   let unknownSince = 0
-  while (Date.now() < deadline) {
+  return async () => {
     const s = await videoState(b)
     const mins = Math.floor((Date.now() - t0) / 60_000)
-    if (s.state === 'failed') return `Xiaohongshu says the upload failed: ${s.text}`
-    if (s.state === 'done') return 'Upload complete.'
+    if (s.state === 'failed') throw new Error(`Xiaohongshu says the upload failed: ${s.text}`)
+    if (s.state === 'done') return true
+    if (s.state !== 'unknown') unknownSince = 0
     if (s.state === 'uploading') ctx.progress({ message: s.pct >= 0 ? L(ctx, `上传视频 ${s.pct}%…`, `Uploading the video ${s.pct}%…`) : L(ctx, `上传视频中（已 ${mins} 分钟）…`, `Uploading the video (${mins} min so far)…`) })
     else if (s.state === 'processing') ctx.progress({ message: L(ctx, `小红书在处理视频（已 ${mins} 分钟）…`, `Xiaohongshu is processing the video (${mins} min so far)…`) })
     else {
-      // 认不出状态：标题框出来了、也没有进度和处理中的字样，等 30 秒还这样就当传完了（页面文字可能和上面写的不一样）
       if (!unknownSince) unknownSince = Date.now()
-      if (Date.now() - unknownSince > 30_000 && (await b.exists(SEL.title).catch(() => false))) return 'Upload looks complete (no progress shown any more).'
-      ctx.progress({ message: L(ctx, `等视频上传完（已 ${mins} 分钟）…`, `Waiting for the video upload (${mins} min so far)…`) })
+      if (Date.now() - unknownSince > 30_000 && (await b.exists(SEL.title).catch(() => false))) return true
     }
-    if (s.state !== 'unknown') unknownSince = 0
-    await ctx.sleep(5000)
+    return false
   }
-  return `Still not uploaded and processed after ${VIDEO_WAIT_MS / 60_000} minutes.`
 }
 
 /** 没有配图时，用封面大字生成一张 3:4 的文字卡片 */
@@ -404,9 +405,9 @@ async function firstNotes(b: any): Promise<any[] | null> {
  * 发布一篇笔记到小红书。只发审核通过（approved / scheduled）的；发布前检查平台规格；发布频率只是建议，超了照样发。
  * private: true 发成「仅自己可见」（试发用）。上次发布中断过的，先去笔记管理里按标题找，避免重复发。
  *
- * 小红书的页面常改：脚本打开发布页、选对图文 / 视频入口传好素材（_xhs_upload.ts），表单交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面填，
- * 脚本只当它的工具（做法见 docs/approach.md）：fill_body 填正文并读回核对、话题从候选里点选成话题块（尽量做的，没加上照发、带 warnings）；
- * wait_upload 等视频传完；set_cover 换视频封面；publish 核对标题、正文、可见范围后才点「发布」，读接口拿笔记 id。
+ * 小红书的页面常改：脚本打开发布页、选对图文 / 视频入口传好素材（_xhs_upload.ts），表单交给浏览器助手（b.agent，Annulo 能力版本 54）看着页面填，
+ * 脚本只当它的工具（做法见 docs/approach.md）：标题、正文、封面放 content，AI 用 fill 按名字放进去（正文自己填并读回核对、话题从候选里点选成话题块，
+ * 尽量做的，没加上照发、带 warnings）；视频由脚本传（content.video 标 prefilled），AI 用 wait 等它传完；publish 用 b.filled 核对标题、正文、视频，再核对可见范围才点「发布」，读接口拿笔记 id。
  * AI 没做完或小红书不收，就把窗口调到前台交给用户（b.show）：用户改好点「发布」，这里等到发布结果照常记下；调不到前台的（后台定时任务）报错，写清楚卡在哪。
  *
  * dry_run：演练，走完上传、填写、核对，停在点「发布」之前，返回 { dry_run, need, warnings, snapshot }，不改这条的状态、不交给用户。
@@ -462,8 +463,6 @@ export async function publish(input: { post_id: string; private?: boolean; force
           : L(ctx, '到页面上再点一次「发布」，卡住时会弹出小红书窗口交给你接着弄；也可以到小红书创作者中心手动发。', "Click Publish on the page again — if it gets stuck, the Xiaohongshu window opens for you to finish; or post it in Xiaohongshu's creator center."))
     )
 
-  const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
-  const ED = '[data-annulo-body="1"]' // fill_body 给正文框打的标记：编号每看一次页面就重排，之后核对认它
 
   try {
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
@@ -496,11 +495,8 @@ export async function publish(input: { post_id: string; private?: boolean; force
       await waitImages(ctx, b, files.length)
     }
 
-    const st = { body: false, missing: [] as string[], cover: !(video && p.video_cover), verified: false, res: null as Awaited<ReturnType<typeof noteResult>>, okPage: false, said: '' }
-    const bodyOk = async () => {
-      const s = await bodyState(b, ED)
-      return !!s && squash(s.text) === squash(body)
-    }
+    const st = { missing: [] as string[], cover: !(video && p.video_cover), verified: false, res: null as Awaited<ReturnType<typeof noteResult>>, okPage: false, said: '' }
+    const hasBody = !!(body || tags.length)
     /** 等发布结果：接口拿到笔记 id、页面显示发布成功；要验证、被拒都把原话交给 AI */
     const result = async (ms: number): Promise<string | { finish: string }> => {
       for (const end = Date.now() + ms; Date.now() < end; ) {
@@ -521,31 +517,16 @@ export async function publish(input: { post_id: string; private?: boolean; force
       st.said = said
       return `Clicked 发布, but no result yet${said ? ` (page says: ${said})` : ''}. A dialog or missing field may be on the page: handle it, then call publish again or check_result.`
     }
-    const id = (d: string) => ({ type: 'integer', description: d })
     const tools: Record<string, any> = {
-      fill_body: {
-        description: `args { id }: put this note's body${tags.length ? ' and hashtags' : ''} into the body editor with that element number: clears it, pastes the text, checks it reads back exactly${tags.length ? ', then adds each hashtag by typing # and picking the exact suggestion (that is what makes it a real topic)' : ''}. Use this instead of typing; calling it again replaces it.`,
-        params: { type: 'object', properties: { id: id('element number of the body editor (contenteditable)') }, required: ['id'] },
-        run: async (a: any) => {
-          const marked = await b.eval(`(() => { document.querySelectorAll('[data-annulo-body]').forEach(e => e.removeAttribute('data-annulo-body')); const e = document.querySelector(${JSON.stringify(at(a.id))}); if (!e || !e.isContentEditable) return false; e.setAttribute('data-annulo-body', '1'); return true })()`).catch(() => false)
-          if (!marked) return `Element ${a.id} is not an editable area; pass the body editor's number.`
-          const d = await fillBody(ctx, b, body, tags, ED)
-          st.body = d.body
-          st.missing = d.missing
-          if (!d.body) return 'The body did not read back exactly. Call fill_body again, or fail.'
-          return d.missing.length ? `Body filled; these hashtags had no exact suggestion and were left out: ${d.missing.join(', ')} (that's fine).` : 'Body and hashtags filled and checked.'
-        },
-      },
       publish: {
-        description: 'args { title_id }: the only way to publish (the 发布 button is not clickable for you). The script checks the title is exactly right, the body was filled with fill_body and still checks out, the cover and the visibility are right; then clicks 发布 and waits for the result.',
-        params: { type: 'object', properties: { title_id: id('element number of the title input') }, required: ['title_id'] },
-        run: async (a: any) => {
+        description: 'The only way to publish (the 发布 button is not clickable for you). The script checks the title and body were put in with fill and still read back exactly, the video finished uploading, the cover and the visibility are right; then clicks 发布 and waits for the result.',
+        params: { type: 'object', properties: {} },
+        run: async () => {
           const issues: string[] = []
-          const title = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.title_id))}); return e ? (e.value ?? e.innerText ?? '') : '' })()`).then((v: any) => String(v ?? ''), () => '')
-          if (squash(title) !== squash(p!.title)) issues.push(`the title (element ${a.title_id}) is not exactly "${p!.title}"`)
-          if (!st.body) issues.push('the body has not been filled with fill_body yet')
-          else if (!(await bodyOk())) issues.push('the body no longer reads back exactly; call fill_body again')
-          if (!st.cover) issues.push('the cover is not set yet; call set_cover')
+          if (!(await b.filled('title'))) issues.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
+          if (hasBody && !(await b.filled('body'))) issues.push('the body has not been put in with fill (content "body"), or it no longer reads back exactly')
+          if (video && !(await b.filled('video'))) issues.push('the video is still uploading or processing; wait with content "video" first')
+          if (!st.cover) issues.push('the cover is not set yet; fill content "cover" into the cover area (编辑封面 / 设置封面)')
           const vis = await visibilityOf(b)
           if (input.private && vis !== '仅自己可见') issues.push(`visibility (可见范围) shows "${vis || '?'}", it must be 仅自己可见`)
           if (!input.private && vis && vis !== '公开可见') issues.push(`visibility (可见范围) shows "${vis}", it must be 公开可见`)
@@ -577,42 +558,48 @@ export async function publish(input: { post_id: string; private?: boolean; force
         },
       }
     }
-    if (video) {
-      tools.wait_upload = {
-        description: 'Wait until the video is uploaded and processed (can take many minutes). Call it before publishing; you can fill the form first.',
-        params: { type: 'object', properties: {} },
-        run: async () => waitVideo(ctx, b),
-      }
-    }
-    if (video && p.video_cover) {
-      tools.set_cover = {
-        description: "Set this note's own cover image. Call it after wait_upload; it opens the cover editor, uploads the image and confirms.",
-        params: { type: 'object', properties: {} },
-        run: async () => {
-          await b.press('Escape').catch(() => {}) // 话题候选还开着会挡住封面区
-          try {
-            // 「编辑封面」平时藏着，按文字找不到：直接交给 uploadVideoCover 点
-            const entry = (await b.exists(SEL.coverEdit).catch(() => false)) ? SEL.coverEdit : ''
-            await uploadVideoCover(ctx, b, p!.video_cover!, '小红书', 60000, { entry })
-            st.cover = true
-            return 'Cover set.'
-          } catch (e: any) {
-            return `The cover was not set: ${e?.message ?? e}`
-          }
-        },
-      }
-    }
     const task = [
       `在小红书创作者中心的发布页发一篇${video ? '视频' : '图文'}笔记（${video ? '视频' : '图片'}已经传上去了，页面已登录）。`,
-      `- 标题：「${p.title}」（原样填，不改）。`,
-      `- 正文${tags.length ? '和话题' : ''}：用 fill_body 工具填（传正文编辑框的编号），不要自己打字。`,
-      video ? `- 视频还在传时可以先填表；发布前调用 wait_upload 等它传完。` : '',
-      video && p.video_cover ? `- 封面：用 set_cover 工具换成这篇的封面。` : '',
+      `- 标题：用 fill 把 title 放进标题框。`,
+      hasBody ? `- 正文${tags.length ? '和话题' : ''}：用 fill 把 body 放进正文编辑框${tags.length ? '（话题由它一起加）' : ''}。` : `- 正文：没有。`,
+      video ? `- 视频（video）脚本已经开始传了：先填表，发布前用 wait 等 video 传完、处理完。` : '',
+      video && p.video_cover ? `- 封面：视频传完后，用 fill 把 cover 放进封面区（「编辑封面」或「设置封面」；打开编辑器、上传、确认都由它做）。` : '',
       input.private ? `- 可见范围：用 set_private 工具改成「仅自己可见」（试发）。` : `- 可见范围：保持「公开可见」。`,
       `- 别的选填项（地点、合集、声明、群聊）不用动。`,
-      `- 最后用 publish 工具发布（传标题框的编号）；「发布」按钮你点不到。要验证（滑块、验证码）就用 ask_user 交给用户，之后调用 check_result。`,
+      `- 最后用 publish 工具发布；「发布」按钮你点不到。要验证（滑块、验证码）就用 ask_user 交给用户，之后调用 check_result。`,
     ].filter(Boolean).join('\n')
-    const r = await b.agent(task, { tools, avoid: [TEXT.submit], notes: 'xhs.publish', maxSteps: 30 })
+    // 标题、正文、视频、封面交给 Annulo 的 fill：AI 只选放进哪里，原文、文件不经过它。正文是 tiptap、话题要点选成话题块，自己填、自己核对
+    const content: Record<string, any> = { title: p.title }
+    if (hasBody)
+      content.body = {
+        text: body,
+        fill: async (sel: string) => {
+          const d = await fillBody(ctx, b, body, tags, sel)
+          st.missing = d.missing
+          if (!d.body) return 'the body did not read back exactly'
+          return d.missing.length ? `these hashtags had no exact suggestion and were left out: ${d.missing.join(', ')} (that's fine)` : tags.length ? 'body and hashtags checked' : 'body checked'
+        },
+        check: async (sel: string) => {
+          const s = await bodyState(b, sel)
+          return !!s && squash(s.text) === squash(body)
+        },
+      }
+    // 视频：脚本选好入口传的（图文、视频两个入口，选错会传错），AI 只能等
+    if (video) content.video = { prefilled: true, check: videoCheck(ctx, b) }
+    // 自己的封面：打开封面编辑器、上传、确认；「编辑封面」平时藏着，按文字找不到，有就直接交给 uploadVideoCover 点
+    if (video && p.video_cover)
+      content.cover = {
+        file: p.video_cover,
+        fill: async () => {
+          await b.press('Escape').catch(() => {}) // 话题候选还开着会挡住封面区
+          const entry = (await b.exists(SEL.coverEdit).catch(() => false)) ? SEL.coverEdit : '' // 认不出就让 uploadVideoCover 自己找
+          await uploadVideoCover(ctx, b, p!.video_cover!, '小红书', 60000, { entry })
+          st.cover = true
+          return 'cover set'
+        },
+        check: async () => st.cover,
+      }
+    const r = await b.agent(task, { tools, content, avoid: [TEXT.submit], notes: 'xhs.publish', maxSteps: 30 })
     const warnings = st.missing.length ? [L(ctx, `这些话题没加上（小红书的候选里没有一模一样的）：${st.missing.join('、')}`, `These hashtags weren't added (no exact match in Xiaohongshu's suggestions): ${st.missing.join(', ')}`)] : []
     const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
     if (input.dry_run) {

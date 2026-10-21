@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.17
+  zh: "抖音、B站、知乎、小红书发帖更稳：标题、正文、视频、封面由程序原样填入，不再经 AI 转抄。要新版 Annulo。"
+  en: "More reliable posting on Douyin, Bilibili, Zhihu and Xiaohongshu: titles, text, videos and covers are put in exactly by the app instead of being retyped by the AI. Needs a newer Annulo."
 - version: 0.8.16
   zh: "小红书视频笔记更稳：认得出视频传完了，试发时由脚本把可见范围设成仅自己可见。"
   en: "More reliable Xiaohongshu video notes: the finished upload is recognized, and test posts get Only me visibility set by the script."

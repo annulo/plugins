@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { agentKit } from './_agent.mjs'
 
 const { chromium } = createRequire(import.meta.url)('playwright')
 const dir = mkdtempSync(join(tmpdir(), 'douyin-publishing-test-'))
@@ -129,16 +130,16 @@ async function fixture(ctx, { rejection = false, slate = false, topics = [], dou
       if (typeof target !== 'string') return Promise.reject(new Error('No popup'))
       await page.locator(target).first().click()
     },
-    // 浏览器助手的桩：像模型那样给标题框、简介框、发布按钮编号，填标题，再按任务调工具
+    // 浏览器助手的桩：像模型那样给标题框、简介框、发布按钮编号，按任务 fill 标题、简介、封面，等视频，再调 publish
     agent: async (task, opts) => {
       b.agentRuns.push({ task, opts })
       await page.evaluate(() => [document.querySelector('input[placeholder="添加作品标题"]'), document.querySelector('.zone-container'), document.getElementById('submit')].forEach((e, i) => e?.setAttribute('data-annulo-act', String(i + 1))))
-      await page.locator('[data-annulo-act="1"]').fill(ctx.rows.get('post').title)
-      const call = (name, args = {}) => opts.tools[name]?.run(args)
-      await call('fill_description', { id: 2 })
-      await call('wait_upload')
-      await call('set_cover')
-      const r = await call('publish', { title_id: 1, button_id: 3 })
+      const A = agentKit(page, b, opts)
+      await A.fill(1, 'title')
+      if (opts.content.description) await A.fill(2, 'description')
+      if (opts.content.video) await A.wait('video')
+      if (opts.content.cover) await A.fill(3, 'cover')
+      const r = await A.call('publish', { button_id: 3 })
       return r?.finish ? { ok: true, summary: r.finish } : { ok: false, reason: String(r) }
     },
     agentRuns: [],
