@@ -4,7 +4,7 @@
     "type": "douyin",
     "pages": 1
   },
-  "every": "1d",
+  "at": "14:00",
   "jitter": "3h",
   "name": "采集抖音视频数据",
   "params": {

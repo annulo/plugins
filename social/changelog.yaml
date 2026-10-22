@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.22
+  zh: "定时采集改成每天 11 点到 17 点之间随机一个时间，不会漂到半夜；也能在 设置 → 定时任务 里改成每天几个固定时间。"
+  en: "Scheduled collection now runs at a random time between 11:00 and 17:00 each day instead of drifting into the night; you can also set fixed times in Settings → Scheduled tasks."
 - version: 0.8.21
   zh: "定时采集默认只读最近一页，每次读几页可以在 设置 → 定时任务 里改；手动点「立即采集」照旧读全。要新版 Annulo 才能改。"
   en: "Scheduled collection reads only the latest page by default, and the number of pages can be changed in Settings → Scheduled tasks; \"Collect now\" still reads everything. Changing it needs a newer Annulo."

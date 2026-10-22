@@ -3,7 +3,7 @@
   "input": {
     "type": "youtube"
   },
-  "every": "1d",
+  "at": "14:00",
   "jitter": "3h",
   "name": "采集 YouTube 视频数据"
 }

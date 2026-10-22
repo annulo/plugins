@@ -4,7 +4,7 @@
     "type": "bilibili",
     "pages": 1
   },
-  "every": "1d",
+  "at": "14:00",
   "jitter": "3h",
   "name": "采集 B 站视频数据",
   "params": {

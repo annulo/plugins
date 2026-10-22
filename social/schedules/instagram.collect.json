@@ -4,7 +4,7 @@
     "type": "instagram",
     "pages": 1
   },
-  "every": "1d",
+  "at": "14:00",
   "jitter": "3h",
   "name": "采集 Instagram 帖子数据",
   "params": {

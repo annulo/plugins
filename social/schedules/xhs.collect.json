@@ -4,7 +4,7 @@
     "type": "xiaohongshu",
     "pages": 1
   },
-  "every": "1d",
+  "at": "14:00",
   "jitter": "3h",
   "name": "采集小红书笔记数据",
   "params": {
