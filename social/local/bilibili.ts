@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { BILI, descText, isVideoRef, problems } from './_bilibili_spec'
 import { Expired } from './_health'
 import { assist, markReady, readySel } from './_assist'
@@ -868,7 +868,7 @@ export async function remove(input: { post_id?: string; bvid?: string; channel_i
  * 在 B站 上直接投的、已经开放浏览的稿件也收进来（source: platform）；发布时没认出 BV 号的，按标题对上补上。
  * 表里已有的稿件（包括审核中的）每次都更新。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [biliChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'bilibili' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -877,7 +877,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    const r = await readVideos(ctx, b, 5)
+    const r = await readVideos(ctx, b, collectPages(input, 5))
     const user = r.loggedOut ? null : await readUser(b).catch(() => null)
     await b.close()
     if (r.loggedOut || (user && user.id !== String(ch.platform_uid))) {

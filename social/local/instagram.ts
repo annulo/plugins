@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired } from './_health'
 import { assist, ensure, markReady, readySel } from './_assist'
@@ -747,7 +747,7 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
  * 采集：读自己最近的帖子（点赞、评论，视频有播放数）和粉丝数，写回 social_posts 和 social_accounts。
  * 在 Instagram 上直接发的帖子也收进来（source: platform）；发布时没认出 id 的，按文案对上补上 id。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [igChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -760,7 +760,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     await ctx.sleep(2000)
     const ok = await loggedIn(b)
     const user = ok ? await readUser(b) : null
-    const posts = ok ? await readPosts(ctx, b, ch.platform_uid || user?.id || '', user?.handle || ch.handle, 4) : []
+    const posts = ok ? await readPosts(ctx, b, ch.platform_uid || user?.id || '', user?.handle || ch.handle, collectPages(input, 4)) : []
     await b.close()
     if (!ok) {
       ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })

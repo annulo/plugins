@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { videoCoverPatch } from './_video_cover'
 import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
 import { Expired } from './_health'
 import { selectUpload, waitImages } from './_douyin_upload'
@@ -826,7 +826,7 @@ export async function remove(input: { post_id?: string; aweme_id?: string; chann
  * 在抖音上直接发的、已经公开的作品也收进来（source: platform）；发布时没认出作品 id 的，按标题对上补上。
  * 表里已有的作品（包括审核中的）每次都更新。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [dyChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'douyin' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -835,7 +835,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    const r = await readVideos(ctx, b, 5)
+    const r = await readVideos(ctx, b, collectPages(input, 5))
     const user = r.loggedOut ? null : await readUser(b).catch(() => null)
     await b.close()
     if (r.loggedOut || (user && user.id !== String(ch.platform_uid))) {

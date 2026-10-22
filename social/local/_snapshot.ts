@@ -78,3 +78,13 @@ export function profileFields(target: { browser_profile?: string; spare_profiles
   const spare = String(target.spare_profiles ?? '').split(',').filter(Boolean)
   return spare.includes(profile) ? {} : { spare_profiles: [...spare, profile].join(',') }
 }
+
+/**
+ * 采集读几页：定时任务传 input.pages（用户在 设置 → 定时任务 里能改，默认 1 页，只读最近的）；
+ * 没传是页面上手动点的采集，读到 full 页为止（补全：第一次接入、想刷新旧帖子）。
+ * 每天定时把全部翻一遍像脚本，小红书因此警告过账号。
+ */
+export function collectPages(input: { pages?: unknown } | undefined, full: number): number {
+  const n = Math.floor(Number(input?.pages))
+  return Number.isFinite(n) && n >= 1 ? n : full
+}

@@ -41,13 +41,15 @@ function context() {
       listen() {},
       async goto(u) { url = u },
       url: () => url,
-      async responses(pattern) {
+      async responses(pattern, { min = 1 } = {}) {
         if (pattern.includes('personal_info')) return [{ status: 200, json: { data: { fans_count: 12, name: 'Me' } } }]
-        // 第一页：两个 tab 各请求一次，有重复的笔记；page 不是 -1（还有下一页）
-        return [
+        // 第一页：两个 tab 各请求一次，有重复的笔记；page 不是 -1（还有下一页）。滚到底才有第二页（最后一页）
+        const rs = [
           { json: { data: { page: 1, notes: [note('n1', 50), note('n2', 20)] } } },
           { json: { data: { page: 1, notes: [note('n2', 20)] } } },
+          ...(browser.scrolled ? [{ json: { data: { page: -1, notes: [note('n9', 1200)] } } }] : []),
         ]
+        return rs.length >= min ? rs : null
       },
       async eval() { browser.scrolled++ },
       async close() { browser.closed = true },
@@ -56,9 +58,9 @@ function context() {
   return ctx
 }
 
-test('collect reads only the first page and keeps older notes in the daily totals', async () => {
+test('scheduled collect reads only the pages it is given and keeps older notes in the daily totals', async () => {
   const ctx = context()
-  const r = await xhs.collect({ channel_id: 'channel' }, ctx)
+  const r = await xhs.collect({ channel_id: 'channel', pages: 1 }, ctx)
   assert.equal(ctx.browser.scrolled, 0, 'must not scroll the note list')
   assert.ok(ctx.browser.closed)
   assert.deepEqual(r.channels[0], { channel: 'Me', notes: 2, updated: 1, added: 1, followers: 12 })
@@ -70,4 +72,13 @@ test('collect reads only the first page and keeps older notes in the daily total
   assert.equal(daily.views, 50 + 20 + 1000)
   assert.equal(daily.likes, 1 + 1 + 7)
   assert.equal(daily.followers, 12)
+})
+
+test('collect clicked on the page (no pages) scrolls to the last page', async () => {
+  const ctx = context()
+  const r = await xhs.collect({ channel_id: 'channel' }, ctx)
+  assert.equal(ctx.browser.scrolled, 1)
+  assert.equal(r.channels[0].notes, 3)
+  assert.equal(ctx.tables.social_posts.find((p) => p.id === 'old').views, 1200)
+  assert.equal(ctx.tables.social_daily[0].views, 50 + 20 + 1200)
 })

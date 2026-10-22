@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { X, problems, tweetText, xLen } from './_x_spec'
 import { Expired } from './_health'
 
@@ -570,7 +570,7 @@ export async function remove(input: { post_id?: string; tweet_id?: string; chann
  * 采集：读个人主页最近的推文（浏览、点赞、回复、转发 + 引用、书签）和粉丝数，写回 social_posts 和 social_accounts。
  * 在 X 上直接发的推文也收进来（source: platform）。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [xChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'x' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -579,7 +579,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    const { user, tweets } = await readTimeline(ctx, b, ch.handle, ch.platform_uid, 10) // 最多翻 10 页（约 250 条），推文再多也不会一直滚
+    const { user, tweets } = await readTimeline(ctx, b, ch.handle, ch.platform_uid, collectPages(input, 10)) // 手动点的最多翻 10 页（约 250 条），推文再多也不会一直滚
     const loggedOut = LOGGED_OUT.test(b.url()) || !(await handleOnPage(b))
     await b.close()
     if (loggedOut) {

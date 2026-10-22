@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.21
+  zh: "定时采集默认只读最近一页，每次读几页可以在 设置 → 定时任务 里改；手动点「立即采集」照旧读全。要新版 Annulo 才能改。"
+  en: "Scheduled collection reads only the latest page by default, and the number of pages can be changed in Settings → Scheduled tasks; \"Collect now\" still reads everything. Changing it needs a newer Annulo."
 - version: 0.8.20
   zh: "小红书采集只读最近的一页笔记，不再一口气滚到底，更早笔记的数字保留上次的。"
   en: "Xiaohongshu collection reads only the latest page of notes instead of scrolling through everything; older notes keep their last numbers."

@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
 import { Expired } from './_health'
 import { assist } from './_assist'
@@ -1074,7 +1074,7 @@ export async function remove(input: { post_id?: string; urn?: string; channel_id
  * 在 Facebook 上直接发的帖子也收进来（source: platform）；发布时没认出 id 的，按正文对上补上 id。
  * 只读不写，不切换身份。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [fbChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'facebook' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -1097,7 +1097,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       }
     } else {
       const b = await openBrowser(ctx, { profile: ch.browser_profile })
-      posts = await readPosts(ctx, b, ch, 6)
+      posts = await readPosts(ctx, b, ch, collectPages(input, 6))
       const ok = await loggedIn(b)
       // 粉丝数在主页顶上（readPosts 停在渠道主页，先滚回顶部）
       if (ok) await b.eval(`window.scrollTo(0, 0)`).catch(() => {})

@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { isAssetUrl, pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { ZHIHU, bodyImages, isHtml, len, problems, segments, type Segment } from './_zhihu_spec'
 import { Expired } from './_health'
 
@@ -706,7 +706,7 @@ export async function remove(input: { post_id?: string; zhihu_id?: string; chann
  * 采集：读创作中心的文章列表（阅读、赞同、评论、收藏）和账号的粉丝数，写回 social_posts 和 social_accounts。
  * 在知乎上直接发的文章也收进来（source: platform）。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [zhihuChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'zhihu' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -722,7 +722,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       out.push({ channel: ch.name, skipped: L(ctx, '登录过期', 'Login expired') })
       continue
     }
-    const r = await readArticles(b)
+    const r = await readArticles(b, collectPages(input, 50))
     await b.close()
     if (!r.ok) throw new Error(L(ctx, '没读到知乎的文章列表，接口可能改了', "Couldn't read Zhihu's article list — the API may have changed"))
     const t = now()
@@ -749,9 +749,10 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     }
     const patch: any = { ...channelFields(u, ctx), collected_at: t }
     ctx.db.update('social_accounts', ch.id, patch)
-    // 账号当天的合计：一天一行，当天再采集就覆盖
-    const sum = (k: 'views' | 'likes' | 'comments' | 'collects' | 'shares') => r.list.reduce((s, a) => s + a[k], 0)
-    const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, posts: r.list.length, views: sum('views'), likes: sum('likes'), comments: sum('comments'), collects: sum('collects'), shares: sum('shares'), updated_at: t }
+    // 账号当天的合计：一天一行，当天再采集就覆盖。定时的只读最近几页：按表里这个账号所有已发布的文章算（这次读到的是新数字，更早的是上次的）
+    const all: any[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 1000 }).list.filter((p: any) => p.post_id)
+    const sum = (k: 'views' | 'likes' | 'comments' | 'collects' | 'shares') => all.reduce((s, p) => s + (Number(p[k]) || 0), 0)
+    const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, posts: all.length, views: sum('views'), likes: sum('likes'), comments: sum('comments'), collects: sum('collects'), shares: sum('shares'), updated_at: t }
     const row = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (row) ctx.db.update('social_daily', row.id, daily)
     else ctx.db.insert('social_daily', daily)

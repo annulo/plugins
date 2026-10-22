@@ -2,7 +2,7 @@ import { L } from './_i18n'
 import { videoCoverPatch } from './_video_cover'
 import { uploadVideoCover } from './_video_cover_upload'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
 import { Expired } from './_health'
 import { selectUpload, waitImages } from './_xhs_upload'
@@ -731,13 +731,13 @@ export async function remove(input: { post_id?: string; note_id?: string; channe
 /**
  * 采集：读笔记管理页的笔记列表（阅读、点赞、收藏、评论、分享）和首页的粉丝数，写回 social_posts 和 social_accounts。
  * 平台上直接发的笔记也收进来（source: platform）。
- * 只读打开页面时加载的第一页（最近的笔记），不往下滚：一口气滚到底读完全部像脚本，小红书发过「疑似使用三方工具」的警告。
- * 更早的笔记数字停在上次读到的；账号的合计按表里所有已发布的笔记算（读到的用新的，没读到的用上次的）。
+ * 定时任务只读前 pages 页（默认 1 页，最近的笔记）：每天一口气滚到底读完全部像脚本，小红书发过「疑似使用三方工具」的警告。
+ * 页面上手动点的（不传 pages）读到底，最多 30 页。没读到的笔记数字停在上次的；账号的合计按表里所有已发布的笔记算。
  */
 
 
 
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id
     ? [ctx.db.get('social_accounts', input.channel_id)].filter(Boolean)
     : ctx.db.query('social_accounts', { where: { type: 'xiaohongshu' }, limit: 100 }).list
@@ -757,13 +757,27 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const info = (await b.responses(PERSONAL, { min: 1, timeout: 20000 }).catch(() => []))[0]?.json?.data
-    // 笔记列表按页加载，只读第一页（见上）。页面一打开可能请求好几次（不同的 tab），停一会儿收齐，按笔记 id 去重
+    // 笔记列表按页加载：滚到底会再请求下一页，page 为 -1 表示没有更多了。
+    // 页面一打开可能就请求好几次（不同的 tab），停一会儿收齐、按笔记 id 去重；读够页数、等不到新的响应、或者 page 为 -1 就停
     b.listen(POSTED)
     await b.goto(NOTE_MANAGER)
-    await b.responses(POSTED, { min: 1, timeout: 20000 }).catch(() => [])
-    await ctx.sleep(2000 + Math.random() * 2000)
+    const pages = collectPages(input, 30)
     const byId = new Map<string, any>()
-    for (const r of await b.responses(POSTED, { min: 1, timeout: 1000 }).catch(() => [])) for (const n of r.json?.data?.notes ?? []) byId.set(n.id, n)
+    let seen = 0
+    for (let round = 0; round < pages; round++) {
+      if (!(await b.responses(POSTED, { min: seen + 1, timeout: round === 0 ? 20000 : 8000 }).catch(() => null))) break
+      await ctx.sleep(1500 + Math.random() * 2000)
+      const rs: any[] = await b.responses(POSTED, { min: seen + 1, timeout: 1000 }).catch(() => [])
+      let more = false
+      for (const r of rs.slice(seen)) {
+        const d = r.json?.data
+        for (const n of d?.notes ?? []) byId.set(n.id, n)
+        if (d && d.page !== -1) more = true
+      }
+      seen = rs.length
+      if (!more || round === pages - 1) break
+      await b.eval(`(() => { for (const e of [document.scrollingElement, ...document.querySelectorAll('*')]) if (e && e.scrollHeight > e.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(e).overflowY)) e.scrollTop = e.scrollHeight })()`)
+    }
     const notes = [...byId.values()]
     await b.close()
     const now = new Date().toISOString()

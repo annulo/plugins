@@ -270,11 +270,11 @@ export function purge(input: { post_id: string }, ctx: any) {
 }
 
 /** 采集一个账号（channel_id），或者某个平台的全部账号（type，定时任务用）。一个账号出错不影响别的 */
-export async function collect(input: { channel_id?: string; type?: string; _show_browser?: boolean }, ctx: any) {
+export async function collect(input: { channel_id?: string; type?: string; pages?: number; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   if (input?.channel_id) {
     onThisMachine(ctx, ctx.db.get('social_accounts', input.channel_id))
-    return collectOne(ctx, input.channel_id)
+    return collectOne(ctx, input.channel_id, input.pages)
   }
   if (!PLATFORMS[input?.type ?? '']) throw new Error(L(ctx, '要给出 channel_id 或 type', 'Give channel_id or type'))
   const out: any[] = []
@@ -286,7 +286,7 @@ export async function collect(input: { channel_id?: string; type?: string; _show
       continue
     }
     try {
-      out.push(...((await collectOne(ctx, ch.id))?.channels ?? []))
+      out.push(...((await collectOne(ctx, ch.id, input.pages))?.channels ?? []))
     } catch (e: any) {
       errors.push(`${ch.name}: ${e?.message ?? e}`)
     }
@@ -295,12 +295,13 @@ export async function collect(input: { channel_id?: string; type?: string; _show
   return errors.length ? { channels: out, errors } : { channels: out }
 }
 
-async function collectOne(ctx: any, channelId: string) {
+// pages：定时任务读几页（schedules/<平台>.collect.json 的 params，用户能改）；页面上手动点的不传，各平台读全（见 _snapshot.ts 的 collectPages）
+async function collectOne(ctx: any, channelId: string, pages?: number) {
   const m = platformOf(ctx, channelId)
   const ch = ctx.db.get('social_accounts', channelId)
   // 打开浏览器、翻主页要十几秒到一分钟：按钮上说清楚在做什么（各平台的 collect 自己没有进度）
   ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 Facebook API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the Facebook API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
-  const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId }, c))
+  const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId, pages }, c))
   ctx.progress({ message: L(ctx, '保存数据…', 'Saving…') })
   // 读到 0 条、但这个账号明明发过（有平台 id 的）：多半是平台的接口改名了，采集悄悄变成空的
   const got = r?.channels?.[0]

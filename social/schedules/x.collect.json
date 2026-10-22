@@ -1,9 +1,25 @@
 {
   "fn": "social/social.collect",
   "input": {
-    "type": "x"
+    "type": "x",
+    "pages": 1
   },
   "every": "1d",
   "jitter": "3h",
-  "name": "采集 X 推文数据"
+  "name": "采集 X 推文数据",
+  "params": {
+    "pages": {
+      "type": "number",
+      "min": 1,
+      "max": 10,
+      "label": {
+        "zh": "每次读几页",
+        "en": "Pages per run"
+      },
+      "hint": {
+        "zh": "只读最近发的，一页是主页往下滚一屏，约 20 多条推文。页数越多越像脚本，容易被平台警告；更早的帖子在账号卡片上点「立即采集」补全。",
+        "en": "Reads only the latest posts; a page is one screen of your profile, about 20-odd posts. More pages look more like a script and may get a platform warning; click \"Collect now\" on the account card to fill in older posts."
+      }
+    }
+  }
 }

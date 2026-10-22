@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf } from './_source'
-import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { LI, liLen, postText, problems } from './_linkedin_spec'
 import { Expired } from './_health'
 
@@ -586,7 +586,7 @@ export async function remove(input: { post_id?: string; urn?: string; channel_id
  * 采集：读自己「动态 → 帖子」里最近的帖子（点赞、评论、转发，有的话还有展示次数）和粉丝数，写回 social_posts 和 social_accounts。
  * 在 LinkedIn 上直接发的帖子也收进来（source: platform）；发布时没认出 id 的，按正文对上补上 id。
  */
-export async function collect(input: { channel_id?: string }, ctx: any) {
+export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
   const chs = input?.channel_id ? [liChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'linkedin' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
@@ -595,7 +595,7 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    const posts = await readPosts(ctx, b, ch.handle, 6)
+    const posts = await readPosts(ctx, b, ch.handle, collectPages(input, 6))
     const ok = await loggedIn(b)
     const user = ok ? await readUser(ctx, b) : null
     await b.close()
