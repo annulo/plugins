@@ -3,6 +3,7 @@
   "input": {
     "type": "xiaohongshu"
   },
-  "every": "6h",
+  "every": "1d",
+  "jitter": "3h",
   "name": "采集小红书笔记数据"
 }

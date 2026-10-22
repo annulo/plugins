@@ -34,9 +34,9 @@ X 的开放接口要付费申请，登录、发布、采集都用 Annulo 的本�
 | `social/x.remove({ post_id })` | 从 X 删除一条已发布的推文（不可恢复，只在用户明确要求时调） |
 | `social/x.collect({ channel_id? })` | 采集主页最近的推文和粉丝数；在 X 上直接发的也收进来（source: platform） |
 
-页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：排期的到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`），`social/social.collect`（`input: { type: 'x' }`）每 6 小时采集（`plugins/social/schedules/`）。
+页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：排期的到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`），`social/social.collect`（`input: { type: 'x' }`）每天采集一次（`plugins/social/schedules/`）。
 
-用户问数据（哪条浏览高、最近涨了多少）时**先读表**：定时任务每 6 小时采集一次，表里就是最新的。只有账号的 `collected_at` 超过 6 小时、或者用户明确要「现在的」数字时才调 `social/x.collect` 再读——采集要开浏览器跑半分钟，频繁刷主页还可能被平台限流。
+用户问数据（哪条浏览高、最近涨了多少）时**先读表**：定时任务每天采集一次，表里就是最新的。只有账号的 `collected_at` 超过 1 天、或者用户明确要「现在的」数字时才调 `social/x.collect` 再读——采集要开浏览器跑半分钟，频繁刷主页还可能被平台限流。
 
 ## 写推文
 

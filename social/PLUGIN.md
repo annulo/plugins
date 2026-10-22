@@ -110,7 +110,8 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 ## 定时任务
 
 排期发布一个：`publish.json` 用 Annulo 的 `due`（按 `social_posts.scheduled_at` 到点，对每条 `status = scheduled` 的帖子调一次 `social.publishScheduled`），不轮询。
-每个平台一个 `<平台>.collect`（每 6 小时采集，顺带更新登录状态 `login_status`）。没有这个平台的账号时什么都不做。
+每个平台一个 `<平台>.collect`（每天采集一次，顺带更新登录状态 `login_status`）。没有这个平台的账号时什么都不做。
+采集是登录用户的账号去看平台页面，太规律会被平台当成脚本（小红书发过「疑似使用三方工具」的警告）：默认最多一天一次，`jitter` 让每次在前后 3 小时内随机（Annulo 能力版本 55 起认，老版本照常准点跑）；用户可以在 设置 → 定时任务 里自己改。不要再调密。
 
 ## 平台改版了
 

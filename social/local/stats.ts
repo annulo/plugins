@@ -86,7 +86,7 @@ export function summary(input: { channel_id: string; days?: number; start?: stri
     ? L(ctx, `近 ${days} 天涨了多少：最近一次采集减去 ${start} 之前最后一次采集。`, `Growth over the last ${days} days: the latest collection minus the last one before ${start}.`)
     : daily.length
       ? L(ctx, `每天的数据从 ${daily[0].date} 开始记录，还不够算近 ${days} 天的增量，这里是这段时间发的笔记的累计值。`, `Daily data starts on ${daily[0].date}, not enough for ${days}-day growth, so these are totals for posts published in this period.`)
-      : L(ctx, '每天的数据还没开始记录（定时每 6 小时采集一次），这里是这段时间发的笔记的累计值。', "Daily data isn't being recorded yet (collection runs every 6 hours), so these are totals for posts published in this period.")
+      : L(ctx, '每天的数据还没开始记录（定时每天采集一次），这里是这段时间发的笔记的累计值。', "Daily data isn't being recorded yet (collection runs once a day), so these are totals for posts published in this period.")
   return {
     start,
     has_base: hasBase,

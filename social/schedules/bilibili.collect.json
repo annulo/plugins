@@ -3,6 +3,7 @@
   "input": {
     "type": "bilibili"
   },
-  "every": "6h",
+  "every": "1d",
+  "jitter": "3h",
   "name": "采集 B 站视频数据"
 }

@@ -33,8 +33,8 @@ LinkedIn 的开放接口要申请合作伙伴权限，登录、发布、采集�
 | `social/linkedin.remove({ post_id })` | 从 LinkedIn 删除一条已发布的帖子（不可恢复，只在用户明确要求时调） |
 | `social/linkedin.collect({ channel_id? })` | 采集自己「动态 → 帖子」里最近的帖子和粉丝数；在 LinkedIn 上直接发的也收进来（source: platform） |
 
-页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：排期的到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`），`social/social.collect`（`input: { type: 'linkedin' }`）每 6 小时采集（`plugins/social/schedules/`）。
-用户问数据时**先读表**；只有 `collected_at` 超过 6 小时或用户明确要「现在的」数字时才调 `social/linkedin.collect`。
+页面按钮调的是 `social.*`（`plugins/social/local/social.ts`），按账号的平台转到这里。定时任务：排期的到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`），`social/social.collect`（`input: { type: 'linkedin' }`）每天采集一次（`plugins/social/schedules/`）。
+用户问数据时**先读表**；只有 `collected_at` 超过 1 天或用户明确要「现在的」数字时才调 `social/linkedin.collect`。
 
 ## 写帖子
 

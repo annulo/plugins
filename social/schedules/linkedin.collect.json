@@ -3,6 +3,7 @@
   "input": {
     "type": "linkedin"
   },
-  "every": "6h",
+  "every": "1d",
+  "jitter": "3h",
   "name": "采集 LinkedIn 帖子数据"
 }
