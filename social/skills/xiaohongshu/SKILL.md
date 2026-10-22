@@ -40,7 +40,7 @@ pending_review ─通过─▶ approved ─立即发布─▶ publishing ─▶ 
 | `social/xhs.collect({ channel_id? })` | 采集：笔记列表的互动数据、粉丝数写回表里；平台上直接发的笔记也收进来 |
 | `social/social.purge({ post_id })` | 彻底删掉一条已删除 / 已退回的记录和它每天的互动数据（页面上的「删除记录」）。还在平台上的不能删，先 `social/xhs.remove`；只在用户明确要求时调 |
 
-定时任务：排期的笔记到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`）；`schedules/xhs.collect.json` 每天采集一次（`social/social.collect`，`input: { type: 'xiaohongshu' }`）。页面上的数字都读表，不实时请求小红书。
+定时任务：排期的笔记到点由 `schedules/publish.json` 发（按 `scheduled_at`，调 `social/social.publishScheduled`）；`schedules/xhs.collect.json` 每天采集一次（`social/social.collect`，`input: { type: 'xiaohongshu' }`）。采集只读笔记管理的第一页（最近的笔记），更早的笔记数字停在上次读到的；不要为了读全而写滚动翻页的脚本，那正是小红书判「疑似使用三方工具」的样子。页面上的数字都读表，不实时请求小红书。
 
 用户问数据（哪条浏览高、最近涨了多少）时**先读表**：定时任务每天采集一次，表里就是最新的。只有账号的 `collected_at` 超过 1 天、或者用户明确要「现在的」数字时才调 `social/xhs.collect` 再读——采集要开浏览器跑半分钟，频繁刷主页还可能被平台限流。
 

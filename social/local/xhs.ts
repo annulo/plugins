@@ -731,6 +731,8 @@ export async function remove(input: { post_id?: string; note_id?: string; channe
 /**
  * 采集：读笔记管理页的笔记列表（阅读、点赞、收藏、评论、分享）和首页的粉丝数，写回 social_posts 和 social_accounts。
  * 平台上直接发的笔记也收进来（source: platform）。
+ * 只读打开页面时加载的第一页（最近的笔记），不往下滚：一口气滚到底读完全部像脚本，小红书发过「疑似使用三方工具」的警告。
+ * 更早的笔记数字停在上次读到的；账号的合计按表里所有已发布的笔记算（读到的用新的，没读到的用上次的）。
  */
 
 
@@ -755,25 +757,13 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
       continue
     }
     const info = (await b.responses(PERSONAL, { min: 1, timeout: 20000 }).catch(() => []))[0]?.json?.data
-    // 笔记列表按页加载：滚到底会再请求下一页，page 为 -1 表示没有更多了
+    // 笔记列表按页加载，只读第一页（见上）。页面一打开可能请求好几次（不同的 tab），停一会儿收齐，按笔记 id 去重
     b.listen(POSTED)
     await b.goto(NOTE_MANAGER)
-    // 页面一打开可能就请求好几次（不同的 tab），按笔记 id 去重；滚到底会再请求下一页，等不到新的响应、或者 page 为 -1 就停
+    await b.responses(POSTED, { min: 1, timeout: 20000 }).catch(() => [])
+    await ctx.sleep(2000 + Math.random() * 2000)
     const byId = new Map<string, any>()
-    let seen = 0
-    for (let round = 0; round < 30; round++) {
-      const rs: any[] = await b.responses(POSTED, { min: seen + 1, timeout: round === 0 ? 20000 : 8000 }).catch(() => null)
-      if (!rs) break
-      let more = false
-      for (const r of rs.slice(seen)) {
-        const d = r.json?.data
-        for (const n of d?.notes ?? []) byId.set(n.id, n)
-        if (d && d.page !== -1) more = true
-      }
-      seen = rs.length
-      if (!more) break
-      await b.eval(`(() => { for (const e of [document.scrollingElement, ...document.querySelectorAll('*')]) if (e && e.scrollHeight > e.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(e).overflowY)) e.scrollTop = e.scrollHeight })()`)
-    }
+    for (const r of await b.responses(POSTED, { min: 1, timeout: 1000 }).catch(() => [])) for (const n of r.json?.data?.notes ?? []) byId.set(n.id, n)
     const notes = [...byId.values()]
     await b.close()
     const now = new Date().toISOString()
@@ -804,11 +794,13 @@ export async function collect(input: { channel_id?: string }, ctx: any) {
     if (info) Object.assign(patch, { followers: info.fans_count ?? info.grow_info?.fans_count, name: info.name || ch.name, avatar: info.avatar || ch.avatar })
     ctx.db.update('social_accounts', ch.id, patch)
     // 账号当天的合计：一天一行，当天再采集就覆盖。时间段的增量 = 期末这行 − 期初前一天那行
-    const sum = (k: 'views' | 'likes' | 'comments' | 'collects' | 'shares', f: string) => notes.reduce((t, n) => t + (Number(n[f]) || 0), 0)
+    // 只读了第一页：按表里这个账号所有已发布的笔记算（刚更新过的是新数字，更早的是上次读到的）
+    const all: any[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 1000 }).list.filter((p: any) => p.post_id)
+    const sum = (k: 'views' | 'likes' | 'comments' | 'collects' | 'shares') => all.reduce((t, p) => t + (Number(p[k]) || 0), 0)
     const daily = {
-      channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, posts: notes.length,
-      views: sum('views', 'view_count'), likes: sum('likes', 'likes'), comments: sum('comments', 'comments_count'),
-      collects: sum('collects', 'collected_count'), shares: sum('shares', 'shared_count'), updated_at: now,
+      channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, posts: all.length,
+      views: sum('views'), likes: sum('likes'), comments: sum('comments'),
+      collects: sum('collects'), shares: sum('shares'), updated_at: now,
     }
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)

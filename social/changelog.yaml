@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.20
+  zh: "小红书采集只读最近的一页笔记，不再一口气滚到底，更早笔记的数字保留上次的。"
+  en: "Xiaohongshu collection reads only the latest page of notes instead of scrolling through everything; older notes keep their last numbers."
 - version: 0.8.19
   zh: "各平台数据改成每天采集一次，时间前后随机，不再每 6 小时准点去看，减少被平台当成脚本。"
   en: "Platform stats are now collected once a day at a randomized time instead of exactly every 6 hours, so it looks less like a script to the platforms."
