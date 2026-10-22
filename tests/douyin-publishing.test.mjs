@@ -205,6 +205,18 @@ test('handing over: the window is shown, the person fixes it and publishes, and 
     assert.equal(ctx.rows.get('post').post_url,'https://www.douyin.com/note/1234567890123456789')
   } finally { await page.close() }
 })
+test('manual: fills and checks everything, leaves 发布 to the person, and records the post once they publish', async () => {
+  const ctx = context({body:'Body text'}), {page,b}=await fixture(ctx,{slate:true})
+  let shown = 0
+  b.show = async () => { shown++; setTimeout(()=>page.evaluate(()=>document.getElementById('submit').click()),50) }
+  try {
+    // 发布按钮被点之前 show 必须已经调过：脚本自己没点
+    await page.exposeFunction('noteSubmit', () => { assert.equal(shown,1) })
+    await dy.publish({post_id:'post',manual:true},ctx)
+    assert.equal(shown,1)
+    assert.equal(ctx.rows.get('post').status,'published')
+  } finally { await page.close() }
+})
 test('dry run fills and checks everything, never clicks 发布 and leaves the post as it was', async () => {
   const ctx = context({body:'Body',tags:'["one"]'}), {page,b}=await fixture(ctx,{slate:true,topics:['one']})
   try {

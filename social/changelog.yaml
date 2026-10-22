@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.18
+  zh: "B站 投稿能用自己的封面；小红书、抖音、B站 可以「填好交给我」：填好不发，你调好封面、合集再自己点发布。"
+  en: "Bilibili uploads can use your own cover; Xiaohongshu, Douyin and Bilibili can hand the filled-in form to you so you adjust the cover or collection and publish yourself."
 - version: 0.8.17
   zh: "抖音、B站、知乎、小红书发帖更稳：标题、正文、视频、封面由程序原样填入，不再经 AI 转抄。要新版 Annulo。"
   en: "More reliable posting on Douyin, Bilibili, Zhihu and Xiaohongshu: titles, text, videos and covers are put in exactly by the app instead of being retyped by the AI. Needs a newer Annulo."

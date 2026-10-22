@@ -1,6 +1,7 @@
 import { L } from './_i18n'
 import { PLATFORMS } from './_platforms'
 import { isAssetUrl } from './_source'
+import { FIELDS } from './_fields'
 import { list as healthList, record, showBrowserIf, track } from './_health'
 
 // 手机上打开后台（不在 Annulo 里）时这几个也能用：shuttle push 会把它们打包成站点 Func，只用 ctx.db
@@ -203,11 +204,13 @@ function channelOfPost(ctx: any, postId: string) {
 }
 
 // 发布、删除、采集：页面上按住 Alt 点（参数带 _show_browser），浏览器在前台打开，调试时看得见每一步（_health.ts 的 showBrowserIf）
-export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; _show_browser?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; confirm_unpublished?: boolean; check_only?: boolean; manual?: boolean; _show_browser?: boolean }, ctx: any) {
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
   if (input.check_only && (ch?.type !== 'facebook' || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
+  // 填好交给我：只有能交出浏览器窗口的平台做（FIELDS 的 handOver）；别的平台不认这个参数，会照常直接发出去，所以拦下
+  if (input.manual && !FIELDS[ch?.type]?.handOver) throw new Error(L(ctx, '这个平台不能「填好交给我」，没有发布', "This platform can't hand the filled form over to you; nothing was published"))
   onThisMachine(ctx, ch)
   const r = await track(ctx, ch, 'publish', (c) => m.publish(input, c), input.post_id)
   claim(ctx, ch)

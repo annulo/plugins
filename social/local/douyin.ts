@@ -539,8 +539,10 @@ async function createResult(b: any): Promise<{ code: number; message: string; id
  *
  * dry_run：演练，走完上传、填写、核对，停在点「发布」之前，返回 { dry_run, need, warnings, snapshot }（need 是必须的项哪些不对，snapshot 是那时页面的现场目录），
  * 不改这条的状态、不交给用户。改脚本后在真实账号上验证、自检提前发现改版都用它，不用真发。
+ * manual：填好交给用户（用户在发布弹窗里选的）：照常上传、填写、核对，不点「发布」，把窗口调到前台交给用户，
+ * 用户自己调封面、选合集这些我们没做的，点「发布」后这里照常记下（最多等 30 分钟）。调不到前台的报错。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean; manual?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条作品：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -649,6 +651,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
           if (issues.length) return `Not published: ${issues.join('; ')}.`
           st.verified = true
           if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点发布', 'Dry run: everything checked, not published') }
+          if (input.manual) return { finish: L(ctx, '都填好了，交给用户发', 'Everything is filled in; handing over to the user') }
           await b.click(at(a.button_id))
           return result(90000)
         },
@@ -723,18 +726,22 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       return found ? done(found, { reviewing: true, ...extra }) : done('', { unverified: true, ...extra })
     }
     if (st.res?.code === 0 || st.okPage) return published()
-    // AI 没做完或者抖音不收：把窗口交给用户，等他点发布（最多 15 分钟）
-    const why = [r.reason || st.said || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
+    // AI 没做完、抖音不收，或者用户选了填好交给他：把窗口交给用户，等他点发布（最多 15 分钟，交给他的 30 分钟）
+    const handed = input.manual && st.verified
+    const why = handed ? [] : [r.reason || st.said || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
     const shown = typeof b.show === 'function' && (await b.show().then(() => true, () => false))
-    if (!shown) throw stuck(why, false)
-    ctx.progress({ message: L(ctx, `要你在弹出的抖音窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Douyin window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
-    for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+    if (!shown) throw stuck(why.length ? why : [L(ctx, '要交给你发，但窗口调不到前台', "It's meant for you to publish, but the window couldn't be brought up")], false)
+    ctx.progress({ message: handed
+      ? L(ctx, '都填好了，在弹出的抖音窗口里看一遍、调好封面和合集这些，点「发布」，发出去这里会自动记下', "Everything is filled in: check it in the Douyin window that opened, adjust the cover, collection and so on, then click 发布 (Publish); it's recorded here once it goes out")
+      : L(ctx, `要你在弹出的抖音窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Douyin window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+    const minutes = input.manual ? 30 : 15
+    for (const end = Date.now() + minutes * 60_000; Date.now() < end; ) {
       await ctx.sleep(2000)
       st.res = await createResult(b)
       if (st.res?.code === 0) return published()
       if (/\/content\/manage/.test(String(b.url() ?? '')) || TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) return published()
     }
-    throw stuck([...why, L(ctx, '15 分钟内没等到你发布', 'No publish within 15 minutes')], true)
+    throw stuck([...why, L(ctx, `${minutes} 分钟内没等到你发布`, `No publish within ${minutes} minutes`)], true)
   } catch (e: any) {
     const msg = e?.message ?? String(e)
     if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })

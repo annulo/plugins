@@ -7,11 +7,11 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 const require = createRequire(import.meta.url), { build } = require(process.env.ESBUILD_MODULE || 'esbuild'), { chromium } = require('playwright')
 const dir = mkdtempSync(join(tmpdir(), 'video-cover-test-')), modules = {}
-for (const name of ['_content', 'xhs', 'douyin', '_video_cover_upload', 'social']) {
+for (const name of ['_content', 'xhs', 'douyin', 'bilibili', '_video_cover_upload', 'social']) {
   await build({ entryPoints: [`social/local/${name}.ts`], bundle: true, platform: 'node', format: 'esm', outfile: join(dir, name+'.mjs'), logLevel: 'silent',
     plugins: name !== 'social' ? [] : [{ name: 'transport-fixture', setup(b) {
       b.onResolve({ filter: /^\.\/_platforms$/ }, () => ({ path: 'platforms', namespace: 'fixture' }))
-      b.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const PLATFORMS = Object.fromEntries(['xiaohongshu','douyin'].map(type => [type,{check:()=>({problems:[]}),publish:(input,ctx)=>{ctx.sent.push({...ctx.db.get('social_posts',input.post_id)});return {post_id:'remote-id'}}}]))` }))
+      b.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `export const PLATFORMS = Object.fromEntries(['xiaohongshu','douyin','bilibili'].map(type => [type,{check:()=>({problems:[]}),publish:(input,ctx)=>{ctx.sent.push({...ctx.db.get('social_posts',input.post_id)});return {post_id:'remote-id'}}}]))` }))
     } }] })
   modules[name] = await import(pathToFileURL(join(dir,name+'.mjs')))
 }
@@ -28,18 +28,20 @@ function fixture(platform='xiaohongshu') {
 }
 test('only supported video destinations receive covers; image ordering remains unchanged',()=>{
   const c={type:'video',title:'Title',body:'Body',video,video_cover:cover,images:['https://test/first.png']}
-  for(const platform of ['xiaohongshu','douyin']) assert.equal(modules._content.fromContent(c,platform).video_cover,cover)
-  for(const platform of ['x','bilibili','youtube','instagram','facebook']) assert.equal(modules._content.fromContent(c,platform).video_cover,'')
+  for(const platform of ['xiaohongshu','douyin','bilibili']) assert.equal(modules._content.fromContent(c,platform).video_cover,cover)
+  for(const platform of ['x','youtube','instagram','facebook']) assert.equal(modules._content.fromContent(c,platform).video_cover,'')
   const post=modules._content.fromContent({...c,type:'post'},'xiaohongshu')
   assert.equal(post.video_cover,'');assert.equal(post.video,'');assert.deepEqual(JSON.parse(post.images),c.images)
 })
-for(const [platform,name] of [['xiaohongshu','xhs'],['douyin','douyin']]) {
+for(const [platform,name] of [['xiaohongshu','xhs'],['douyin','douyin'],['bilibili','bilibili']]) {
   test(`${platform}: partial edits keep covers, replacement and removal are explicit`,()=>{
     const {ctx,tables}=fixture(platform), m=modules[name]
-    const input={article_id:'article',channel_id:'account',title:'Title',body:'Body',video,video_cover:cover}
+    // B站 每次存都要带视频、至少一个标签
+    const must=platform==='bilibili'?{video,tags:['tag']}:{}
+    const input={article_id:'article',channel_id:'account',title:'Title',body:'Body',video,video_cover:cover,...must}
     const saved=m.save(input,ctx), id=saved.post_id
     assert.deepEqual(saved.problems,[]);assert.equal(tables.social_posts[0].video_cover,cover)
-    m.save({article_id:'article',channel_id:'account',post_id:id,title:'Edited',body:'Body'},ctx)
+    m.save({article_id:'article',channel_id:'account',post_id:id,title:'Edited',body:'Body',...must},ctx)
     assert.equal(tables.social_posts[0].video_cover,cover)
     m.save({...input,post_id:id,video_cover:'https://assets.test/new.png'},ctx)
     assert.throws(()=>m.save({...input,post_id:id,video_cover:'file:///private/image.png'},ctx),/Library/)

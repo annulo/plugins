@@ -9,8 +9,8 @@ import { assist } from './_assist'
 const EDITOR = '[data-annulo-cover-editor="true"]'
 const INPUT = '[data-annulo-cover-input="true"]'
 const AVOID = ['发布', '发布笔记', '暂存离开', '完成', '确定', '确认', 'AI生成封面', 'AI封面', 'AI 智能封面', '设置横封面']
-// 点了「完成」平台又追问的（2026-10 抖音：「设置横封面获更多流量」）：选不改封面的那个
-const DISMISS = ['暂不设置', '以后再说', '跳过', '暂不', '知道了']
+// 点了「完成」平台又追问的（2026-10 抖音：「设置横封面获更多流量」；B站：「是否将4:3封面的改动同步到16:9」）：选不改封面的那个
+const DISMISS = ['暂不设置', '以后再说', '跳过', '暂不', '知道了', '不同步，手动编辑']
 const CLOSED = '[data-annulo-cover-closed]'
 
 function inspect(action: string, entry = '') {
@@ -42,7 +42,7 @@ function inspect(action: string, entry = '') {
       marked[0].click()
       return { opened: true }
     }
-    const buttons = exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面']).filter(e => {
+    const buttons = exact(document.body, ['设置封面', '选择封面', '编辑封面', '修改封面', '添加封面']).filter(e => {
       // 后台窗口小，封面区常在屏幕外，elementFromPoint 只认看得见的地方：先滚到中间
       e.scrollIntoView({ block: 'center' })
       const r = e.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)

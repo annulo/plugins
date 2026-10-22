@@ -32,6 +32,10 @@ export type PostFields = {
   cover: boolean
   /** 支持上传独立的视频封面 */
   videoCover?: boolean
+  /** 视频封面的比例 [宽, 高]：平台按它裁，不是这个比例的图会被裁掉一块（发布弹窗提示、能当场裁） */
+  coverRatio?: [number, number]
+  /** 能「填好交给我」：脚本在浏览器里填好不点发布，窗口交给用户自己调（封面、合集…）、自己点发布（publish 的 manual） */
+  handOver?: boolean
   /** 分区（category），B 站投稿要选 */
   category: boolean
   /** 建议的发布频率（只是建议，发布时不拦）：两条至少隔几分钟（0 是不提）、一天最多几条。数字来自各平台的 spec */
@@ -46,9 +50,9 @@ export const FIELDS: Record<string, PostFields> = {
   facebook: { title: 'note', titleMax: 30, body: 'text', bodyMax: FB.textMax, len: (b, t) => chars(fbText(b, t)), tags: FB.tagsMax, images: FB.imagesMax, video: 'optional', cover: false, category: false, rate: { minutes: (FB as any).minIntervalMinutes ?? 0, daily: FB.dailyMax } },
   instagram: { title: 'note', titleMax: 30, body: 'text', bodyMax: IG.textMax, len: (b, t) => chars(igText(b, t)), tags: IG.tagsMax, images: IG.imagesMax, video: 'optional', cover: true, category: false, rate: { minutes: (IG as any).minIntervalMinutes ?? 0, daily: IG.dailyMax } },
   youtube: { title: 'publish', titleMax: YT.titleMax, body: 'text', bodyMax: YT.textMax, len: (b, t) => chars(ytText(b, t)), tags: YT.tagsMax, images: 0, video: 'only', cover: false, category: false, rate: { minutes: (YT as any).minIntervalMinutes ?? 0, daily: YT.dailyMax } },
-  xiaohongshu: { title: 'publish', titleMax: XHS.titleMax, body: 'text', bodyMax: XHS.bodyMax, len: (b) => chars(b), tags: XHS.tagsMax, images: XHS.imagesMax, video: 'optional', videoCover: true, cover: true, category: false, rate: { minutes: (XHS as any).minIntervalMinutes ?? 0, daily: XHS.dailyMax } },
-  douyin: { title: 'publish', titleMax: DOUYIN.titleMax, body: 'text', bodyMax: DOUYIN.descMax, len: (b, t) => chars(douyinDesc(b, t)), tags: DOUYIN.tagsMax, images: DOUYIN.imagesMax, video: 'optional', videoCover: true, cover: false, category: false, rate: { minutes: (DOUYIN as any).minIntervalMinutes ?? 0, daily: DOUYIN.dailyMax } },
-  bilibili: { title: 'publish', titleMax: BILI.titleMax, body: 'text', bodyMax: BILI.descMax, len: (b, t) => chars(biliDesc(b, t)), tags: BILI.tagsMax, images: 0, video: 'only', cover: false, category: true, rate: { minutes: (BILI as any).minIntervalMinutes ?? 0, daily: BILI.dailyMax } },
+  xiaohongshu: { title: 'publish', titleMax: XHS.titleMax, body: 'text', bodyMax: XHS.bodyMax, len: (b) => chars(b), tags: XHS.tagsMax, images: XHS.imagesMax, video: 'optional', videoCover: true, coverRatio: [3, 4], handOver: true, cover: true, category: false, rate: { minutes: (XHS as any).minIntervalMinutes ?? 0, daily: XHS.dailyMax } },
+  douyin: { title: 'publish', titleMax: DOUYIN.titleMax, body: 'text', bodyMax: DOUYIN.descMax, len: (b, t) => chars(douyinDesc(b, t)), tags: DOUYIN.tagsMax, images: DOUYIN.imagesMax, video: 'optional', videoCover: true, coverRatio: [3, 4], handOver: true, cover: false, category: false, rate: { minutes: (DOUYIN as any).minIntervalMinutes ?? 0, daily: DOUYIN.dailyMax } },
+  bilibili: { title: 'publish', titleMax: BILI.titleMax, body: 'text', bodyMax: BILI.descMax, len: (b, t) => chars(biliDesc(b, t)), tags: BILI.tagsMax, images: 0, video: 'only', videoCover: true, coverRatio: [4, 3], handOver: true, cover: false, category: true, rate: { minutes: (BILI as any).minIntervalMinutes ?? 0, daily: BILI.dailyMax } },
   zhihu: { title: 'publish', titleMax: ZHIHU.titleMax, body: 'rich', bodyMax: 50000, len: (b) => chars(htmlText(b).replace(/\s+/g, '')), tags: ZHIHU.tagsMax, images: 0, cover: false, category: false, rate: { minutes: (ZHIHU as any).minIntervalMinutes ?? 0, daily: ZHIHU.dailyMax } },
 }
 

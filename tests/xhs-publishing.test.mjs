@@ -147,6 +147,29 @@ test('handing over: the window is shown, the person publishes, and the note is r
     assert.equal(ctx.rows.get('post').status, 'published')
   } finally { await page.close() }
 })
+test('manual: fills and checks everything, leaves 发布 to the person, and records the note once they publish', async () => {
+  const ctx = context(), { page, b } = await fixture(ctx)
+  let shown = 0, scripted = false
+  // 「发布」只有用户点（show 之后），脚本自己没点过
+  b.show = async () => { shown++; setTimeout(() => page.evaluate(() => { window.submitted = true }), 50) }
+  const click = b.click
+  b.click = async target => { if (target?.text === '发布') scripted = true; return click(target) }
+  try {
+    const r = await xhs.publish({ post_id: 'post', manual: true }, ctx)
+    assert.equal(shown, 1)
+    assert.equal(scripted, false)
+    assert.equal(r.post_id, '6ad754fe000000002803ab2b')
+    assert.equal(ctx.rows.get('post').status, 'published')
+  } finally { await page.close() }
+})
+test('manual without a way to show the window fails and never clicks 发布', async () => {
+  const ctx = context(), { page } = await fixture(ctx)
+  try {
+    await assert.rejects(xhs.publish({ post_id: 'post', manual: true }, ctx), /window/)
+    assert.equal(await page.evaluate(() => window.submitted), false)
+    assert.equal(ctx.rows.get('post').status, 'failed')
+  } finally { await page.close() }
+})
 test('an explicit platform rejection stays failed', async () => {
   const ctx = context(), { page } = await fixture(ctx, { rejection: true })
   try {

@@ -39,7 +39,7 @@
 | 函数 | 做什么 |
 |---|---|
 | `social.login({ type })` / `social.login({ channel_id })` | 添加账号（弹出浏览器让用户登录，登录成功写进 `social_accounts`）/ 重新登录 |
-| `social.publish({ post_id })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开 |
+| `social.publish({ post_id, manual? })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开。`manual: true` 是「填好交给我」：在浏览器里填好、核对，不点发布，窗口交给用户自己调（封面、合集…）、自己发，发出去照常记下（最多等 30 分钟）；只有 `FIELDS.handOver` 的平台（小红书、抖音、B站）能用，别的平台报错不发，排期的不要用 |
 | `social.remove({ post_id })` | 从平台删除 |
 | `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
@@ -127,4 +127,4 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 
 Facebook API comment reading: `social/facebook.comments({ post_id, after? })` reads a published local post record belonging to its connected Page. Returns `{ comments: [{ id?, message, created_time }], next_cursor }`, newest first (25 per page, including replies). Read only; no author profiles or persistent comment storage. Requires Page read permissions. Templates provide the comment dialog.
 
-视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音使用（`FIELDS.videoCover`）；其他平台不传。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。
+视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音、B站 使用（`FIELDS.videoCover`）；其他平台不传。比例看 `FIELDS.coverRatio`（小红书、抖音 3:4，B站 4:3），不是这个比例平台会裁，模板发布前提示、能当场裁。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。
