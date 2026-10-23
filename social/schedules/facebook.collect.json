@@ -4,6 +4,16 @@
     "type": "facebook",
     "pages": 1
   },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "facebook"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
   "at": "14:00",
   "jitter": "3h",
   "name": "采集 Facebook 帖子数据",

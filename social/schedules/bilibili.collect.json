@@ -4,6 +4,16 @@
     "type": "bilibili",
     "pages": 1
   },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "bilibili"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
   "at": "14:00",
   "jitter": "3h",
   "name": "采集 B 站视频数据",

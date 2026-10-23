@@ -3,6 +3,16 @@
   "input": {
     "type": "youtube"
   },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "youtube"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
   "at": "14:00",
   "jitter": "3h",
   "name": "采集 YouTube 视频数据"

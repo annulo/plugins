@@ -4,6 +4,16 @@
     "type": "zhihu",
     "pages": 1
   },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "zhihu"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
   "at": "14:00",
   "jitter": "3h",
   "name": "采集知乎文章数据",

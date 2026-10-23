@@ -4,6 +4,16 @@
     "type": "xiaohongshu",
     "pages": 1
   },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "xiaohongshu"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
   "at": "14:00",
   "jitter": "3h",
   "name": "采集小红书笔记数据",
