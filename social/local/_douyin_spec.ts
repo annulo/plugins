@@ -21,8 +21,8 @@ export function descText(body: string, tags?: string[]) {
   return [String(body ?? '').trim(), (tags ?? []).map((t) => '#' + t).join(' ')].filter(Boolean).join('\n')
 }
 
-/** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件 */
-export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)\S+/.test(String(v ?? '').trim())
+/** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件、内容文件夹里文件的引用（ctx.fs.ref 给的 folder:… / work:…） */
+export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:|folder:|work:)\S+/.test(String(v ?? '').trim())
 
 /** 检查必填内容和素材；标题、简介超长直接拦（抖音的输入框会截断）。 */
 export function problems(d: { title?: string; body?: string; tags?: string[]; video?: string; video_cover?: string; images?: string[] }, ctx?: any): string[] {
@@ -43,6 +43,6 @@ export function problems(d: { title?: string; body?: string; tags?: string[]; vi
     if (!isVideoRef(video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (!images.length) out.push(L(ctx, '还没选素材：图文至少添加一张图片，或上传本机视频、从资料库选视频', 'No media yet: add at least one image, upload a video, or pick a video from the Library'))
   if (images.length > DOUYIN.imagesMax) out.push(L(ctx, `图片 ${images.length} 张，最多 ${DOUYIN.imagesMax} 张`, `${images.length} images; max ${DOUYIN.imagesMax}`))
-  if (images.some(u => !/^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/)\S+$/.test(String(u).trim()))) out.push(L(ctx, '图片要使用资料库地址或本机上传的图片', 'Use Library image URLs or locally uploaded images'))
+  if (images.some(u => !/^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:|folder:|work:)\S+$/.test(String(u).trim()))) out.push(L(ctx, '图片要使用资料库地址或本机上传的图片', 'Use Library image URLs or locally uploaded images'))
   return out
 }

@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { PLATFORMS } from './_platforms'
-import { isAssetUrl } from './_source'
+import { fileRefProblems, isAssetUrl } from './_source'
 import { FIELDS } from './_fields'
 import { list as healthList, record, showBrowserIf, track } from './_health'
 
@@ -237,6 +237,18 @@ export async function publishScheduled(input: { post_id: string }, ctx: any) {
   const ch = ctx.db.get('social_accounts', p.channel_id)
   const other = ch && elsewhere(ctx, ch)
   if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
+  // 要发的文件是内容文件夹里的（引用，不是复制的一份）：到点先看还在不在、排期以后改过没有。改过了不自己发：记成失败写明原因，
+  // 用户在页面上看过、点「重发」就发现在的版本（重发走 publish，不再查）
+  const files = fileRefProblems(p, ctx)
+  const why = files.missing.length
+    ? L(ctx, `要发的文件找不到了：${files.missing.join('、')}`, `Files to publish are gone: ${files.missing.join(', ')}`)
+    : files.changed.length
+      ? L(ctx, `排期以后改过了：${files.changed.join('、')}。看过没问题点「重发」，发现在的版本`, `Changed since scheduling: ${files.changed.join(', ')}. Check it, then Retry to publish the current version`)
+      : ''
+  if (why) {
+    ctx.db.update('social_posts', p.id, { status: 'failed', error: why, updated_at: new Date().toISOString() })
+    return { failed: why }
+  }
   try {
     const r: any = await publish({ post_id: p.id }, ctx)
     return { published: r?.post_id }

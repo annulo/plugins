@@ -22,8 +22,8 @@ export function postText(body: string, tags: string[]) {
   return withTags(body, tags) // 正文里已经有的话题不重复接（_source.ts）
 }
 
-/** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件 */
-export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:)\S+/.test(String(v ?? '').trim())
+/** 视频字段是不是能直接交给 b.upload 的：http(s) 地址、本机上传的 /_annulo/uploaded/…，或者 local:<名字> 的本机文件、内容文件夹里文件的引用（ctx.fs.ref 给的 folder:… / work:…） */
+export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:|folder:|work:)\S+/.test(String(v ?? '').trim())
 
 /** 检查必填内容和素材；暂不按字符数拦截，平台常量仅供参考。 */
 export function problems(d: { body?: string; tags?: string[]; images?: string[]; video?: string }, ctx?: any): string[] {

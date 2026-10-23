@@ -5,8 +5,27 @@
 
 /** 能交给 b.upload 的素材地址：http(s)，或离线项目本机上传的 /_annulo/uploaded/…（不带端口，Annulo 能力版本 33 起） */
 export const isAssetUrl = (u: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/)\S+$/.test(String(u ?? '').trim())
-/** 视频封面：资料库地址，或本机文件 local:<name>（自媒体内容文件夹里的图发布时存成本机文件）；发布时原样交给 b.upload */
-export const isCoverRef = (u: any) => isAssetUrl(u) || /^local:[0-9a-f]{32}\.\w+$/.test(String(u ?? '').trim())
+/** 这台电脑上的文件：本机文件 local:<name>（老写法：发布时复制一份），或工作目录里文件的引用（ctx.fs.ref 给的 folder:<文件夹 id>/<路径>#<版本>、work:<路径>#<版本>，
+ *  自媒体内容文件夹里的成片、封面，Annulo 能力版本 62 起）；都原样交给 b.upload */
+export const isFileRef = (u: any) => /^(local:[0-9a-f]{32}\.\w+|folder:f[0-9a-f]{12}\/\S+|work:\S+)$/.test(String(u ?? '').trim())
+/** 视频封面：资料库地址，或这台电脑上的文件（isFileRef）；发布时原样交给 b.upload */
+export const isCoverRef = (u: any) => isAssetUrl(u) || isFileRef(u)
+
+/** 帖子要发的文件里，工作目录引用的那些现在什么样（排期的到点发之前看）：{ missing: [路径], changed: [路径] }；老 Annulo 没有 ctx.fs.resolve 就都当没事 */
+export function fileRefProblems(post: any, ctx: any): { missing: string[]; changed: string[] } {
+  const out = { missing: [] as string[], changed: [] as string[] }
+  if (!ctx.fs?.resolve) return out
+  let images: string[] = []
+  try { images = JSON.parse(post?.images || '[]') } catch {}
+  for (const ref of [post?.video, post?.video_cover, ...images].map((x) => String(x ?? '').trim()).filter((x) => /^(folder|work):/.test(x))) {
+    let st: any
+    try { st = ctx.fs.resolve(ref) } catch { continue }
+    const name = st?.path || ref.replace(/^(folder|work):/, '').split('#')[0]
+    if (st?.missing) out.missing.push(name)
+    else if (st?.changed) out.changed.push(name)
+  }
+  return out
+}
 
 /**
  * save 的 post_images：这条帖子要配的图（从内容的 images 里挑、按顺序），用户让「图都配上」「换成这几张」时给。

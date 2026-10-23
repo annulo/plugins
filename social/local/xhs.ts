@@ -486,7 +486,7 @@ export async function publish(input: { post_id: string; private?: boolean; force
     }
     if (video) {
       const sel = await selectUpload(ctx, b, 'video')
-      ctx.progress({ message: video.startsWith('local:') ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
+      ctx.progress({ message: /^(local|folder|work):/.test(video) ? L(ctx, '上传本机的视频…', 'Uploading the local video…') : L(ctx, '下载资料库里的视频并上传…', 'Downloading the video from the Library and uploading…') })
       await b.upload(sel, [video], { timeout: VIDEO_WAIT_MS })
     } else {
       const sel = await selectUpload(ctx, b, 'image')

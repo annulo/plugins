@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.8.23
+  zh: "帖子能直接发内容文件夹里的成片和封面，不再另存一份；排期的帖子到点前文件改过了会先停下，看过再点重发。"
+  en: "Posts can publish the finished video and cover straight from the content folder without saving another copy; a scheduled post whose file changed stops first so you can check it and retry."
 - version: 0.8.22
   zh: "定时采集改成每天 11 点到 17 点之间随机一个时间，不会漂到半夜；也能在 设置 → 定时任务 里改成每天几个固定时间。"
   en: "Scheduled collection now runs at a random time between 11:00 and 17:00 each day instead of drifting into the night; you can also set fixed times in Settings → Scheduled tasks."
