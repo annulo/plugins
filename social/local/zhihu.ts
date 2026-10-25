@@ -3,13 +3,14 @@ import { isAssetUrl, pickImages, sourceOf } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { ZHIHU, bodyImages, isHtml, len, problems, segments, type Segment } from './_zhihu_spec'
 import { Expired } from './_health'
+import { videoCoverPatch } from './_video_cover'
 
 // 手动草稿按启用的平台校验
 export { problems as draftProblems } from './_zhihu_spec'
 
 // 知乎渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个知乎账号，发的是专栏文章（zhuanlan.zhihu.com）。
 //
-//   zhihu.save({ article_id, channel_id, title, body, tags, post_images?, post_id? })
+//   zhihu.save({ article_id, channel_id, title, body, tags, post_images?, video_cover?, post_id? })
 //                                       存一篇写好的文章（待审，social_posts）；由助手按任务 tasks/write-zhihu.md 写
 //   zhihu.check({ post_id })            按平台规格检查
 //   zhihu.login / zhihu.checkLogin      本机浏览器登录知乎（扫码或验证码，ctx.browser），登录态只在这台电脑上
@@ -20,6 +21,7 @@ export { problems as draftProblems } from './_zhihu_spec'
 //   - 富文本 HTML（和模板里文章一样的编辑器写的，h2 / h3 / p / ul / ol / blockquote / strong / a / img…），图片就在正文里，images 是正文里的图；
 //   - Markdown 的常用写法（旧的写法，还认）：发布时转成 HTML，单独一行的 ![](地址) 是一张配图，images 里正文没写到位置的图放在最前面。
 // tags 是文章话题（最多 3 个，发布时在「发布设置」里按名字搜，只选名字完全一样的）。
+// video_cover 是文章封面（字段名和视频封面共用：这条帖子自己的封面图，_fields.ts 的 articleCover）：空的不设，知乎只收 JPEG、PNG。
 // post_id 存文章 id，post_url 是 https://zhuanlan.zhihu.com/p/<id>。
 //
 // 发布、删除交给浏览器助手（b.agent，Annulo 能力版本 51）看着页面做，脚本只当它的工具、守住收不回来的那一步（2026-10-19，做法见 docs/approach.md）：
@@ -36,6 +38,8 @@ type Post = {
   body: string
   tags?: string
   images?: string
+  /** 文章封面（「发布设置 → 添加封面」）：资料库地址、本机上传的或内容文件夹里的图；空的不设 */
+  video_cover?: string
   status: string
   scheduled_at?: string
   claimed_at?: string
@@ -68,6 +72,9 @@ const SEL = {
   editor: '.public-DraftEditor-content',
   // 编辑器工具栏「图片」的文件框（选了文件直接插进正文光标处）；封面的文件框只收 jpg / png，accept 里没有 webp，不会选错
   imageInput: 'input[type="file"][accept*="image/webp"]',
+  // 「发布设置 → 添加封面」的文件框（只收 .jpeg .jpg .png，2026-10 实测）；传好后旁边出现封面图 coverImg
+  coverInput: 'input.UploadPicture-input',
+  coverImg: 'img[alt="封面图"]',
   topicSearch: 'input[placeholder*="搜索话题"]',
   topicItem: '.Popover-content button', // 搜话题后的联想列表，每项一个按钮，文字就是话题名
   publish: 'button.Button--primary', // 页面底部的「发布」（按文字认）
@@ -151,7 +158,7 @@ const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t)
  * 配图：正文里 ![](地址) 写到的图都算这篇的图；另外给了 post_images 就按它（正文里没写位置的放在正文最前面）；
  * 都没有时新文章用内容的第一张图当题图，改写保留原来的图。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video_cover?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = zhihuChannel(ctx, input?.channel_id)
@@ -166,7 +173,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   // 富文本的图都在正文里，images 就是正文里的图；Markdown 写法另外认 post_images（正文里没写位置的放最前面）
   const picked = rich ? null : pickImages(input, ZHIHU.imagesMax)
   const withBody = (list: string[]) => (rich ? inBody : [...new Set([...list, ...inBody])]).slice(0, ZHIHU.imagesMax)
-  const post: Partial<Post> = { title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])) }
+  const post: Partial<Post> = { title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), ...videoCoverPatch(input, ctx) }
   let id = input.post_id
   if (id) {
     const old = ctx.db.get('social_posts', id)
@@ -180,13 +187,13 @@ export function save(input: { article_id: string; article_title?: string; url?: 
     id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(images), status: 'pending_review', created_at: now(), updated_at: now() }).id
   }
   const saved = ctx.db.get('social_posts', id)
-  return { post_id: id, channel: ch.name, problems: problems({ ...saved, tags: parse(saved.tags, []), images: parse(saved.images, []) }, ctx) }
+  return { post_id: id, channel: ch.name, problems: problems({ ...saved, tags: parse(saved.tags, []), images: parse(saved.images, []), cover: saved.video_cover }, ctx) }
 }
 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这篇文章：', 'No such article: ') + input?.post_id)
-  return { problems: problems({ title: p.title, body: p.body, tags: parse(p.tags, []), images: parse(p.images, []) }, ctx) }
+  return { problems: problems({ title: p.title, body: p.body, tags: parse(p.tags, []), images: parse(p.images, []), cover: p.video_cover }, ctx) }
 }
 
 // ---- 登录 ----
@@ -306,12 +313,12 @@ function pasteHtml(b: any, html: string, ed = SEL.editor) {
 
 /**
  * 富文本正文按图切段（在页面里用 DOMParser 解析）：顶层的块原样留着，含图的块拆成「去掉图的文字」和图。
- * 只认能交给 b.upload 的图（http(s)、本机上传的 /_annulo/uploaded/…），别的图丢掉。
+ * 只认能交给 b.upload 的图（http(s)、本机上传的 /_annulo/uploaded/…、local: / folder: / work: 的文件，地址里可以有空格）；认不出的报错，不悄悄丢图。
  */
-async function htmlSegments(b: any, html: string): Promise<Segment[]> {
+async function htmlSegments(ctx: any, b: any, html: string): Promise<Segment[]> {
   const r = await b.eval(`(() => {
     const doc = new DOMParser().parseFromString('<body>' + ${JSON.stringify(html)} + '</body>', 'text/html')
-    const ok = (u) => /^(https?:\\/\\/|\\/_(annulo|shuttle)\\/uploaded\\/)\\S+$/.test(u || '')
+    const ok = (u) => /^(https?:\\/\\/|\\/_(annulo|shuttle)\\/uploaded\\/|local:|folder:|work:)./.test((u || '').trim())
     const out = []
     let buf = ''
     const flush = () => { if (buf && (buf.replace(/<[^>]+>/g, '').trim() || /<hr/i.test(buf))) out.push({ html: buf }); buf = '' }
@@ -323,12 +330,15 @@ async function htmlSegments(b: any, html: string): Promise<Segment[]> {
       const srcs = imgs.map((i) => i.getAttribute('src'))
       if (n.tagName !== 'IMG') { imgs.forEach((i) => i.remove()); if (n.textContent.trim()) buf += n.outerHTML }
       flush()
-      for (const s of srcs) if (ok(s)) out.push({ image: s })
+      for (const s of srcs) out.push(ok(s) ? { image: s.trim() } : { skipped: s || '' })
     }
     flush()
     return out
   })()`)
   if (!Array.isArray(r)) throw new Error('htmlSegments')
+  // 认不出的图（data:、相对路径…）不悄悄丢掉：发出去少一张图比没发出去更糟
+  const skipped = r.filter((x: any) => 'skipped' in x).map((x: any) => String(x.skipped).slice(0, 80))
+  if (skipped.length) throw new Error(L(ctx, `正文里有 ${skipped.length} 张图的地址传不上去（${skipped.join('、')}）：图要是资料库里的、本机上传的或内容文件夹里的文件`, `${skipped.length} image(s) in the body have addresses that can't be uploaded (${skipped.join(', ')}): use images from the Library, uploaded from this computer, or in the content folder`))
   return r as Segment[]
 }
 
@@ -445,8 +455,9 @@ async function draftId(ctx: any, b: any, ms: number) {
  *   AI 用 fill 放标题、正文（content.body 自己填：按图切段粘贴、传图、重试，读回核对），点开「发布设置」、处理弹窗、add_topics 加话题（没加上只提醒）；
  *   publish 工具核对标题、正文后才点「发布」，确认框也由它点，读接口和地址判断发没发出去。AI 没做完或知乎不收，把窗口交给用户。
  * dry_run：演练，publish 工具核对完不点，返回 { dry_run, need, warnings, snapshot }。知乎打字就自动存草稿，演练会留一篇草稿。
+ * manual：填好交给用户（发布弹窗里选的）：照常填写、核对，不点「发布」，把窗口调到前台，用户调好自己发，发出去这里照常记下（最多等 30 分钟）。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean }, ctx: any) {
+export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean; manual?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这篇文章：', 'No such article: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
@@ -456,7 +467,8 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
   const images: string[] = parse(p.images, [])
-  const bad = problems({ title: p.title, body: p.body, tags, images }, ctx)
+  const cover = String(p.video_cover ?? '').trim()
+  const bad = problems({ title: p.title, body: p.body, tags, images, cover }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合知乎的规格：', "Doesn't meet Zhihu's limits: ") + bad.join('; '))
 
   const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000)
@@ -502,13 +514,13 @@ export async function publish(input: { post_id: string; force_interval?: boolean
     if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
     b.listen(API.publish)
 
-    const parts: Segment[] = isHtml(p.body) ? await htmlSegments(b, p.body) : segments(p.body)
+    const parts: Segment[] = isHtml(p.body) ? await htmlSegments(ctx, b, p.body) : segments(p.body)
     const placed = new Set(parts.flatMap((x) => ('image' in x ? [x.image] : [])))
     const all = isHtml(p.body) ? parts : [...images.filter((u) => !placed.has(u)).map((image) => ({ image })), ...parts]
     const nImages = all.filter((x) => 'image' in x).length
     const first = plain((parts.find((x) => 'html' in x && plain(x.html)) as { html: string } | undefined)?.html ?? '').slice(0, 12)
     const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
-    const st = { id: '', topics: [] as string[], missing: [] as string[], verified: false, published: '', rejected: '' }
+    const st = { id: '', topics: [] as string[], missing: [] as string[], verified: false, published: '', rejected: '', cover: !cover }
     /** 正文填对了没有：第一段的字在、只出现一次（没粘贴两遍），传好的图够数 */
     const bodyOk = async (ed: string) => {
       const text = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); return e ? e.innerText : '' })()`).catch(() => '')))
@@ -557,11 +569,13 @@ export async function publish(input: { post_id: string; force_interval?: boolean
           const issues: string[] = []
           if (!(await b.filled('title'))) issues.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
           if (!(await b.filled('body'))) issues.push('the body has not been put in with fill (content "body"), or it no longer checks out (text missing or duplicated, or images missing)')
+          if (!st.cover) issues.push('the cover is not set yet: fill content "cover" into 添加封面 in 发布设置')
           const label = norm(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
           if (label !== TEXT.publish) issues.push(`element ${a.button_id} is not the 发布 button`)
           if (issues.length) return `Not published: ${issues.join('; ')}.`
           st.verified = true
           if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点发布', 'Dry run: everything checked, not published') }
+          if (input.manual) return { finish: L(ctx, '都填好了，交给用户发布', 'Everything is filled in; handing over to the user') }
           await b.click(at(a.button_id))
           return result(60000)
         },
@@ -572,6 +586,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       `- 标题：用 fill 把 title 放进标题框。`,
       `- 正文：用 fill 把 body 放进正文编辑框（分段粘贴、在原位传图都由它做）。`,
       tags.length ? `- 话题：正文填好后用 add_topics 工具加（它会自己点开「发布设置」）。` : `- 话题：没有。`,
+      cover ? `- 封面：正文填好后，用 fill 把 cover 放进「发布设置」里的「添加封面 / 添加文章封面」那一格（上传由它做；知乎要先存成草稿才收封面）。` : `- 封面：没有，不用设。`,
       `- 最后用 publish 工具发布（传「发布」按钮的编号），它会核对、点确认框、等结果；它说没核对过就照它说的改了再调用。`,
     ].join('\n')
     // 标题、正文交给 Annulo 的 fill：AI 只选放进哪个框，原文不经过它。正文要分段粘贴、在原位传图，自己填、自己核对
@@ -604,6 +619,33 @@ export async function publish(input: { post_id: string; force_interval?: boolean
         check: bodyOk, // 第一段的字在、只出现一次，传好的图够数；不对时 AI 再 fill 一次（先清空）
       },
     }
+    // 文章封面：传进「添加封面」的文件框，等出现新的封面图（不看 AI 选的是哪个元素：文件框只有这一个）。
+    // 传好后封面图是文件框旁边的 <img alt="封面图">（地址在 pic*.zhihu.com），下面有「更换 / 删除」（2026-10 实测）
+    const coverSrc = (): Promise<string> => b.eval(`(() => { const i = document.querySelector(${JSON.stringify(SEL.coverImg)}); return i && /^https?:/.test(i.src) ? i.src : '' })()`).then((v: any) => String(v ?? ''), () => '')
+    if (cover)
+      (content as any).cover = {
+        file: cover,
+        fill: async () => {
+          // 还没存成草稿（地址不是 /p/<id>/edit）时知乎不收封面，传了也没反应（2026-10 实测）：先等正文填好、存成草稿
+          if (!st.id) st.id = await draftId(ctx, b, 20000)
+          if (!st.id) return 'not yet: fill the body first (Zhihu only takes a cover once the draft is saved), then fill the cover again'
+          const before = await coverSrc()
+          await b.upload(SEL.coverInput, [cover], { timeout: 120000 }).catch((e: any) => {
+            throw new Error(`couldn't put the cover into 添加封面 (${SEL.coverInput}): ${e?.message ?? e}`)
+          })
+          for (let i = 0; i < 60; i++) {
+            await ctx.sleep(1000)
+            const src = await coverSrc()
+            if (src && src !== before) {
+              st.cover = true
+              return 'cover uploaded'
+            }
+            if (TEXT.uploadFailed.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) throw new Error('Zhihu says the cover upload failed (JPEG / PNG only)')
+          }
+          throw new Error('the cover still was not shown after 60 seconds; is 添加封面 open?')
+        },
+        check: async () => st.cover,
+      }
     const r = await b.agent(task, { tools, content, avoid: ['发布', '确认发布', '继续发布'], notes: 'zhihu.publish', maxSteps: 30 })
     const warnings = st.missing.length ? [L(ctx, `这些话题没加上（知乎搜不到一模一样的）：${st.missing.join('、')}`, `These topics weren't added (no exact match on Zhihu): ${st.missing.join(', ')}`)] : []
     const extra = { ...(warnings.length ? { warnings } : {}), ...(r.timing?.summary ? { timing: r.timing.summary } : {}) }
@@ -612,21 +654,25 @@ export async function publish(input: { post_id: string; force_interval?: boolean
       return { dry_run: true, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到发布那一步', "The browser assistant didn't reach the publish step")], warnings, snapshot: snap?.dir, ...extra }
     }
     if (st.published) return done(st.published, { topics: st.topics, ...extra })
-    // AI 没做完或知乎不收：把窗口交给用户，等他点发布（最多 15 分钟）
-    const why = [st.rejected ? L(ctx, `知乎没让发：${st.rejected}`, `Zhihu refused: ${st.rejected}`) : r.reason || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
+    // AI 没做完、知乎不收，或者用户选了填好交给他：把窗口交给用户，等他点发布（最多 15 分钟，交给他的 30 分钟）
+    const handed = !!input.manual && st.verified
+    const why = handed ? [] : [st.rejected ? L(ctx, `知乎没让发：${st.rejected}`, `Zhihu refused: ${st.rejected}`) : r.reason || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
     const shown = typeof b.show === 'function' && (await b.show().then(() => true, () => false))
     if (!shown) {
       const found = await lookup(b, Date.now() - 10 * 60_000, st.id).catch(() => '')
       if (found) return done(found, { topics: st.topics, ...extra })
-      throw stuck(why, false)
+      throw stuck(why.length ? why : [L(ctx, '要交给你发布，但窗口调不到前台', "It's meant for you to publish, but the window couldn't be brought up")], false)
     }
-    ctx.progress({ message: L(ctx, `要你在弹出的知乎窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Zhihu window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
-    for (const end = Date.now() + 15 * 60_000; Date.now() < end; ) {
+    ctx.progress({ message: handed
+      ? L(ctx, '都填好了，在弹出的知乎窗口里看一遍、调好后点「发布」，发出去这里会自动记下', "Everything is filled in: check it in the Zhihu window that opened, adjust it, then click 发布 (Publish); it's recorded here once it goes out")
+      : L(ctx, `要你在弹出的知乎窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Zhihu window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+    const minutes = handed ? 30 : 15
+    for (const end = Date.now() + minutes * 60_000; Date.now() < end; ) {
       await ctx.sleep(2000)
       const m = ARTICLE.exec(String(b.url() ?? ''))
       if (m && !m[2]) return done(m[1], { topics: st.topics, ...extra })
     }
-    throw stuck([...why, L(ctx, '15 分钟内没等到你发布', 'No publish within 15 minutes')], true)
+    throw stuck([...why, L(ctx, `${minutes} 分钟内没等到你发布`, `No publish within ${minutes} minutes`)], true)
   } catch (e: any) {
     const msg = e?.message ?? String(e)
     if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })

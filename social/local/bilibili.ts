@@ -1,7 +1,8 @@
 import { L } from './_i18n'
 import { sourceOf } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
-import { BILI, descText, isVideoRef, problems } from './_bilibili_spec'
+import { BILI, OPUS, descText, isHtml, isVideoRef, opusLen, opusProblems, problems } from './_bilibili_spec'
+import { postKind } from './_fields'
 import { Expired } from './_health'
 import { assist, markReady, readySel } from './_assist'
 import { uploadVideoCover } from './_video_cover_upload'
@@ -10,10 +11,10 @@ import { videoCoverPatch } from './_video_cover'
 // 手动草稿按启用的平台校验；social.ts 不直接依赖行业可能删掉的平台文件。
 export { problems as draftProblems } from './_bilibili_spec'
 
-// B站（哔哩哔哩）渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个 B站 UP 主账号，发的是素材库里的视频。
+// B站（哔哩哔哩）渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。一个渠道是一个 B站 UP 主账号，发视频投稿和专栏。
 //
-//   bilibili.save({ article_id?, channel_id, title, body, tags, video, category?, post_id? })
-//                                          存一条写好的视频投稿（待审，social_posts）；由助手按任务写
+//   bilibili.save({ article_id?, channel_id, kind?, title, body, tags, video?, images?, category?, post_id? })
+//                                          存一条写好的视频投稿或专栏（待审，social_posts）；由助手按任务写
 //   bilibili.check({ post_id })            按平台规格检查
 //   bilibili.login / bilibili.checkLogin   本机浏览器登录 B站（扫码，ctx.browser），登录态只在这台电脑上
 //   bilibili.publish / remove 投稿、删除稿件
@@ -32,14 +33,26 @@ export { problems as draftProblems } from './_bilibili_spec'
 // 页面怎么认、有什么坑记在笔记里：插件自带的 notes/bilibili.publish.md、notes/bilibili.remove.md，项目学到的在 user/notes/social/ 下；B站 改版时先看、先改笔记，不用改选择器。
 // 下面的选择器只剩脚本自己还要认的几处（上传框、标签块、提示文字），接口在 API 里（投稿结果 API.add、稿件列表 API.archives）。
 // publish({ dry_run: true }) 演练到点投稿之前。
+//
+// 专栏（帖子的 kind 是 post 图文或 article 长文，_fields.ts 的 postKind；没记 kind 的老帖子都是视频）：
+//   编辑器 member.bilibili.com/york/read-editor（Tiptap 富文本，2026-10 实测）。标题是 textarea（maxlength 50）；正文按图切段：
+//   文字段当 HTML 粘贴（认 h2 / h3 / p / ul / ol / blockquote / strong，外链 B站 会去掉只留字），图在原位置当文件粘贴，
+//   编辑器自己传到 API.imageUpload（upload_bfs），数传成功的响应核对图够不够。图文的配图依次排在文字后面。
+//   话题单选（「添加话题」弹窗里搜、选一个、确认），由浏览器助手做，尽量做的。发布只经 publish_opus 工具；
+//   发出去的认法：发布接口的响应里有 id，或页面说发布成功，再不行去图文列表（API.opusList）按标题找。
+//   删除在「图文管理」页由浏览器助手找到这一篇、点删除，确认只经 confirm_delete。采集也读 API.opusList。
 
 type Post = {
   id: string
   channel_id: string
   article_id?: string
+  /** 发成什么（_fields.ts 的 postKind）：video 视频投稿；post 图文、article 长文发专栏 */
+  kind?: string
   title: string
   body: string
   tags?: string
+  /** 专栏的图：图文是配图（排在文字后面），长文是正文里的图（save 按正文写） */
+  images?: string
   video?: string
   /** 自己的封面（发布时挑的，4:3）：投稿页的封面弹窗里上传；空的用 B站 推荐的 */
   video_cover?: string
@@ -67,12 +80,22 @@ const PASSPORT = 'https://passport.bilibili.com/login'
 const UPLOAD = `${MEMBER}/platform/upload/video/frame`
 const MANAGE = `${MEMBER}/platform/upload-manager/article`
 const PS = 20
+// 专栏：草稿箱页（「新的创作」进编辑器）、编辑器、图文管理
+const OPUS_DRAFTS = `${MEMBER}/york/read-draft`
+const OPUS_EDITOR = `${MEMBER}/york/read-editor`
+const OPUS_MANAGE = `${MEMBER}/platform/upload-manager/opus`
 const API = {
   nav: 'https://api.bilibili.com/x/web-interface/nav', // data.isLogin / mid / uname / face
   stat: (mid: string) => `https://api.bilibili.com/x/relation/stat?vmid=${encodeURIComponent(mid)}`, // data.follower
   // 创作中心的稿件列表（带审核中、未通过的）：data.arc_audits[].Archive { aid, bvid, title, ctime, ptime, state, state_desc } + .stat
   archives: (pn: number) => `${MEMBER}/x/web/archives?status=is_pubing,pubed,not_pubed&pn=${pn}&ps=${PS}`,
   add: 'web/add', // 投稿接口 /x/vu/web/add、/x/vupre/web/add（带 /v3 之类的后缀也认）：{ code, message, data: { aid, bvid } }
+  // 专栏编辑器传图：{ code, message, data: { image_url, image_width, image_height } }（2026-10 实测）
+  imageUpload: 'feed/draw/upload_bfs',
+  // 专栏编辑器发的请求都在这几段下面（传图、发布）：发布前 listen，发布的响应从里面认（opusResult）
+  opusListen: ['bilibili.com/x/dynamic/', 'bilibili.com/x/article/', 'bilibili.com/x/polymer/'],
+  // 图文管理页的列表（自己的专栏 / 图文，带审核中的）：data.items[]
+  opusList: (pn: number) => `https://api.bilibili.com/x/polymer/web-dynamic/v1/opus/creationlist?ps=${PS}&pn=${pn}&classification_type=0&creation_type=0`,
 }
 const SEL = {
   fileInput: '.bcc-upload-wrapper input[type="file"], .upload-wrp input[type="file"], input[type="file"][accept*="mp4"], input[type="file"][accept*="video"], input[type="file"]',
@@ -94,6 +117,9 @@ const LOGGED_OUT = /passport\.bilibili\.com/
 const BV = /(BV[0-9A-Za-z]{10})/
 
 const videoUrl = (bvid: string) => `${SITE}/video/${bvid}`
+const opusUrl = (id: string) => `${SITE}/opus/${id}`
+/** 这条发专栏（图文、长文）还是视频投稿 */
+const isOpus = (p: { kind?: string; video?: string } | null | undefined) => postKind('bilibili', p) !== 'video'
 
 function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，B站功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Bilibili"))
@@ -145,22 +171,32 @@ function existing(ctx: any, articleId: string, channelId: string) {
 
 const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t).replace(/^#/, '').replace(/[,，#]/g, ' ').trim()).filter(Boolean))]
 
+/** 富文本正文里的图（按出现顺序） */
+const htmlImages = (html: string) => [...String(html ?? '').matchAll(/<img\b[^>]*?\ssrc\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1].replace(/&amp;/g, '&'))
+
+/** 一条专栏现在有哪些问题（save、check、publish 共用） */
+const opusIssues = (p: { title?: string; body?: string; tags?: string; images?: string }, ctx: any) => opusProblems({ title: p.title, body: p.body, tags: parse(p.tags, []), images: parse(p.images, []) }, ctx)
+
 /**
- * 存一条写好的视频投稿（待审）。这里校验再存：视频不是地址 / 本机文件报错；超字数、标签不够这类问题存下来并在 problems 里返回，
+ * 存一条写好的视频投稿或专栏（待审）。kind 不给是视频；post 图文（纯文字正文 + images 配图）、article 长文（HTML 正文，图在正文里）发成专栏。
+ * 这里校验再存：视频不是地址 / 本机文件报错；超字数、标签不够这类问题存下来并在 problems 里返回，
  * 让助手改了带 post_id 再存。article_id 可选（从文章改写来的才有）；B站 对简介里的外链审核严，不自动接文章链接。
  */
-export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video: string; video_cover?: string; category?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id?: string; article_title?: string; url?: string; kind?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; category?: string; post_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const ch = biliChannel(ctx, input?.channel_id)
-  const video = String(input.video ?? '').trim()
-  if (!isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；资料库没有视频就先上传一个', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); upload one to the Library first if there is none'))
-  const post: Partial<Post> = {
-    title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, BILI.titleMax).join(''),
-    body: String(input.body ?? '').trim(),
-    tags: JSON.stringify(cleanTags(input.tags ?? [])),
-    video,
-    ...videoCoverPatch(input, ctx),
-    category: String(input.category ?? '').trim(),
+  const kind = input?.kind === 'post' || input?.kind === 'article' ? input.kind : 'video'
+  const title = String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, kind === 'video' ? BILI.titleMax : OPUS.titleMax).join('')
+  const body = String(input.body ?? '').trim()
+  let post: Partial<Post>
+  if (kind === 'video') {
+    const video = String(input.video ?? '').trim()
+    if (!isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；资料库没有视频就先上传一个', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); upload one to the Library first if there is none'))
+    post = { kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), video, ...videoCoverPatch(input, ctx), category: String(input.category ?? '').trim(), images: '[]' }
+  } else {
+    if (kind === 'article' && body && !isHtml(body)) throw new Error(L(ctx, '长文（kind: article）的 body 要是 HTML（<h2> <p> <ul> <blockquote> <strong> <img>…）；纯文字加配图用 kind: post', 'An article (kind: article) needs an HTML body (<h2> <p> <ul> <blockquote> <strong> <img>…); for plain text with images use kind: post'))
+    const images = kind === 'article' ? htmlImages(body) : (input.images ?? []).map((u) => String(u).trim()).filter(Boolean)
+    post = { kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? []).slice(0, OPUS.topicsMax)), images: JSON.stringify(images), video: '', video_cover: '', category: '' }
   }
   let id = input.post_id
   if (id) {
@@ -168,18 +204,19 @@ export function save(input: { article_id?: string; article_title?: string; url?:
     if (!old || old.channel_id !== ch.id || (a && old.article_id !== a.id)) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
     ctx.db.update('social_posts', id, { ...post, updated_at: now() })
   } else {
-    { const dup = a && existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的视频了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished video for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
-    const row: any = { ...post, channel_id: ch.id, images: '[]', status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }
+    { const dup = a && existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的一条了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished post for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
+    const row: any = { images: '[]', ...post, channel_id: ch.id, status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }
     if (a) row.article_id = a.id
     id = ctx.db.insert('social_posts', row).id
   }
   const saved = ctx.db.get('social_posts', id)
-  return { post_id: id, channel: ch.name, problems: problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video }, ctx) }
+  return { post_id: id, channel: ch.name, kind, problems: isOpus(saved) ? opusIssues(saved, ctx) : problems({ title: saved.title, body: saved.body, tags: parse(saved.tags, []), video: saved.video }, ctx) }
 }
 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
-  if (!p) throw new Error(L(ctx, '没有这条视频：', 'No such video post: ') + input?.post_id)
+  if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
+  if (isOpus(p)) return { problems: opusIssues(p, ctx), length: opusLen(p.body), max: OPUS.bodyMax }
   const tags: string[] = parse(p.tags, [])
   return { problems: problems({ title: p.title, body: p.body, tags, video: p.video }, ctx), length: [...descText(p.body, tags)].length, max: BILI.descMax }
 }
@@ -522,6 +559,443 @@ async function addResult(b: any): Promise<{ code: number; message: string; bvid:
   return last
 }
 
+// ---- 专栏（图文、长文）----
+
+type BiliOpus = { id: string; title: string; created: string; open: boolean; deleted: boolean; views: number; likes: number; comments: number; collects: number; shares: number }
+
+const num = (...xs: any[]) => {
+  for (const x of xs) if (x != null && x !== '' && Number.isFinite(Number(x))) return Number(x)
+  return 0
+}
+
+/**
+ * 图文列表（API.opusList）的响应里认出专栏：带 id（opus_id / dyn_id_str / id_str…）和标题的对象。
+ * 接口的层级常变、账号上第一次接时没有样本（2026-10），所以不写死路径，按字段名认；数不认得的记 0。
+ */
+function opusOf(json: any, into: Map<string, BiliOpus>) {
+  const walk = (o: any, depth: number) => {
+    if (!o || typeof o !== 'object' || depth > 30) return
+    if (Array.isArray(o)) {
+      for (const x of o) walk(x, depth + 1)
+      return
+    }
+    const id = String(o.opus_id ?? o.opus_id_str ?? o.dyn_id_str ?? o.dyn_id ?? o.id_str ?? '').trim()
+    const title = o.title ?? o.content?.title ?? o.basic?.title
+    if (/^\d{6,}$/.test(id) && typeof title === 'string') {
+      const st = o.stat ?? o.stats ?? o.statistics ?? {}
+      const sec = num(o.pub_time, o.ptime, o.ctime, o.publish_time, o.pub_ts, o.mtime)
+      const state = String(o.audit_status ?? o.state ?? o.status ?? '')
+      into.set(id, {
+        id,
+        title,
+        created: sec > 1e12 ? new Date(sec).toISOString() : sec > 0 ? new Date(sec * 1000).toISOString() : '',
+        open: !/审核|audit|reject|不通过|未通过/.test(String(o.state_desc ?? o.audit_desc ?? o.status_desc ?? '')) && !/^-/.test(state),
+        deleted: /删除|delete/i.test(String(o.state_desc ?? o.status_desc ?? '')),
+        views: num(st.view, st.read, st.play, o.view, o.read),
+        likes: num(st.like, o.like),
+        comments: num(st.reply, st.comment, o.reply, o.comment),
+        collects: num(st.fav, st.favorite, st.collect, o.fav, o.favorite),
+        shares: num(st.share, st.forward, st.repost, o.share, o.forward),
+      })
+      return
+    }
+    for (const k in o) walk(o[k], depth + 1)
+  }
+  walk(json, 0)
+}
+
+/** 在 B站 的页面里读最近 pages 页专栏。loggedOut：被带去登录了；ok：接口正常返回了 */
+async function readOpus(ctx: any, b: any, pages = 1): Promise<{ list: BiliOpus[]; loggedOut: boolean; ok: boolean }> {
+  await onBili(b)
+  const byId = new Map<string, BiliOpus>()
+  let ok = false
+  for (let pn = 1; pn <= pages; pn++) {
+    const j = await api(b, API.opusList(pn))
+    if (j?.code === -101) return { list: [], loggedOut: true, ok: false }
+    if (!j || j.code !== 0) break
+    ok = true
+    const before = byId.size
+    opusOf(j, byId)
+    if (byId.size - before < PS || j.data?.has_more === false) break
+  }
+  return { list: [...byId.values()], loggedOut: false, ok }
+}
+
+const escHtml = (s: string) => s.replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[m] as string)
+
+/** 图文的纯文字正文转成段落 HTML：空行分段，段里的换行是 <br> */
+const textHtml = (text: string) =>
+  String(text ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split(/\n\s*\n/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => `<p>${x.split('\n').map(escHtml).join('<br>')}</p>`)
+    .join('')
+
+type Segment = { html: string } | { image: string }
+
+/**
+ * 长文的 HTML 按图切段（在页面里用 DOMParser 解析）：顶层的块原样留着，含图的块拆成「去掉图的文字」和图。
+ * 只认能交给 b.upload 的图（http(s)、本机上传的、local: / folder: / work: 的文件，地址里可以有空格）；认不出的报错，不悄悄丢图。做法同 zhihu.ts 的 htmlSegments。
+ */
+async function htmlSegments(ctx: any, b: any, html: string): Promise<Segment[]> {
+  const r = await b.eval(`(() => {
+    const doc = new DOMParser().parseFromString('<body>' + ${JSON.stringify(html)} + '</body>', 'text/html')
+    const ok = (u) => /^(https?:\\/\\/|\\/_(annulo|shuttle)\\/uploaded\\/|local:|folder:|work:)./.test((u || '').trim())
+    const out = []
+    let buf = ''
+    const flush = () => { if (buf && (buf.replace(/<[^>]+>/g, '').trim() || /<hr/i.test(buf))) out.push({ html: buf }); buf = '' }
+    for (const n of [...doc.body.childNodes]) {
+      if (n.nodeType === 3) { if (n.textContent.trim()) { const p = doc.createElement('p'); p.textContent = n.textContent; buf += p.outerHTML } continue }
+      if (n.nodeType !== 1) continue
+      const imgs = n.tagName === 'IMG' ? [n] : [...n.querySelectorAll('img')]
+      if (!imgs.length) { buf += n.outerHTML; continue }
+      const srcs = imgs.map((i) => i.getAttribute('src'))
+      if (n.tagName !== 'IMG') { imgs.forEach((i) => i.remove()); if (n.textContent.trim()) buf += n.outerHTML }
+      flush()
+      for (const s of srcs) out.push(ok(s) ? { image: s.trim() } : { skipped: s || '' })
+    }
+    flush()
+    return out
+  })()`)
+  if (!Array.isArray(r)) throw new Error('htmlSegments')
+  // 认不出的图（data:、相对路径…）不悄悄丢掉：发出去少一张图比没发出去更糟
+  const skipped = r.filter((x: any) => 'skipped' in x).map((x: any) => String(x.skipped).slice(0, 80))
+  if (skipped.length) throw new Error(L(ctx, `正文里有 ${skipped.length} 张图的地址传不上去（${skipped.join('、')}）：图要是资料库里的、本机上传的或内容文件夹里的文件`, `${skipped.length} image(s) in the body have addresses that can't be uploaded (${skipped.join(', ')}): use images from the Library, uploaded from this computer, or in the content folder`))
+  return r as Segment[]
+}
+
+/** 把一段 HTML 粘贴进专栏编辑器（光标处，也就是正文末尾） */
+const pasteOpusHtml = (b: any, ed: string, html: string) =>
+  b.eval(`(() => {
+    const ed = document.querySelector(${JSON.stringify(ed)})
+    if (!ed) return false
+    ed.focus()
+    const dt = new DataTransfer()
+    dt.setData('text/html', ${JSON.stringify(html)})
+    dt.setData('text/plain', ${JSON.stringify(html.replace(/<[^>]+>/g, ' '))})
+    ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    return true
+  })()`)
+
+/** 传图接口回来的结果：ok 成功几张，bad 失败的提示 */
+async function imageUploads(b: any): Promise<{ ok: number; bad: string[] }> {
+  const rs = await b.responses(API.imageUpload, { min: 0 }).catch(() => [])
+  const out = { ok: 0, bad: [] as string[] }
+  for (const r of rs ?? []) {
+    if (r.json?.code === 0 && r.json?.data?.image_url) out.ok++
+    else out.bad.push(String(r.json?.message ?? r.status ?? '?'))
+  }
+  return out
+}
+
+/**
+ * 在专栏编辑器的光标处插一张图，等 B站 传完（最多 2 分钟）。
+ * 工具栏的图片按钮在 Web Component 里、选文件框是临时建的，b.upload 够不着：先把文件放进我们自己的一个隐藏选文件框，
+ * 再当剪贴板里的文件粘贴进编辑器，编辑器照粘贴图片处理（插图、传到 upload_bfs），2026-10 实测。
+ */
+async function pasteOpusImage(ctx: any, b: any, ed: string, file: string, n: number) {
+  const before = await imageUploads(b)
+  await b.eval(`(() => {
+    let i = document.getElementById('annulo-bili-file')
+    if (!i) { i = document.createElement('input'); i.type = 'file'; i.id = 'annulo-bili-file'; i.style.display = 'none'; document.body.appendChild(i) }
+    i.value = ''
+    return true
+  })()`)
+  await b.upload('#annulo-bili-file', [file], { timeout: 120000 }).catch((e: any) => {
+    throw new Error(L(ctx, `第 ${n} 张图没拿到（下载失败或者文件不在了）：`, `Couldn't get image ${n} (download failed or the file is gone): `) + (e?.message ?? e))
+  })
+  const pasted = await b.eval(`(() => {
+    const ed = document.querySelector(${JSON.stringify(ed)})
+    const i = document.getElementById('annulo-bili-file')
+    if (!ed || !i || !i.files.length) return false
+    ed.focus()
+    const dt = new DataTransfer()
+    for (const f of i.files) dt.items.add(f)
+    ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    return true
+  })()`)
+  if (!pasted) throw new Error(`image ${n}: couldn't paste into the editor`)
+  for (const end = Date.now() + 120000; Date.now() < end; ) {
+    await ctx.sleep(1000)
+    const now2 = await imageUploads(b)
+    if (now2.bad.length > before.bad.length) throw new Error(L(ctx, `B站 没收第 ${n} 张图：${now2.bad[now2.bad.length - 1]}（支持 jpg、png、webp、gif、heif，静态图 20M 以内、gif 8M 以内）`, `Bilibili refused image ${n}: ${now2.bad[now2.bad.length - 1]} (jpg, png, webp, gif, heif; stills up to 20 MB, gifs up to 8 MB)`))
+    if (now2.ok > before.ok) return
+  }
+  throw new Error(L(ctx, `第 ${n} 张图等了 2 分钟还没传完`, `Image ${n} still wasn't uploaded after 2 minutes`))
+}
+
+/**
+ * 发布接口的响应：在专栏编辑器 listen 的几段里，去掉传图、初始化检查这些，认 code 和 id。
+ * 发布接口的地址第一次接时没见过（没真发过），所以按「发布、提交、创建」这类地址认；拿到 id 最好，没有就看页面上的字、再去列表里按标题找。
+ */
+async function opusResult(b: any): Promise<{ code: number; message: string; id: string } | null> {
+  let last: { code: number; message: string; id: string } | null = null
+  for (const pat of API.opusListen) {
+    const rs = await b.responses(pat, { min: 0 }).catch(() => [])
+    for (const r of rs ?? []) {
+      const url = String(r.url ?? '')
+      if (!/create|publish|submit|\/add\b|\/add\?/.test(url) || /upload_bfs|init_check|check\?|draft/.test(url) || !r.json || r.json.code == null) continue
+      const d = r.json.data ?? {}
+      const id = String(d.opus_id ?? d.opus_id_str ?? d.dyn_id_str ?? d.dyn_id ?? d.id ?? d.aid ?? '')
+      last = { code: Number(r.json.code), message: String(r.json.message ?? ''), id: /^\d+$/.test(id) ? id : '' }
+      if (last.code === 0) return last
+    }
+  }
+  return last
+}
+
+const OPUS_TEXT = {
+  publish: '发布',
+  success: /发布成功|提交成功|已提交审核|审核中/,
+  newCreation: '新的创作',
+}
+
+/**
+ * 发一篇专栏（图文、长文）。和视频投稿一样只发审核通过的；上次中断过的先去图文列表里按标题找，避免重复发。
+ * 编辑器交给浏览器助手（b.agent）看着页面做，标题、正文放 content（正文自己填：按图切段粘贴、在原位传图，读回核对）；
+ * 话题由它在「添加话题」弹窗里选；发布只经 publish_opus 工具，核对过标题、正文才点。AI 没做完或 B站 不收，把窗口交给用户。
+ * dry_run：演练，publish_opus 核对完不点；B站 不自动存草稿，演练不留东西。
+ */
+async function publishOpus(p: Post, input: { force_interval?: boolean; dry_run?: boolean; manual?: boolean }, ctx: any) {
+  const ch = biliChannel(ctx, p.channel_id)
+  if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
+  const kind = postKind('bilibili', p)
+  const tags: string[] = parse(p.tags, [])
+  const images: string[] = parse(p.images, [])
+  const bad = opusIssues(p, ctx)
+  if (bad.length) throw new Error(L(ctx, '不符合 B站专栏的规格：', "Doesn't meet Bilibili's article limits: ") + bad.join('; '))
+
+  const day = recentPublished(ctx, ch.id, Date.now() - 24 * 3600_000).filter((x) => isOpus(x))
+  // 发布频率只是建议：超了照样发，只记一笔日志（B站：账号 LV1–3 每天 1 篇、LV4–6 每天 5 篇，超了它会拒）
+  if (day.length >= OPUS.dailyMax) ctx.log(L(ctx, `「${ch.name}」24 小时内已经发了 ${day.length} 篇专栏，B站 一天最多 ${OPUS.dailyMax} 篇（LV1–3 只有 1 篇）`, `"${ch.name}" already posted ${day.length} articles in 24 hours; Bilibili allows ${OPUS.dailyMax} a day (1 below level 4)`))
+
+  const interrupted = p.status === 'publishing' || p.status === 'failed'
+  const claimedBefore = p.claimed_at
+  if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
+  const done = (id: string, extra: object = {}) => {
+    ctx.db.update('social_posts', p.id, { status: 'published', post_id: id || null, post_url: id ? opusUrl(id) : OPUS_MANAGE, published_at: now(), updated_at: now(), error: null })
+    return { id: p.id, post_id: id, ...extra }
+  }
+  /** 图文列表里按标题找刚发的（发布时间在 sinceMs 之后） */
+  const lookup = async (b: any, sinceMs: number) => {
+    const r = await readOpus(ctx, b, 1)
+    if (r.loggedOut) throw expired(ctx, ch)
+    return r.list.find((x) => !x.deleted && norm(x.title) === norm(p.title) && (!x.created || Date.parse(x.created) >= sinceMs))?.id ?? ''
+  }
+  const stuck = (why: string[], kept: boolean) =>
+    new Error(
+      L(ctx, `没发出去：${why.join('；')}。`, `Not published: ${why.join('; ')}. `) +
+        (kept
+          ? L(ctx, 'B站 的窗口还开着，别的都已填好：在里面改好点「发布」就行，之后点「采集」会把它对上这一篇。', "Bilibili's window is still open with everything else filled in: fix it there and click 发布 (Publish); collecting stats afterwards links it to this post.")
+          : L(ctx, '到页面上再点一次「发布」，卡住时会弹出 B站 窗口交给你。', 'Click Publish on the page again — if it gets stuck, the Bilibili window opens for you.'))
+    )
+  const startedAt = Date.now() - 60_000
+  try {
+    const b = await openBrowser(ctx, { profile: ch.browser_profile })
+    if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（B站专栏要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (Bilibili articles need the browser assistant): Settings → About'))
+    const who = await whoami(b, ch)
+    if (!who) throw expired(ctx, ch)
+    if (who.other) throw new Expired(L(ctx, `浏览器里登录的是另一个 B站 账号（${who.uname}），不是「${ch.name}」，请重新登录`, `The browser is logged in to another Bilibili account (${who.uname}), not "${ch.name}" — log in again`))
+    if (interrupted && !input.dry_run) {
+      ctx.progress({ message: L(ctx, '上次没发完，先看看图文列表里有没有这篇…', "Last attempt didn't finish; checking your articles for this one first…") })
+      const id = await lookup(b, Date.parse(claimedBefore || '') - 60_000 || 0)
+      if (id) return done(id, { already: true })
+    }
+    ctx.progress({ message: L(ctx, '打开专栏编辑器…', 'Opening the article editor…') })
+    for (const pat of API.opusListen) b.listen(pat)
+    await b.goto(OPUS_EDITOR)
+    if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
+    // 直接打开编辑器不认时，从草稿箱页点「新的创作」进
+    if (!(await b.waitFor('[contenteditable="true"]', { timeout: 15000 }).then(() => true, () => false))) {
+      await b.goto(OPUS_DRAFTS)
+      if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
+      await b.click({ text: OPUS_TEXT.newCreation }, { timeout: 15000 }).catch(() => {})
+      await b.waitFor('[contenteditable="true"]', { timeout: 20000 }).catch(() => {})
+    }
+
+    const parts: Segment[] = kind === 'article' ? await htmlSegments(ctx, b, p.body) : [...(p.body.trim() ? [{ html: textHtml(p.body) }] : []), ...images.map((image) => ({ image }))]
+    const nImages = parts.filter((x) => 'image' in x).length
+    const plain = (h: string) => norm(h.replace(/<[^>]+>/g, '').replace(/&\w+;/g, ''))
+    const first = plain((parts.find((x) => 'html' in x && plain(x.html)) as { html: string } | undefined)?.html ?? '').slice(0, 12)
+    const at = (id: any) => `[data-annulo-act="${Number(id)}"]`
+    const st = { verified: false, res: null as Awaited<ReturnType<typeof opusResult>>, okText: false, uploadedBefore: 0 }
+    /** 正文填对了没有：第一段的字在、只出现一次（没粘贴两遍），编辑器里的图够数、B站 都传成功了 */
+    const bodyOk = async (ed: string) => {
+      const r = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); return e ? { text: e.innerText, imgs: e.querySelectorAll('img').length } : null })()`).catch(() => null)
+      if (!r) return false
+      if (first && norm(String(r.text)).split(first).length !== 2) return false
+      return r.imgs >= nImages && (await imageUploads(b)).ok - st.uploadedBefore >= nImages
+    }
+    /** 等发布结果：发布接口回了 code 0 / 页面说发布成功；回了别的 code 就是被拒了 */
+    const result = async (ms: number): Promise<string | { finish: string }> => {
+      for (const end = Date.now() + ms; Date.now() < end; ) {
+        await ctx.sleep(1500)
+        st.res = await opusResult(b)
+        if (st.res?.code === 0) return { finish: L(ctx, '发出去了', 'Published') + (st.res.id ? ` ${st.res.id}` : '') }
+        if (st.res && st.res.code !== 0) return `Bilibili refused: ${st.res.message || st.res.code}. Fix what it says if you can (then call publish_opus again); otherwise fail with this reason.`
+        st.okText = OPUS_TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))
+        if (st.okText) return { finish: L(ctx, '发出去了', 'Published') }
+      }
+      const said = (await notices(b)).slice(0, 4).join(' / ')
+      return `Clicked 发布, but no result yet${said ? ` (page says: ${said})` : ''}. A dialog or message may be on the page: handle it (not the publish button), then call check_result, or publish_opus again if the form needs changes.`
+    }
+    const tools = {
+      publish_opus: {
+        description: 'args { button_id }: the only way to publish. The script checks the title and body were put in with fill and still check out, and the button says 发布; then clicks it and waits for the result.',
+        params: { type: 'object', properties: { button_id: { type: 'integer', description: 'element number of the 发布 button at the bottom of the editor' } }, required: ['button_id'] },
+        run: async (a: any) => {
+          const issues: string[] = []
+          if (!(await b.filled('title'))) issues.push('the title has not been put in with fill (content "title"), or it no longer reads back exactly')
+          if (!(await b.filled('body'))) issues.push('the body has not been put in with fill (content "body"), or it no longer checks out (text missing or duplicated, or images missing or not uploaded)')
+          const label = squash(String(await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); return e ? e.innerText : '' })()`).catch(() => '')))
+          if (label !== OPUS_TEXT.publish) issues.push(`element ${a.button_id} is not the 发布 button`)
+          if (issues.length) return `Not published: ${issues.join('; ')}.`
+          st.verified = true
+          if (input.dry_run) return { finish: L(ctx, '演练：都核对过了，没点发布', 'Dry run: everything checked, not published') }
+          if (input.manual) return { finish: L(ctx, '都填好了，交给用户发布', 'Everything is filled in; handing over to the user') }
+          await b.click(at(a.button_id))
+          return result(30000)
+        },
+      },
+      check_result: { params: { type: 'object', properties: {} }, description: 'Wait a little longer for the publish result after a confirmation dialog.', run: async () => result(20000) },
+    }
+    const task = [
+      `在 B站 专栏编辑器里发一篇${kind === 'article' ? '专栏文章' : '图文专栏'}（页面已经打开、已登录）。`,
+      `- 标题：用 fill 把 title 放进标题框（「请输入标题」）。`,
+      `- 正文：用 fill 把 body 放进正文编辑框（「请输入正文」；分段粘贴、在原位传图都由它做）。`,
+      tags.length
+        ? `- 话题（尽量做）：在下面「发布设置」里点「添加话题」，在搜索框里依次搜 ${tags.map((t) => `「${t}」`).join('、')}，只选名字一模一样的那一个（单选），点「确认」；都没有一模一样的就点「取消」，不要选意思相近的。`
+        : `- 话题：没有，不用加。`,
+      `- 创作声明：勾选「AI辅助创作声明」；「原创声明」不勾。可见范围保持「所有人可见」，别的设置不用动。`,
+      `- 最后用 publish_opus 工具发布（传底部「发布」按钮的编号），它会核对、点、等结果；它说没核对过就照它说的改了再调用。`,
+    ].join('\n')
+    const content = {
+      title: p.title,
+      body: {
+        text: kind === 'article' ? p.body.replace(/<[^>]+>/g, ' ').replace(/&\w+;/g, ' ') : p.body, // 给 AI 看的预览；核对用 check
+        fill: async (ed: string) => {
+          // 先清空再粘贴：重试时不会把正文贴两遍
+          await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(ed)}); e.focus(); document.execCommand('selectAll') })()`).catch(() => {})
+          await b.press('Backspace').catch(() => {})
+          await ctx.sleep(500)
+          st.uploadedBefore = (await imageUploads(b)).ok
+          let n = 0
+          for (const x of parts) {
+            if ('html' in x) {
+              if (!(await pasteOpusHtml(b, ed, x.html))) throw new Error("couldn't paste into it; is it the body editor?")
+              await ctx.sleep(600)
+            } else {
+              n++
+              ctx.progress({ message: L(ctx, `上传第 ${n} 张图…`, `Uploading image ${n}…`) })
+              await pasteOpusImage(ctx, b, ed, x.image, n)
+            }
+          }
+          return `body pasted (${nImages} images)`
+        },
+        check: bodyOk,
+      },
+    }
+    const r = await b.agent(task, { tools, content, avoid: [OPUS_TEXT.publish], notes: 'bilibili.opus', maxSteps: 30 })
+    const extra = r.timing?.summary ? { timing: r.timing.summary } : {}
+    if (input.dry_run) {
+      const snap = await b.snapshot?.({ label: 'dry-run' }).catch(() => null)
+      await b.close().catch(() => {})
+      return { dry_run: true, need: st.verified ? [] : [r.reason || r.summary || L(ctx, '浏览器助手没走到发布那一步', "The browser assistant didn't reach the publish step")], warnings: [], snapshot: snap?.dir, ...extra }
+    }
+    const finish = async () => {
+      if (st.res?.code === 0 && st.res.id) return done(st.res.id, extra)
+      const id = await lookup(b, startedAt).catch(() => '')
+      return id ? done(id, extra) : done('', { unverified: true, ...extra })
+    }
+    if (st.res?.code === 0 || st.okText) return finish()
+    // AI 没做完、B站 不收，或者用户选了填好交给他：把窗口交给用户，等他点发布
+    const handed = !!input.manual && st.verified
+    const why = handed ? [] : [st.res?.message ? L(ctx, `B站 没让发：${st.res.message}`, `Bilibili refused: ${st.res.message}`) : r.reason || L(ctx, '浏览器助手没做完', "The browser assistant didn't finish")]
+    const shown = typeof b.show === 'function' && (await b.show().then(() => true, () => false))
+    if (!shown) {
+      const id = await lookup(b, startedAt).catch(() => '')
+      if (id) return done(id, extra)
+      throw stuck(why.length ? why : [L(ctx, '要交给你发布，但窗口调不到前台', "It's meant for you to publish, but the window couldn't be brought up")], false)
+    }
+    ctx.progress({ message: handed
+      ? L(ctx, '都填好了，在弹出的 B站 窗口里看一遍、调好封面和话题这些，点「发布」，发出去这里会自动记下', "Everything is filled in: check it in the Bilibili window that opened, adjust the cover, topic and so on, then click 发布 (Publish); it's recorded here once it goes out")
+      : L(ctx, `要你在弹出的 B站 窗口里接手：${why.join('；')}。改好后点「发布」，发出去这里会自动记下`, `Over to you in the Bilibili window that opened: ${why.join('; ')}. Fix it and click 发布 (Publish); it's recorded here once it goes out`) })
+    const minutes = handed ? 30 : 15
+    for (const end = Date.now() + minutes * 60_000; Date.now() < end; ) {
+      await ctx.sleep(2000)
+      st.res = await opusResult(b)
+      if (st.res?.code === 0) return finish()
+      if (OPUS_TEXT.success.test(String(await b.eval(`document.body.innerText`).catch(() => '')))) return finish()
+    }
+    throw stuck([...why, L(ctx, `${minutes} 分钟内没等到你发布`, `No publish within ${minutes} minutes`)], true)
+  } catch (e: any) {
+    const msg = e?.message ?? String(e)
+    if (!input.dry_run) ctx.db.update('social_posts', p.id, { status: 'failed', error: msg, updated_at: now() })
+    const err: any = new Error(msg)
+    if (e instanceof Expired || e?.expired) err.expired = true
+    if (e?.snapshot) err.snapshot = e.snapshot
+    throw err
+  }
+}
+
+/**
+ * 从 B站 删除一篇专栏（不可恢复）：交给浏览器助手在「图文管理」页找到这一篇、点删除；
+ * 确认框里的确认按钮它点不到，只能调 confirm_delete：核对是确认框里的「确定 / 删除」才点，点完读图文列表确认没了。
+ */
+async function removeOpus(p: Post | null, id: string, ch: any, input: { dry_run?: boolean }, ctx: any) {
+  const b = await openBrowser(ctx, { profile: ch.browser_profile })
+  if (typeof b.agent !== 'function') throw new Error(L(ctx, '要先更新 Annulo（B站 删除专栏要浏览器助手）：到 设置 → 关于 更新', 'Update Annulo first (deleting Bilibili articles needs the browser assistant): Settings → About'))
+  const removed = () => p && ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
+  const before = await readOpus(ctx, b, 3)
+  if (before.loggedOut) throw expired(ctx, ch)
+  const o = before.list.find((x) => x.id === id)
+  if (!o || o.deleted) {
+    if (before.ok) removed()
+    return { removed: id, verified: before.ok, already: true }
+  }
+  const gone = async () => {
+    const r = await readOpus(ctx, b, 3)
+    return r.ok && !r.list.some((x) => x.id === id && !x.deleted)
+  }
+  const at = (x: any) => `[data-annulo-act="${Number(x)}"]`
+  const tools = {
+    confirm_delete: {
+      description: `args { button_id }: the only way to confirm the deletion. Checks the element is the confirm button (${TEXT.confirm.join(' / ')}) inside the confirmation dialog, clicks it, and checks this article is gone.`,
+      params: { type: 'object', properties: { button_id: { type: 'integer', description: 'element number of the confirm button in the dialog' } }, required: ['button_id'] },
+      run: async (a: any) => {
+        const el = await b.eval(`(() => { const e = document.querySelector(${JSON.stringify(at(a.button_id))}); if (!e) return null; return { text: (e.innerText || '').trim(), dialog: !!e.closest('[role="dialog"],[aria-modal="true"],[class*="modal" i],[class*="dialog" i],[class*="popover" i],[class*="confirm" i]') } })()`).catch(() => null)
+        if (!el) return `No element ${a.button_id}.`
+        if (!TEXT.confirm.includes(el.text)) return `Element ${a.button_id} says "${el.text}", not a confirm button (${TEXT.confirm.join(' / ')}).`
+        if (!el.dialog) return `Element ${a.button_id} is not inside the confirmation dialog; open the delete confirmation first.`
+        if (input.dry_run) return { finish: L(ctx, '演练：确认框和按钮都对，没点', 'Dry run: the dialog and button check out, not clicked') }
+        await b.click(at(a.button_id)).catch(() => b.eval(`document.querySelector(${JSON.stringify(at(a.button_id))}).click()`))
+        for (let i = 0; i < 6; i++) {
+          await ctx.sleep(1500)
+          if (await gone()) return { finish: L(ctx, `删掉了 ${id}`, `Deleted ${id}`) }
+        }
+        return 'Clicked, but the article is still listed. A verification may be showing (ask_user), or check again.'
+      },
+    },
+  }
+  const task = [
+    `在 B站 创作中心的「图文管理」页删掉这一篇（不可恢复，只删这一篇，别的一篇都不要动）：`,
+    `- 标题「${o.title}」，链接里有 ${id}。`,
+    `- 在这一篇上找「删除」（可能在「⋮ / 更多」菜单里，鼠标移上去才出来，用 hover），点了弹出确认框后用 confirm_delete 工具点确认按钮（传按钮的编号）。碰到验证码用 ask_user。`,
+  ].join('\n')
+  await b.goto(OPUS_MANAGE).catch(() => {})
+  if (LOGGED_OUT.test(b.url())) throw expired(ctx, ch)
+  const r = await b.agent(task, { tools, avoid: TEXT.confirm, notes: 'bilibili.remove', maxSteps: 20 })
+  if (input.dry_run) {
+    const snap = await b.snapshot?.({ label: 'remove-dry-run' }).catch(() => null)
+    return { dry_run: true, ok: r.ok, reason: r.reason || r.summary, snapshot: snap?.dir, timing: r.timing?.summary }
+  }
+  if (!(await gone())) throw new Error(L(ctx, `没删掉：${r.reason || L(ctx, '浏览器助手说删了，但这篇还在图文列表里', 'the browser assistant said it was deleted, but it is still listed')}。到 B站 创作中心「图文管理」里看一眼`, `Not deleted: ${r.reason || 'it is still listed'}. Check 图文管理 in Bilibili's creator center`))
+  removed()
+  return { removed: id }
+}
+
 /**
  * 发布一条视频（投稿）。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去稿件列表里找有没有同标题的稿件（含审核中），避免重复投稿。
@@ -541,11 +1015,12 @@ async function addResult(b: any): Promise<{ code: number; message: string; bvid:
  */
 export async function publish(input: { post_id: string; force_interval?: boolean; dry_run?: boolean; manual?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
-  if (!p) throw new Error(L(ctx, '没有这条视频：', 'No such video post: ') + input?.post_id)
+  if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   // 视频上传要十几分钟：认领 60 分钟内的不重复发
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < 60 * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
   if (!input.dry_run && !['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
+  if (isOpus(p)) return publishOpus(p, input, ctx) // 图文、长文发专栏
   const ch = biliChannel(ctx, p.channel_id)
   if (!ch.browser_profile || !ch.platform_uid) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social media page first`))
   const tags: string[] = parse(p.tags, [])
@@ -789,8 +1264,14 @@ async function handOverRemove(ctx: any, b: any, bvid: string, why: string): Prom
  * 碰到验证码它交给用户；它没做完就把窗口交给用户（handOverRemove）。最后再读一次稿件列表核对，还在就报错、不记成 removed。
  * dry_run：演练，走到确认框为止，confirm_delete 核对完不点，返回 { dry_run, ok, reason? }，什么都不删。
  */
-export async function remove(input: { post_id?: string; bvid?: string; channel_id?: string; dry_run?: boolean }, ctx: any) {
+export async function remove(input: { post_id?: string; bvid?: string; opus_id?: string; channel_id?: string; dry_run?: boolean }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
+  if ((p && isOpus(p)) || (!p && input?.opus_id)) {
+    const id = p?.post_id || input?.opus_id || ''
+    const och = biliChannel(ctx, p?.channel_id || input?.channel_id || '')
+    if (!id || !och.browser_profile) throw new Error(L(ctx, '这篇专栏发布时没认出 id，请到 B站 创作中心「图文管理」里删', "This article was published without a recognized id; delete it in 图文管理 in Bilibili's creator center"))
+    return removeOpus(p, id, och, input, ctx)
+  }
   const bvid = p?.post_id || input?.bvid
   const ch = biliChannel(ctx, p?.channel_id || input?.channel_id || '')
   if (!bvid || !ch.browser_profile) throw new Error(L(ctx, '要给出视频（post_id），或者 bvid + channel_id；发布时没认出 BV 号的稿件请到 B站 创作中心里删', 'Give a video post (post_id), or bvid + channel_id; videos published without a recognized BV id must be deleted in Bilibili\'s creator center'))
@@ -864,7 +1345,7 @@ export async function remove(input: { post_id?: string; bvid?: string; channel_i
 }
 
 /**
- * 采集：读创作中心的稿件列表（播放、点赞、评论、收藏、分享）和粉丝数，写回 social_posts 和 social_accounts。
+ * 采集：读创作中心的稿件列表和图文列表（播放 / 阅读、点赞、评论、收藏、分享）和粉丝数，写回 social_posts 和 social_accounts。
  * 在 B站 上直接投的、已经开放浏览的稿件也收进来（source: platform）；发布时没认出 BV 号的，按标题对上补上。
  * 表里已有的稿件（包括审核中的）每次都更新。
  */
@@ -878,6 +1359,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     }
     const b = await openBrowser(ctx, { profile: ch.browser_profile })
     const r = await readVideos(ctx, b, collectPages(input, 5))
+    const ops = r.loggedOut ? { list: [], loggedOut: true, ok: false } : await readOpus(ctx, b, collectPages(input, 5)).catch(() => ({ list: [] as BiliOpus[], loggedOut: false, ok: false }))
     const user = r.loggedOut ? null : await readUser(b).catch(() => null)
     await b.close()
     if (r.loggedOut || (user && user.id !== String(ch.platform_uid))) {
@@ -900,13 +1382,19 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     ]
     let updated = 0
     let added = 0
-    for (const v of r.videos) {
-      if (isDeleted(v)) continue
-      let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: v.bvid }, limit: 1 }).list[0]
+    // 视频和专栏一起过：id 是 BV 号或专栏 id，按标题对上时只认同一种（视频对视频、专栏对专栏）
+    type Item = { id: string; url: string; opus: boolean; title: string; description: string; created: string; open: boolean; deleted: boolean; views: number; likes: number; comments: number; collects: number; shares: number }
+    const items: Item[] = [
+      ...r.videos.map((v) => ({ ...v, id: v.bvid, url: videoUrl(v.bvid), opus: false, open: isOpen(v), deleted: isDeleted(v) })),
+      ...ops.list.map((o) => ({ ...o, url: opusUrl(o.id), opus: true, description: '' })),
+    ]
+    for (const v of items) {
+      if (v.deleted) continue
+      let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: v.id }, limit: 1 }).list[0]
       if (!hit) {
-        const u = unlinked.find((x) => norm(x.title) === norm(v.title) && (x.status !== 'failed' || (!!v.created && Date.parse(v.created) >= Date.parse(x.claimed_at || '') - 60_000)))
+        const u = unlinked.find((x) => isOpus(x) === v.opus && norm(x.title) === norm(v.title) && (x.status !== 'failed' || (!!v.created && Date.parse(v.created) >= Date.parse(x.claimed_at || '') - 60_000)))
         if (u) {
-          const patch: any = { post_id: v.bvid, post_url: videoUrl(v.bvid) }
+          const patch: any = { post_id: v.id, post_url: v.url }
           if (u.status === 'failed') {
             Object.assign(patch, { status: 'published', published_at: v.created, error: null })
             totals.posts++
@@ -916,7 +1404,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
           hit = { ...u, ...patch }
         }
       }
-      if (!hit && !isOpen(v)) continue // 在 B站 上直接投的、还在审核或没通过的先不收
+      if (!hit && !v.open) continue // 在 B站 上直接投的、还在审核或没通过的先不收
       const metrics = { views: v.views, likes: v.likes, comments: v.comments, collects: v.collects, shares: v.shares, metrics_at: t }
       if (!hit || hit.status === 'published') {
         for (const k of METRIC_KEYS) totals[k] += (metrics[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
@@ -928,8 +1416,8 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
         updated++
       } else {
         const saved = ctx.db.insert('social_posts', {
-          channel_id: ch.id, title: v.title, body: v.description, status: 'published', source: 'platform',
-          post_id: v.bvid, post_url: videoUrl(v.bvid), images: '[]', published_at: v.created || t, created_at: t, ...metrics,
+          channel_id: ch.id, kind: v.opus ? 'article' : 'video', title: v.title, body: v.description, status: 'published', source: 'platform',
+          post_id: v.id, post_url: v.url, images: '[]', published_at: v.created || t, created_at: t, ...metrics,
         })
         recordDay(ctx, ch.id, saved, day, metrics, today)
         added++
@@ -942,7 +1430,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)
     else ctx.db.insert('social_daily', daily)
-    out.push({ channel: patch.name ?? ch.name, videos: r.videos.length, updated, added, followers: patch.followers })
+    out.push({ channel: patch.name ?? ch.name, videos: r.videos.length, articles: ops.list.length, ...(ops.ok ? {} : { articles_error: L(ctx, `读不到图文列表（${API.opusList(1)}）`, `Couldn't read the article list (${API.opusList(1)})`) }), updated, added, followers: patch.followers })
   }
   return { channels: out }
 }

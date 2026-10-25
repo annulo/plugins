@@ -12,6 +12,10 @@
         "type": "string",
         "description": "出自哪篇内容（模板的内容 id，比如外贸模板的文章）；手动新建的为空"
       },
+      "kind": {
+        "type": "string",
+        "description": "发成什么：video 视频 / post 图文（纯文字 + 配图）/ article 长文（富文本）；_content.ts 的 fromContent 写。没写的按平台猜（_fields.ts 的 postKind）。B 站靠它分流：视频投稿，图文和长文发专栏"
+      },
       "title": {
         "type": "string",
         "description": "标题（X 没有标题：只在后台列表里显示，不发出去）"

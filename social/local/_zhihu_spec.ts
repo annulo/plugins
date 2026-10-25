@@ -45,8 +45,11 @@ export function bodyImages(body: string): string[] {
 }
 
 /** 检查必填内容；字数只拦标题（知乎发布页会直接拒），别的给出问题让助手改 */
-export function problems(d: { title?: string; body?: string; tags?: string[]; images?: string[] }, ctx?: any): string[] {
+export function problems(d: { title?: string; body?: string; tags?: string[]; images?: string[]; cover?: string }, ctx?: any): string[] {
   const out: string[] = []
+  // 文章封面只收 JPEG、PNG（「添加封面」的文件框 accept .jpeg .jpg .png）；地址看不出格式的（资料库地址没有后缀）放过，传的时候知乎会说
+  const cover = String(d.cover ?? '').trim().replace(/[#?].*$/, '')
+  if (cover && /\.(webp|gif|heic|heif|avif|bmp|svg)$/i.test(cover)) out.push(L(ctx, '知乎文章封面只支持 JPEG、PNG：换一张图', 'Zhihu article covers must be JPEG or PNG: pick another image'))
   const title = String(d.title ?? '').trim()
   if (!title) out.push(L(ctx, '没有标题', 'No title'))
   else if (len(title) > ZHIHU.titleMax) out.push(L(ctx, `标题 ${len(title)} 个字，最多 ${ZHIHU.titleMax} 个字`, `The title is ${len(title)} characters; max ${ZHIHU.titleMax}`))

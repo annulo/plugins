@@ -39,7 +39,7 @@
 | 函数 | 做什么 |
 |---|---|
 | `social.login({ type })` / `social.login({ channel_id })` | 添加账号（弹出浏览器让用户登录，登录成功写进 `social_accounts`）/ 重新登录 |
-| `social.publish({ post_id, manual? })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开。`manual: true` 是「填好交给我」：在浏览器里填好、核对，不点发布，窗口交给用户自己调（封面、合集…）、自己发，发出去照常记下（最多等 30 分钟）；只有 `FIELDS.handOver` 的平台（小红书、抖音、B站）能用，别的平台报错不发，排期的不要用 |
+| `social.publish({ post_id, manual? })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开。`manual: true` 是「填好交给我」：在浏览器里填好、核对，不点发布，窗口交给用户自己调（封面、合集…）、自己发，发出去照常记下（最多等 30 分钟）；只有 `FIELDS.handOver` 的平台（小红书、抖音、B站、知乎）能用，别的平台报错不发，排期的不要用 |
 | `social.remove({ post_id })` | 从平台删除 |
 | `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
@@ -48,7 +48,7 @@
 | `social.health()` | 各账号最近一次发布 / 删除 / 采集成没成 |
 | `social.elsewhereAll()` | 登录态在别的电脑上的账号 `{ [账号 id]: 那台电脑的名字 }` |
 | `social.openProfile({ channel_id })` | 用账号自己的浏览器打开它的主页 |
-| `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站） |
+| `social.createDraftBatch({ drafts })` | 不经内容、手动新建几条待审稿（X、B 站视频） |
 | `stats.summary({ channel_id, days })` | 一个账号近 N 天的概览：发布数、粉丝增量、互动增量、帖子列表 |
 
 Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。操作见 [Facebook API 授权与测试说明](docs/facebook-api.md)。启用 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api', account: '<连接账号 ID>', channel_id?: '<已有主页账号 ID>' })` 返回可选主页，页面用 `ChooseAccounts` 调 `social.addChosen`。已有主页沿用 id，只重新绑定当前目标，原浏览器登录保留；其它 API 主页不被浏览器重登覆盖。User/Page token 都不写进项目表，绑定的 OAuth 账号断开时必须重连。
@@ -101,7 +101,8 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 |---|---|---|---|---|
 | X、LinkedIn、Facebook、Instagram | 不发（只在后台列表里显示） | 纯文字 | 一组图（顺序就是轮播顺序）或一个视频 | Instagram、小红书没图时用 `cover_text` 生成文字封面 |
 | 小红书 | 发 | 纯文字 | 一组图或一个视频 | `cover_text` |
-| YouTube、抖音、B 站 | 发 | 纯文字（简介） | 只有视频 | B 站 `category` 分区 |
+| YouTube、抖音 | 发 | 纯文字（简介） | 只有视频 | — |
+| B 站 | 发 | 视频：纯文字（简介）；专栏：图文是纯文字，长文是富文本 HTML | 视频投稿一个视频；图文、长文发成专栏，配图排在文字后面 / 图在正文里 | 视频 `category` 分区；专栏标题 50 字内、话题单选 |
 | 知乎 | 发 | 富文本 HTML（h2 / h3 / p / ul / ol / blockquote / strong / a / img，和模板文章编辑器存的一样） | 没有单独的配图：图片插在正文里，`images` 由 `zhihu.save` 按正文里的图写 | — |
 
 `tags` 都是话题 / 标签（数量上限各平台不同）。知乎发布时按图切段：文字粘贴进知乎编辑器、图片在原位置上传；旧的 Markdown 写法（`##`、单独一行的 `![](地址)`）还认。
@@ -128,5 +129,12 @@ Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth
 4. 不要在模板里声明 `social_` 开头的表，也不要改 `plugins/social/` 下的默认写法：用户的定制放 `user/plugins/social/`。
 
 Facebook API comment reading: `social/facebook.comments({ post_id, after? })` reads a published local post record belonging to its connected Page. Returns `{ comments: [{ id?, message, created_time }], next_cursor }`, newest first (25 per page, including replies). Read only; no author profiles or persistent comment storage. Requires Page read permissions. Templates provide the comment dialog.
+
+B 站一个账号发两种东西（2026-10 起）：视频是**投稿**，图文、长文发成**专栏**（创作中心「专栏投稿」，见 `notes/bilibili.opus.md`）。两种的标题长度、正文、话题都不一样，
+所以平台的字段表可以按发成什么换一套：`FIELDS.bilibili.kinds.post / article` 盖掉视频那套，取的时候用 `fieldsFor(平台, 类型)`；`supports`、`fromContent`、`lengthOn` 已经按类型取了。
+帖子记 `kind`（`fromContent` 写；`bilibili.save` 带 `kind: 'post' | 'article'`），发布、检查、删除、采集都按 `postKind(平台, 帖子)` 分流，没记 `kind` 的老帖子按视频。
+模板显示、编辑一条帖子时用 `fieldsOfPost(平台, 帖子)`（模板 core 的 `postPlatform`），专栏的名字、正文提示在模板文案 `meta.platform.bilibili.post_noun / post_hint / article_noun / article_hint`。
+
+知乎文章封面：长文的 `video_cover`（和视频封面同一个字段，就是这条帖子自己的封面）在「发布设置 → 添加封面」里传，只收 JPEG、PNG；平台看 `FIELDS.articleCover`。知乎要先存成草稿才收封面，`zhihu.publish` 等正文填好再传。
 
 视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音、B站 使用（`FIELDS.videoCover`）；其他平台不传。比例看 `FIELDS.coverRatio`（小红书、抖音 3:4，B站 4:3），不是这个比例平台会裁，模板发布前提示、能当场裁。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。
