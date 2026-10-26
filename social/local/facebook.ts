@@ -98,7 +98,7 @@ const LOGGED_OUT = /\/(login|checkpoint|recover|reg\/|r\.php)/
 // facebook.com/<这些> 不是账号或主页
 const RESERVED = /^(me|profile\.php|pages|groups|watch|marketplace|gaming|events|friends|settings|help|login|checkpoint|notifications|messages|bookmarks|stories|reel|search|home\.php|permalink\.php|story\.php|photo|photo\.php|hashtag)$/i
 
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，Facebook 功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Facebook"))
   return ctx.browser.open(opts)
 }
@@ -445,7 +445,7 @@ export async function login(input: { channel_id?: string; mode?: 'api' | 'browse
     } }
   }
   const profile = old?.browser_profile || freeProfile(ctx, 'facebook')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录 Facebook', 'A browser window is open — log in to Facebook there') })
   await b.goto(SITE + '/')
   let ok = false

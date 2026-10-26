@@ -121,7 +121,7 @@ const opusUrl = (id: string) => `${SITE}/opus/${id}`
 /** 这条发专栏（图文、长文）还是视频投稿 */
 const isOpus = (p: { kind?: string; video?: string } | null | undefined) => postKind('bilibili', p) !== 'video'
 
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，B站功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Bilibili"))
   return ctx.browser.open(opts)
 }
@@ -256,7 +256,7 @@ function channelFields(u: BiliUser) {
 export async function login(input: { channel_id?: string }, ctx: any) {
   const old = input?.channel_id ? biliChannel(ctx, input.channel_id) : null
   const profile = old?.browser_profile || freeProfile(ctx, 'bilibili')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请用 B站 App 扫码登录', 'A browser window is open — scan the QR code with the Bilibili app to log in') })
   await b.goto(PASSPORT)
   let d: any = null

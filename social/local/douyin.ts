@@ -97,7 +97,7 @@ const loggedOut = (url: string) => !/creator\.douyin\.com\/creator-micro\//.test
 const videoUrl = (id: string) => `${SITE}/video/${id}`
 const postUrl = (id: string, p: Pick<Post, 'images' | 'video'>) => parse<string[]>(p.images, []).length && !p.video ? `${SITE}/note/${id}` : videoUrl(id)
 
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，抖音功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Douyin"))
   return ctx.browser.open(opts)
 }
@@ -227,7 +227,7 @@ function channelFields(u: DyUser) {
 export async function login(input: { channel_id?: string }, ctx: any) {
   const old = input?.channel_id ? dyChannel(ctx, input.channel_id) : null
   const profile = old?.browser_profile || freeProfile(ctx, 'douyin')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请用抖音 App 扫码登录', 'A browser window is open — scan the QR code with the Douyin app to log in') })
   await b.goto(CREATOR)
   let u: DyUser | null = null

@@ -93,7 +93,7 @@ const ARTICLE = /\/p\/(\d+)(\/edit)?/
 
 const articleUrl = (id: string) => `https://zhuanlan.zhihu.com/p/${id}`
 
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，知乎功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Zhihu"))
   return ctx.browser.open(opts)
 }
@@ -206,7 +206,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   const old = input?.channel_id ? ctx.db.get('social_accounts', input.channel_id) : null
   if (input?.channel_id && !old) throw new Error(L(ctx, '没有这个渠道：', 'No such channel: ') + input.channel_id)
   const profile = old?.browser_profile || freeProfile(ctx, 'zhihu')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录知乎（知乎 App 扫码或手机验证码）', 'A browser window is open — log in to Zhihu there (scan with the Zhihu app or use an SMS code)') })
   await b.goto(WWW + '/creator')
   let user = await whoami(b)

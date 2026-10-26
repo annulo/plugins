@@ -119,7 +119,7 @@ export function check(input: { post_id: string }, ctx: any) {
 // 登录成功与否看创作者中心自己的接口 /api/galaxy/user/info：没登录是 401，登录了返回账号信息。
 
 /** 打开本机浏览器。旧版 Annulo 没有 ctx.browser，给一句能看懂的话，而不是 JS 报错 */
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，小红书功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use Xiaohongshu"))
   return ctx.browser.open(opts)
 }
@@ -157,7 +157,7 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   const old = input?.channel_id ? ctx.db.get('social_accounts', input.channel_id) : null
   if (input?.channel_id && !old) throw new Error(L(ctx, '没有这个渠道：', 'No such channel: ') + input.channel_id)
   const profile = old?.browser_profile || freeProfile(ctx, 'xhs')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录小红书创作者中心', 'A browser window is open — log in to the Xiaohongshu Creator Center there') })
   let user = await whoami(b)
   const deadline = Date.now() + 5 * 60_000

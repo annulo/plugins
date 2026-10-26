@@ -91,7 +91,7 @@ const VID = /(?:youtu\.be\/|[?&]v=|\/video\/|\/shorts\/)([\w-]{11})/
 
 const watchUrl = (id: string) => `${SITE}/watch?v=${id}`
 
-function openBrowser(ctx: any, opts: { profile: string; show?: boolean }) {
+function openBrowser(ctx: any, opts: { profile: string; show?: boolean; login?: boolean }) {
   if (!ctx.browser?.open) throw new Error(L(ctx, '当前的 Annulo 版本还不能操作浏览器，YouTube 功能要升级 Annulo 后才能用', "This Annulo version can't drive a browser yet; update Annulo to use YouTube"))
   return ctx.browser.open(opts)
 }
@@ -306,7 +306,7 @@ async function openFor(ctx: any, ch: any) {
 export async function login(input: { channel_id?: string }, ctx: any) {
   const old = input?.channel_id ? ytChannel(ctx, input.channel_id) : null
   const profile = old?.browser_profile || freeProfile(ctx, 'youtube')
-  const b = await openBrowser(ctx, { profile, show: true })
+  const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录 YouTube（Google 账号）', 'A browser window is open — log in to YouTube (your Google account) there') })
   await b.goto(STUDIO)
   let uc = ''

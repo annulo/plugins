@@ -2,6 +2,9 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.9.1
+  zh: "团队服务器上登录社媒账号，窗口开在你自己的电脑上，登录后这个账号就在你的电脑上发（要新版 Annulo）。"
+  en: "On a team server, logging in to a social account opens the window on your own computer, and the account then posts from there (needs a newer Annulo)."
 - version: 0.9.0
   zh: "B 站能发专栏了，图文、长文照原样排好；知乎文章能带封面、也能「填好交给我」；长文里的图不会再丢。"
   en: "Bilibili now takes image and long-form posts as articles, laid out as written; Zhihu articles can have a cover and be handed to you filled in; images in long-form posts no longer go missing."
