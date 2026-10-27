@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.10.0
+  zh: "能读别人的小红书主页和最近的笔记（用你 Chrome 里登录的网页版），模板的参考博主可以自动同步笔记。"
+  en: "Reads other creators' Xiaohongshu profiles and latest posts (via Xiaohongshu on the web in your Chrome), so templates can sync reference creators automatically."
+
 - version: 0.9.1
   zh: "团队服务器上登录社媒账号，窗口开在你自己的电脑上，登录后这个账号就在你的电脑上发（要新版 Annulo）。"
   en: "On a team server, logging in to a social account opens the window on your own computer, and the account then posts from there (needs a newer Annulo)."

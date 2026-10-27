@@ -6,6 +6,7 @@ import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRow
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
 import { Expired } from './_health'
 import { selectUpload, waitImages } from './_xhs_upload'
+export { creatorNotes } from './_xhs_web'
 
 // 小红书渠道（本机函数，Annulo 在用户电脑上执行，不经过模型）。
 //
@@ -15,6 +16,8 @@ import { selectUpload, waitImages } from './_xhs_upload'
 //   xhs.login / xhs.checkLogin                本机浏览器登录（ctx.browser），登录态只在这台电脑上
 //   xhs.publish / xhs.remove 发布、删除
 //   xhs.collect                               采集笔记数据和粉丝数
+//   xhs.creatorNotes({ profile_url, limit?, known?, max_detail? })
+//                                             读别人的主页和最近的笔记（网页版、用户自己的 Chrome），给模板的参考博主同步用，见 _xhs_web.ts
 //
 // 图文笔记和视频笔记：social_posts.video 有值（素材地址 http(s)，或本机文件 local:<名字>，Annulo 能力版本 12 起 b.upload 直接认）
 // 就发视频笔记：发布页切到「上传视频」、传视频、等上传和处理完（最多 10 分钟）、再填标题正文话题；配图和封面大字不用；video_cover 有值时上传独立封面，否则使用默认封面。
