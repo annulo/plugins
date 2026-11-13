@@ -129,6 +129,10 @@
       "facebook_api_metrics": {
         "type": "string",
         "description": "Facebook API 采集能力 JSON {checked_at, available, warnings}；不可读取的指标保留旧值，不当作 0。账号记各项能力，帖子记实际取得的指标；不含凭据。"
+      },
+      "instagram_api_state": {
+        "type": "string",
+        "description": "Instagram API 单图发布回执 JSON；保存容器、提交阶段、媒体 ID 和链接，不含令牌。提交后只核对结果，禁止自动重发。"
       }
     },
     "required": [

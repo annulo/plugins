@@ -74,11 +74,11 @@
       },
       "auth_mode": {
         "type": "string",
-        "description": "Facebook 渠道：browser（原浏览器方式）/ api（官方公共主页 API）；旧账号未填写时按 browser 处理"
+        "description": "连接方式：browser / api；未填写时按 browser 处理。Facebook 公共主页和 Instagram 专业账号可选 API。"
       },
       "api_credential": {
         "type": "string",
-        "description": "Facebook API 凭据来源：page_token（本机密钥，仅测试）/ oauth（Annulo 设置 → 连接）"
+        "description": "API 凭据来源：page_token / oauth / instagram_user_token；只存来源，不存令牌。 instagram_managed 表示服务端托管的 Unified Login。"
       },
       "oauth_account": {
         "type": "string",
@@ -91,6 +91,30 @@
       "facebook_api_metrics": {
         "type": "string",
         "description": "Facebook API 采集能力 JSON {checked_at, available, warnings}；不可读取的指标保留旧值，不当作 0。账号记各项能力，帖子记实际取得的指标；不含凭据。"
+      },
+      "instagram_user_id": {
+        "type": "string",
+        "description": "Instagram Login 的 user_id；和浏览器用户 ID 分开保存。"
+      },
+      "instagram_media_host": {
+        "type": "string",
+        "description": "本机图片的公开素材库 JSON {api_host,project_id,site_id}，不含密钥。"
+      },
+      "instagram_auth_error": {
+        "type": "string",
+        "description": "最近一次授权检测失败说明，不含凭据。"
+      },
+      "instagram_login_method": {
+        "type": "string",
+        "description": "授权协议：unified_login；不存口令。"
+      },
+      "instagram_connection_id": {
+        "type": "string",
+        "description": "当前项目绑定的服务连接 ID，重新授权产生新 ID。"
+      },
+      "instagram_grant_id": {
+        "type": "string",
+        "description": "服务端不可变授权来源 ID；不存口令。"
       }
     }
   }
