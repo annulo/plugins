@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { sourceOf } from './_source'
+import { sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { BILI, OPUS, descText, isHtml, isVideoRef, opusLen, opusProblems, problems } from './_bilibili_spec'
 import { postKind } from './_fields'
@@ -182,7 +182,7 @@ const opusIssues = (p: { title?: string; body?: string; tags?: string; images?: 
  * 这里校验再存：视频不是地址 / 本机文件报错；超字数、标签不够这类问题存下来并在 problems 里返回，
  * 让助手改了带 post_id 再存。article_id 可选（从文章改写来的才有）；B站 对简介里的外链审核严，不自动接文章链接。
  */
-export function save(input: { article_id?: string; article_title?: string; url?: string; kind?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; category?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id?: string; article_title?: string; url?: string; kind?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; category?: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const ch = biliChannel(ctx, input?.channel_id)
   const kind = input?.kind === 'post' || input?.kind === 'article' ? input.kind : 'video'
@@ -192,11 +192,11 @@ export function save(input: { article_id?: string; article_title?: string; url?:
   if (kind === 'video') {
     const video = String(input.video ?? '').trim()
     if (!isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；资料库没有视频就先上传一个', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); upload one to the Library first if there is none'))
-    post = { kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), video, ...videoCoverPatch(input, ctx), category: String(input.category ?? '').trim(), images: '[]' }
+    post = { ...planPatch(input), kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), video, ...videoCoverPatch(input, ctx), category: String(input.category ?? '').trim(), images: '[]' }
   } else {
     if (kind === 'article' && body && !isHtml(body)) throw new Error(L(ctx, '长文（kind: article）的 body 要是 HTML（<h2> <p> <ul> <blockquote> <strong> <img>…）；纯文字加配图用 kind: post', 'An article (kind: article) needs an HTML body (<h2> <p> <ul> <blockquote> <strong> <img>…); for plain text with images use kind: post'))
     const images = kind === 'article' ? htmlImages(body) : (input.images ?? []).map((u) => String(u).trim()).filter(Boolean)
-    post = { kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? []).slice(0, OPUS.topicsMax)), images: JSON.stringify(images), video: '', video_cover: '', category: '' }
+    post = { ...planPatch(input), kind, title, body, tags: JSON.stringify(cleanTags(input.tags ?? []).slice(0, OPUS.topicsMax)), images: JSON.stringify(images), video: '', video_cover: '', category: '' }
   }
   let id = input.post_id
   if (id) {

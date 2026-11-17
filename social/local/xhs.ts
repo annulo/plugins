@@ -1,7 +1,7 @@
 import { L } from './_i18n'
 import { videoCoverPatch } from './_video_cover'
 import { uploadVideoCover } from './_video_cover_upload'
-import { pickImages, sourceOf } from './_source'
+import { pickImages, sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { XHS, isVideoRef, len, problems } from './_xhs_spec'
 import { Expired } from './_health'
@@ -73,7 +73,7 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 标题超长、正文为空直接报错；别的不合规格的（字数偏多、标签太多…）存下来并在 problems 里返回，让助手改了再存。
  * 配图用文章正文里的图片。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; video_cover?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; cover_text?: string; video?: string; video_cover?: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const picked = pickImages(input, XHS.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
@@ -84,6 +84,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (!title || !body) throw new Error(L(ctx, '标题和正文都要写', 'Both title and body are required'))
   if (len(title) > XHS.titleMax) throw new Error(L(ctx, `标题 ${len(title)} 个字，超过了 ${XHS.titleMax} 个字：改短再存`, `The title is ${len(title)} characters, over ${XHS.titleMax}: shorten it and save again`))
   const post: Partial<Post> = {
+    ...planPatch(input),
     ...videoCoverPatch(input, ctx),
     title,
     body,

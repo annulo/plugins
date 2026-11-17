@@ -1,7 +1,7 @@
 import { L } from './_i18n'
 import { videoCoverPatch } from './_video_cover'
 import { uploadVideoCover } from './_video_cover_upload'
-import { pickImages, sourceOf } from './_source'
+import { pickImages, sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { DOUYIN, descText, isVideoRef, problems } from './_douyin_spec'
 import { Expired } from './_health'
@@ -151,7 +151,7 @@ const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t)
  * 存一条写好的图文或视频作品（待审）。这里校验再存：视频不是地址 / 本机文件报错；超字数、话题太多这类问题存下来并在 problems 里返回，
  * 让助手改了带 post_id 再存。article_id 可选（从文章改写来的才有）；抖音简介里的链接点不开，不自动接文章链接。
  */
-export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id?: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video?: string; video_cover?: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const ch = dyChannel(ctx, input?.channel_id)
   const old = input.post_id ? ctx.db.get('social_posts', input.post_id) : null
@@ -161,6 +161,7 @@ export function save(input: { article_id?: string; article_title?: string; url?:
   const images: string[] = picked ?? (video ? [] : old ? parse(old.images, []) : input.video !== undefined ? [] : (a?.images ?? []).slice(0, DOUYIN.imagesMax))
   if (video && !isVideoRef(video)) throw new Error(L(ctx, 'video 要是资料库里视频的地址（http / https）或本机文件（local:…）；没有合适的就留空', 'video must be the URL of a video in the Library (http / https) or a local file (local:…); leave it empty if none fits'))
   const post: Partial<Post> = {
+    ...planPatch(input),
     ...videoCoverPatch(input, ctx),
     title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || [...String(a?.title ?? '')].slice(0, images.length && !video ? DOUYIN.imageTitleMax : DOUYIN.titleMax).join(''),
     body: String(input.body ?? '').trim(),

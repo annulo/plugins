@@ -24,7 +24,7 @@
 | 表 | 内容 |
 |---|---|
 | `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili / zhihu）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
-| `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
+| `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`plan_item_id`（为增长计划的哪个计划项写的，可空，存帖子时助手带上）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
 | `social_daily` | 账号每天一行：粉丝和互动合计 |
 | `social_post_daily` | 帖子每天一行：当天最后一次采集的累计数 |
 | `social_health` | 浏览器自动化最近一次成没成：一个账号一类操作（发布、删除、采集）一行 |

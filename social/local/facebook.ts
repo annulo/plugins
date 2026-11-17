@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { pickImages, sourceOf } from './_source'
+import { pickImages, sourceOf, planPatch, linkInBody } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
 import { Expired } from './_health'
@@ -210,7 +210,7 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 存一条写好的帖子（待审）。帖子由助手按任务 tasks/write-facebook.md 写，这里校验再存：正文为空报错；
  * 文章有链接（articles.url）时接在正文最后；超字数这类问题存下来并在 problems 里返回，让助手改了带 post_id 再存。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const picked = pickImages(input, FB.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
@@ -218,8 +218,9 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   let body = String(input.body ?? '').trim()
   if (!body) throw new Error(L(ctx, '正文要写', 'The body is required'))
   const link = /^https?:\/\//.test(a.url ?? '') ? String(a.url) : ''
-  if (link && !body.includes(link)) body += '\n\n' + link
+  if (link) body = linkInBody(body, link, ch.type, input.plan_item_id)
   const post: Partial<Post> = {
+    ...planPatch(input),
     title: String(input.title ?? '').trim() || String(a.title ?? '').slice(0, 30),
     body,
     tags: JSON.stringify((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean)),

@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { pickImages, sourceOf } from './_source'
+import { pickImages, sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired } from './_health'
@@ -137,7 +137,7 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 存一条写好的帖子（待审）。帖子由助手按任务 tasks/write-instagram.md 写，这里校验再存：正文为空报错；
  * 配图用文章正文里的图片，没有图时发布前用 cover_text 生成文字封面；超字数这类问题存下来并在 problems 里返回，让助手改了带 post_id 再存。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; cover_text?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; cover_text?: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   const picked = pickImages(input, IG.imagesMax)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
@@ -145,6 +145,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   const body = String(input.body ?? '').trim()
   if (!body) throw new Error(L(ctx, '正文要写', 'The body is required'))
   const post: Partial<Post> = {
+    ...planPatch(input),
     title: String(input.title ?? '').trim() || String(a.title ?? '').slice(0, 30),
     body,
     tags: JSON.stringify((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean)),

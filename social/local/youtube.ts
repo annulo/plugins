@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { sourceOf } from './_source'
+import { sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, profileFields, recordDay, todayRows } from './_snapshot'
 import { YT, postText, problems } from './_youtube_spec'
 import { Expired } from './_health'
@@ -137,7 +137,7 @@ const cleanTags = (tags: any[]) => (tags ?? []).map((t) => String(t).replace(/^#
  * 存一条写好的视频文案（待审）。文案由助手按任务 tasks/write-youtube.md 写，这里校验再存：描述为空、视频不是地址报错；
  * 文章有链接（articles.url）时接在描述最后；超字数这类问题存下来并在 problems 里返回，让助手改了带 post_id 再存。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = ytChannel(ctx, input?.channel_id)
@@ -149,6 +149,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   const link = /^https?:\/\//.test(a.url ?? '') ? String(a.url) : ''
   if (link && !body.includes(link)) body += '\n\n' + link
   const post: Partial<Post> = {
+    ...planPatch(input),
     title: String(input.title ?? '').replace(/\s*\n\s*/g, ' ').trim() || String(a.title ?? '').slice(0, YT.titleMax),
     body,
     tags: JSON.stringify(cleanTags(input.tags ?? [])),

@@ -36,6 +36,41 @@ export function pickImages(input: any, max: number): string[] | null {
   return [...new Set<string>(input.post_images.map((u: any) => String(u).trim()).filter(isAssetUrl))].slice(0, max)
 }
 
+/**
+ * 这条帖子是为增长计划的哪个计划项写的（模板的 plan_items 的 id）。从计划项「去做」交给助手的任务、
+ * 或用户让助手做的事对得上这周的计划项时，助手存帖子带上 plan_item_id；没给不动原来的。插件不读模板的表，只原样记下。
+ */
+export function planPatch(input: any): { plan_item_id?: string } {
+  const id = String(input?.plan_item_id ?? '').trim()
+  return id ? { plan_item_id: id } : {}
+}
+
+/**
+ * 本站链接带上来源参数，询盘才能对上是哪个平台、哪个计划项带来的（模板按询盘的 utm 归因）：
+ * utm_source=<平台>、utm_medium=social、utm_campaign=<计划项 id，有的话>。链接自己已经带了 utm_source 的不动。
+ */
+export function utmLink(url: string, platform: string, planItemId?: string): string {
+  try {
+    const u = new URL(url)
+    if (u.searchParams.has('utm_source')) return url
+    u.searchParams.set('utm_source', platform)
+    u.searchParams.set('utm_medium', 'social')
+    if (planItemId) u.searchParams.set('utm_campaign', planItemId)
+    return u.toString()
+  } catch {
+    return url
+  }
+}
+
+/** 把本站链接以带来源参数的样子放进正文：正文里已经写了这个链接的就地换成带参数的，没写的接在最后 */
+export function linkInBody(body: string, url: string, platform: string, planItemId?: string): string {
+  if (!url) return body
+  const tagged = utmLink(url, platform, planItemId)
+  if (tagged === url || body.includes(tagged)) return body.includes(url) ? body : body + '\n\n' + url
+  const re = new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w/?&#%-])', 'g')
+  return re.test(body) ? body.replace(re, tagged) : body + '\n\n' + tagged
+}
+
 export type Source = { id: string; title: string; url: string; images: string[] }
 
 /** save 的参数里的来源；没给 article_id 返回 null */

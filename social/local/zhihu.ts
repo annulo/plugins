@@ -1,5 +1,5 @@
 import { L } from './_i18n'
-import { isAssetUrl, pickImages, sourceOf } from './_source'
+import { isAssetUrl, pickImages, sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
 import { ZHIHU, bodyImages, isHtml, len, problems, segments, type Segment } from './_zhihu_spec'
 import { Expired } from './_health'
@@ -158,7 +158,7 @@ const cleanTags = (tags: any[]) => [...new Set((tags ?? []).map((t) => String(t)
  * 配图：正文里 ![](地址) 写到的图都算这篇的图；另外给了 post_images 就按它（正文里没写位置的放在正文最前面）；
  * 都没有时新文章用内容的第一张图当题图，改写保留原来的图。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video_cover?: string; post_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title: string; body: string; tags?: string[]; video_cover?: string; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = zhihuChannel(ctx, input?.channel_id)
@@ -173,7 +173,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   // 富文本的图都在正文里，images 就是正文里的图；Markdown 写法另外认 post_images（正文里没写位置的放最前面）
   const picked = rich ? null : pickImages(input, ZHIHU.imagesMax)
   const withBody = (list: string[]) => (rich ? inBody : [...new Set([...list, ...inBody])]).slice(0, ZHIHU.imagesMax)
-  const post: Partial<Post> = { title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), ...videoCoverPatch(input, ctx) }
+  const post: Partial<Post> = { ...planPatch(input), title, body, tags: JSON.stringify(cleanTags(input.tags ?? [])), ...videoCoverPatch(input, ctx) }
   let id = input.post_id
   if (id) {
     const old = ctx.db.get('social_posts', id)

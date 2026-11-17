@@ -129,6 +129,10 @@
       "facebook_api_metrics": {
         "type": "string",
         "description": "Facebook API 采集能力 JSON {checked_at, available, warnings}；不可读取的指标保留旧值，不当作 0。账号记各项能力，帖子记实际取得的指标；不含凭据。"
+      },
+      "plan_item_id": {
+        "type": "string",
+        "description": "这条帖子是为增长计划的哪个计划项写的（模板 plan_items 的 id）；助手存帖子时带上，没有计划项的为空。计划页按它统计计划项做了什么"
       }
     },
     "required": [
