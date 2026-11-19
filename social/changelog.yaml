@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: next
+  zh: "Instagram 支持手动口令单图发布，新增浏览器官方授权内测，可绑定、检测和断开账号；授权内测暂不支持发布。"
+  en: "Publish single Instagram images with a manual token, or preview browser authorization with account binding and checks. Publishing through the new authorization flow is not enabled yet."
+
 - version: 0.11.0
   zh: "帖子能记下是为增长计划的哪个计划项发的；发到 X、LinkedIn、Facebook 的本站链接自动带来源参数，方便算询盘是哪个平台带来的。"
   en: "Posts can record which growth-plan item they were written for; site links in X, LinkedIn and Facebook posts now carry source parameters so inquiries can be traced to the platform."

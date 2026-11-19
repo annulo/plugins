@@ -1,3 +1,7 @@
+import { isManagedInstagram, connectManaged, checkManagedLogin } from './_instagram_managed'
+import { isInstagramApi, connectApi, checkApiLogin } from './_instagram_account'
+import { apiProblems, publishApi } from './_instagram_publish'
+import { tokenGuide as guide, identifyToken as identify } from './_instagram_token_guide'
 import { L } from './_i18n'
 import { pickImages, sourceOf, planPatch } from './_source'
 import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
@@ -11,6 +15,7 @@ import { assist, ensure, markReady, readySel } from './_assist'
 //                                           存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-instagram.md 写
 //   instagram.check({ post_id })            按平台规格检查
 //   instagram.login / instagram.checkLogin  本机浏览器登录（ctx.browser），登录态只在这台电脑上
+//   instagram.tokenGuide / identifyToken    手动口令：浏览器替用户生成口令、识别粘贴的口令是哪个账号（_instagram_token_guide.ts）
 //   instagram.publish / remove 发布、删除
 //   instagram.collect                       采集自己最近帖子的互动数据和粉丝数
 //
@@ -167,6 +172,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
+  if (isInstagramApi(igChannel(ctx, p.channel_id))) return { problems: apiProblems(p, ctx), length: [...postText(p.body, parse(p.tags, []))].length, max: IG.textMax }
   const tags: string[] = parse(p.tags, [])
   return { problems: problems({ body: p.body, tags, images: parse(p.images, []), cover: p.cover_text, video: p.video }, ctx), length: [...postText(p.body, tags)].length, max: IG.textMax }
 }
@@ -252,8 +258,11 @@ function channelFields(u: IgUser) {
  * 添加 Instagram 账号，或者给已有的账号重新登录。弹出一个浏览器窗口，用户在里面登录 Instagram，最多等 5 分钟。
  * 登录成功后写进 social_accounts（同一个账号不会重复添加）。
  */
-export async function login(input: { channel_id?: string }, ctx: any) {
+export async function login(input: { channel_id?: string; mode?: 'api' | 'browser' | 'managed'; connection_id?: string; asset_id?: string; account_id?: string; username?: string; media_host?: string }, ctx: any) {
   const old = input?.channel_id ? igChannel(ctx, input.channel_id) : null
+  if (input.mode === 'managed' || isManagedInstagram(old)) return connectManaged(input, ctx)
+  if (input.mode === 'api' || (isInstagramApi(old) && input.mode !== 'browser')) return connectApi(input, ctx)
+  if (isInstagramApi(old)) throw new Error(L(ctx, 'API 账号不能在有发布记录时切换到浏览器通道。', 'API accounts cannot switch to the browser channel with publication history.'))
   const profile = old?.browser_profile || freeProfile(ctx, 'instagram')
   const b = await openBrowser(ctx, { profile, show: true, login: true })
   ctx.progress({ message: L(ctx, '已经打开浏览器窗口，请在窗口里登录 Instagram', 'A browser window is open — log in to Instagram there') })
@@ -282,9 +291,17 @@ export async function login(input: { channel_id?: string }, ctx: any) {
   return { id: ch.id, name: fields.name, added: true }
 }
 
+/** 手动口令一键连接：Annulo 浏览器替用户点到生成口令，返回 { account_id, username, token }，口令由发起它的页面写进本机密钥 */
+export async function tokenGuide(input: { account_id?: string; username?: string }, ctx: any) { return guide(input, ctx) }
+
+/** 手动口令：页面先把口令写进临时密钥，这里问出它对应的账号 ID 和用户名 */
+export async function identifyToken(input: { secret: string }, ctx: any) { return identify(input, ctx) }
+
 /** 检查登录是否还有效（后台打开，不弹窗），写回 login_status */
 export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = igChannel(ctx, input?.channel_id)
+  if (isManagedInstagram(ch)) return checkManagedLogin(ch, ctx)
+  if (isInstagramApi(ch)) return checkApiLogin(ch, ctx)
   if (!ch.browser_profile) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again"`))
   const b = await openBrowser(ctx, { profile: ch.browser_profile })
   await b.goto(SITE + '/')
@@ -597,9 +614,20 @@ async function dismissReelNotice(ctx: any, b: any): Promise<boolean> {
  * 发布一条帖子。只发审核通过（approved / scheduled）的；发布前检查规格；发布频率只是建议，超了照样发。
  * 上次发布中断过的，先去自己的帖子里找有没有这条，避免重复发。
  */
-export async function publish(input: { post_id: string; force_interval?: boolean }, ctx: any) {
+/** Prepare the same formal route for review without submitting media_publish. */
+export async function preparePublication(input: { post_id: string }, ctx: any) {
+  const p = ctx.db.get('social_posts', input.post_id)
+  const ch = p && igChannel(ctx, p.channel_id)
+  if (!isInstagramApi(ch)) throw new Error('Select an Instagram API post')
+  return publishApi({ ...input, prepare_only: true }, ctx, ch)
+}
+
+export async function publish(input: { post_id: string; force_interval?: boolean; check_only?: boolean }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
+  const apiCh = igChannel(ctx, p.channel_id)
+  if (isInstagramApi(apiCh)) return publishApi(input, ctx, apiCh)
+  if ((p as any).instagram_api_state) throw new Error('Reconcile this API publication before using another channel')
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
   if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < (p.video ? 60 : 10) * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
   if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
@@ -715,6 +743,9 @@ export async function publish(input: { post_id: string; force_interval?: boolean
 
 /** 从 Instagram 上删除一条已发布的帖子（不可恢复），表里记成 removed 并清掉 post_id */
 export async function remove(input: { post_id?: string; code?: string; channel_id?: string }, ctx: any) {
+  const apiPost = input.post_id ? ctx.db.get('social_posts', input.post_id) : null
+  const apiCh = ctx.db.get('social_accounts', input.channel_id || apiPost?.channel_id || '')
+  if (isInstagramApi(apiCh) || apiPost?.instagram_api_state) throw new Error(L(ctx, 'API 帖子请到 Instagram 主页手动删除；此处不自动切换到浏览器。', 'Delete API posts on your Instagram profile; this action does not switch to the browser.'))
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
   const code = p?.post_id || input?.code
   const ch = igChannel(ctx, p?.channel_id || input?.channel_id || '')
@@ -749,9 +780,11 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
  * 在 Instagram 上直接发的帖子也收进来（source: platform）；发布时没认出 id 的，按文案对上补上 id。
  */
 export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
+  if (input.channel_id && isInstagramApi(ctx.db.get('social_accounts', input.channel_id))) throw new Error(L(ctx, 'Instagram API 互动采集尚未接入。', 'Instagram API engagement collection is not connected yet.'))
   const chs = input?.channel_id ? [igChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
+    if (isInstagramApi(ch)) { out.push({ channel: ch.name, skipped: 'Instagram API collection is not connected' }); continue }
     if (!ch.browser_profile || !ch.handle || ch.login_status === 'expired') {
       out.push({ channel: ch.name, skipped: L(ctx, '没登录', 'Not logged in') })
       continue

@@ -124,7 +124,7 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
   }
   const url = urls[ch.type]
   if (!url) throw new Error(L(ctx, '这个账号还没有主页地址，请先采集账号信息', 'This account has no profile URL. Collect account details first.'))
-  await ctx.browser.open({ profile: ch.browser_profile || 'facebook-api', url, show: true, keep_open: true })
+  await ctx.browser.open({ profile: ch.browser_profile || `${ch.type}-api`, url, show: true, keep_open: true })
   return { opened: true }
 }
 
@@ -208,7 +208,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
-  if (input.check_only && (ch?.type !== 'facebook' || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 官方 API 通道', 'Publishing-result checks require the Facebook API channel'))
+  if (input.check_only && (!['facebook', 'instagram'].includes(ch?.type) || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 或 Instagram 官方 API 通道', 'Publishing-result checks require a Facebook or Instagram API channel'))
   // 填好交给我：只有能交出浏览器窗口的平台做（FIELDS 的 handOver）；别的平台不认这个参数，会照常直接发出去，所以拦下
   if (input.manual && !FIELDS[ch?.type]?.handOver) throw new Error(L(ctx, '这个平台不能「填好交给我」，没有发布', "This platform can't hand the filled form over to you; nothing was published"))
   onThisMachine(ctx, ch)
@@ -235,6 +235,11 @@ export async function publishScheduled(input: { post_id: string }, ctx: any) {
   const p = ctx.db.get('social_posts', input?.post_id)
   if (!p || p.status !== 'scheduled') return { skipped: L(ctx, '已经不在排期里', 'No longer scheduled') }
   const ch = ctx.db.get('social_accounts', p.channel_id)
+  if (ch?.type === 'instagram' && ch.auth_mode === 'api') {
+    const error = L(ctx, 'Instagram API 自动排期尚未接入，请审核后立即发布。', 'Instagram API scheduling is not connected yet; review and publish now.')
+    ctx.db.update('social_posts', p.id, { status: 'failed', error })
+    return { failed: error }
+  }
   const other = ch && elsewhere(ctx, ch)
   if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
   // 要发的文件是内容文件夹里的（引用，不是复制的一份）：到点先看还在不在、排期以后改过没有。改过了不自己发：记成失败写明原因，
@@ -269,6 +274,7 @@ export function purge(input: { post_id: string }, ctx: any) {
   if (!p) throw new Error(L(ctx, '没有这篇：', 'No such post: ') + input?.post_id)
   // 没发出去的版本（草稿、待审核、已通过、已排期、发布失败、已退回）和已从平台删除的都能删记录；发出去的、正在发的要先从平台删除
   if (p.status === 'published' || p.status === 'publishing') throw new Error(L(ctx, '已经发出去的内容不能直接删记录，先「从平台删除」', 'Published posts cannot have their record deleted; delete them from the platform first'))
+  if (p.instagram_api_state && /"stage":"submitted"/.test(p.instagram_api_state)) throw new Error(L(ctx, '请先核对 Instagram 发布结果，再处理记录。', 'Reconcile Instagram publishing before removing its record.'))
   let days = 0
   for (;;) {
     const r = ctx.db.query('social_post_daily', { where: { post_id: p.id }, limit: 500 })
@@ -292,6 +298,7 @@ export async function collect(input: { channel_id?: string; type?: string; pages
   const out: any[] = []
   const errors: string[] = []
   for (const ch of ctx.db.query('social_accounts', { where: { type: input.type }, limit: 100 }).list) {
+    if (ch.type === 'instagram' && ch.auth_mode === 'api') { out.push({ channel: ch.name, skipped: 'Instagram API collection is not connected' }); continue }
     const other = elsewhere(ctx, ch)
     if (other) {
       out.push({ channel: ch.name, skipped: L(ctx, `在「${other}」上登录的，由那台电脑采集`, `Logged in on "${other}"; that computer collects it`) })
@@ -346,10 +353,10 @@ export async function addChosen(input: { choose: { type: string }; [k: string]: 
   return r
 }
 
-export async function login(input: { type?: string; channel_id?: string; mode?: 'api' | 'browser'; account?: string }, ctx: any) {
+export async function login(input: { type?: string; channel_id?: string; mode?: 'api' | 'browser' | 'managed'; connection_id?: string; asset_id?: string; account?: string; account_id?: string; username?: string; media_host?: string }, ctx: any) {
   const m = input?.channel_id ? platformOf(ctx, input.channel_id) : PLATFORMS[input?.type ?? '']
   if (!m) throw new Error(L(ctx, '不支持的社媒类型：', 'Unsupported social platform: ') + input?.type)
-  const r = await m.login({ channel_id: input?.channel_id, mode: input?.mode, account: input?.account }, ctx)
+  const r = await m.login({ channel_id: input?.channel_id, mode: input?.mode, connection_id: input?.connection_id, asset_id: input?.asset_id, account: input?.account, account_id: input?.account_id, username: input?.username, media_host: input?.media_host }, ctx)
   const id = r?.id ?? input?.channel_id
   if (id) {
     const ch = ctx.db.get('social_accounts', id)

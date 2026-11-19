@@ -133,6 +133,10 @@
       "plan_item_id": {
         "type": "string",
         "description": "这条帖子是为增长计划的哪个计划项写的（模板 plan_items 的 id）；助手存帖子时带上，没有计划项的为空。计划页按它统计计划项做了什么"
+      },
+      "instagram_api_state": {
+        "type": "string",
+        "description": "Instagram API 单图发布回执 JSON；保存容器、提交阶段、媒体 ID 和链接，不含令牌。提交后只核对结果，禁止自动重发。"
       }
     },
     "required": [
