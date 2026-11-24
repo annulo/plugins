@@ -21,8 +21,8 @@ export { problems as draftProblems } from './_threads_spec'
 //   threads.remove                                 还没接（删帖到 Threads 上删）
 //
 // 发布分两步（建容器 → threads_publish），回执存在工作目录 threads-api-posts/<post_id>.json 和 social_posts.threads_api_state：
-// 同一个容器只能发一次，发布结果丢了（网络断、Annulo 退出）时：容器已经 PUBLISHED 就按正文在最近的帖子里找回那一条；
-// 还是 FINISHED 说明没发出去，拿同一个容器再发，不会重复。
+// 同一个容器只能发一次，发布结果丢了（网络断、Annulo 退出）时：容器已经 PUBLISHED 就按正文、类型、时间在最近的帖子里找回唯一的那一条（找不到或不止一条不猜）；
+// 还是 FINISHED 说明没发出去，拿同一个容器再发；IN_PROGRESS 是平台还在发，只等结果、不换容器重发。
 // 口令 60 天过期，插件写不了密钥，过期了到账号的「管理连接」重新粘贴（登录状态会标成过期）。
 
 type Post = { id: string; channel_id: string; article_id: string; title: string; body: string; tags: string; images: string; video?: string; status: string; post_id?: string; post_url?: string; threads_api_state?: string }
@@ -197,15 +197,29 @@ function done(ctx: any, p: Post, state: State, path: string, media: { media_id: 
   return { id: p.id, post_id: media.media_id, post_url: media.permalink, verified: true }
 }
 
-/** 已经提交过的：读容器状态。PUBLISHED → 找回那一条；FINISHED → 没发出去（retry 时用同一个容器再发）；别的报错 */
+/**
+ * 容器已经 PUBLISHED、但没拿到帖子 id：在最近的帖子里找回那一条。要正文一样、类型对得上（视频 / 图片 / 文字）、
+ * 发在提交之后（留 5 分钟时钟误差）、还没被别的记录认领；正好一条才认，没有或不止一条都不猜，留给用户到 Threads 上核对。
+ */
+async function findPublished(ctx: any, p: Post, state: State, account: Account, token: string) {
+  const want = state.video ? ['VIDEO'] : state.image ? ['IMAGE'] : ['TEXT_POST', '']
+  const since = Date.parse(state.submitted_at || '') - 5 * 60_000
+  const taken = (id: string) => ctx.db.query('social_posts', { where: { channel_id: p.channel_id, post_id: id }, limit: 2 }).list.some((x: any) => x.id !== p.id)
+  const hits = (await recent(ctx, account, token)).filter((t) => same(t.text, state.text) && want.includes(t.media_type) && !(Date.parse(t.timestamp) < since) && !taken(t.id))
+  if (hits.length === 1) return hits[0]
+  if (!hits.length) throw new Error(L(ctx, 'Threads 说这条已经发出去了，但在最近的帖子里没找到。请到 Threads 主页看一下，不要重发。', 'Threads says this was published, but it is not among the recent posts. Check your Threads profile; do not publish again.'))
+  throw new Error(L(ctx, `Threads 说这条已经发出去了，但最近有 ${hits.length} 条正文一样的帖子，认不出是哪一条。请到 Threads 主页看一下，不要重发。`, `Threads says this was published, but ${hits.length} recent posts have the same text and the right one cannot be told apart. Check your Threads profile; do not publish again.`))
+}
+
+/**
+ * 已经提交过的：读容器状态。PUBLISHED → 找回那一条；FINISHED → 没发出去（retry 时用同一个容器再发）；
+ * IN_PROGRESS → 平台还在处理这次发布，不能当没发、不能换容器重发；ERROR / EXPIRED → 没发出去，返回 null 让调用方重新建容器。
+ */
 async function reconcile(ctx: any, p: Post, state: State, path: string, account: Account, token: string, retry: boolean) {
   if (state.media_id) return done(ctx, p, state, path, await mediaInfo(ctx, state.media_id, token))
   const st = await containerStatus(ctx, state.container_id, token)
-  if (st.status === 'PUBLISHED') {
-    const hit = (await recent(ctx, account, token)).find((t) => same(t.text, state.text))
-    if (!hit) throw new Error(L(ctx, 'Threads 说这条已经发出去了，但在最近的帖子里没找到。请到 Threads 主页看一下，不要重发。', 'Threads says this was published, but it is not among the recent posts. Check your Threads profile; do not publish again.'))
-    return done(ctx, p, state, path, await mediaInfo(ctx, hit.id, token))
-  }
+  if (st.status === 'PUBLISHED') return done(ctx, p, state, path, await mediaInfo(ctx, (await findPublished(ctx, p, state, account, token)).id, token))
+  if (st.status === 'IN_PROGRESS') throw new Error(L(ctx, 'Threads 还在处理这条的发布，结果没出来。过几分钟再点「发布」核对结果，会接着用原来的容器，不会重发。', 'Threads is still processing this publication. Publish again in a few minutes to check the result; it reuses the same container, so nothing is posted twice.'))
   if (st.status === 'FINISHED' && retry) {
     ctx.progress?.({ message: L(ctx, '上次没发出去，用同一个容器再发一次…', 'The last attempt did not go out; publishing the same container again…') })
     state.stage = 'submitted'; state.submitted_at = now()
@@ -213,7 +227,7 @@ async function reconcile(ctx: any, p: Post, state: State, path: string, account:
     return done(ctx, p, state, path, await mediaInfo(ctx, await publishContainer(ctx, account, token, state.container_id), token))
   }
   if (st.status === 'FINISHED') throw new Error(L(ctx, '这条还没发出去（容器已就绪），点「发布」会用同一个容器发，不会重复。', 'Not published yet (the container is ready). Publish again; it reuses the same container, so nothing is posted twice.'))
-  return null // ERROR / EXPIRED / IN_PROGRESS：交回调用方
+  return null // ERROR / EXPIRED：没发出去，交回调用方重新建
 }
 
 /** 发布一条（要先审核通过，排期到点也走这里）。check_only 只核对上次的结果，不发 */

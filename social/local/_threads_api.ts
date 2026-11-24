@@ -127,10 +127,10 @@ export async function mediaInfo(ctx: any, id: string, token: string): Promise<{ 
   return { media_id: id, permalink: body.permalink }
 }
 
-/** 最近发的几条（按时间倒序）：发布结果丢了时按正文找回那一条 */
-export async function recent(ctx: any, account: Account, token: string, limit = 25): Promise<{ id: string; text: string; permalink: string; timestamp: string }[]> {
-  const body = await request(ctx, `/${account.account_id}/threads`, token, { fields: 'id,text,permalink,timestamp', limit: String(limit) })
-  return (Array.isArray(body.data) ? body.data : []).filter((t: any) => typeof t?.id === 'string' && /^\d+$/.test(t.id)).map((t: any) => ({ id: t.id, text: String(t.text ?? ''), permalink: String(t.permalink ?? ''), timestamp: String(t.timestamp ?? '') }))
+/** 最近发的几条（按时间倒序）：发布结果丢了时按正文、类型和时间找回那一条 */
+export async function recent(ctx: any, account: Account, token: string, limit = 25): Promise<{ id: string; text: string; permalink: string; timestamp: string; media_type: string }[]> {
+  const body = await request(ctx, `/${account.account_id}/threads`, token, { fields: 'id,text,permalink,timestamp,media_type', limit: String(limit) })
+  return (Array.isArray(body.data) ? body.data : []).filter((t: any) => typeof t?.id === 'string' && /^\d+$/.test(t.id)).map((t: any) => ({ id: t.id, text: String(t.text ?? ''), permalink: String(t.permalink ?? ''), timestamp: isoTime(t.timestamp), media_type: String(t.media_type ?? '') }))
 }
 
 // ---- 采集（要 threads_manage_insights 权限） ----

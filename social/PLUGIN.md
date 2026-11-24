@@ -150,7 +150,7 @@ B 站一个账号发两种东西（2026-10 起）：视频是**投稿**，图文
 Threads 只走官方 API（`graph.threads.com`），不开浏览器；设计和做法见 [docs/threads.md](docs/threads.md)。口令是用户自己 Meta 应用里 Threads 用例生成的用户口令（TH 开头），页面写进本机密钥 `THREADS_USER_TOKEN_<Threads 用户 id>`，不进表、不进函数参数：
 页面先写临时密钥 `THREADS_USER_TOKEN_PENDING`，`social/threads.identifyToken({ secret })` 问出 `{ account_id, username }`，页面再写正式密钥，调 `social.login({ type: 'threads', mode: 'api', account_id, username, media_host? })`（`media_host` 同 Instagram，本机 JPEG 传到哪个 Creght 素材库）。`social/threads.checkLogin` 检测口令。
 
-发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文找回那一条，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、口令自动续期还没接。
+发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文、类型和提交时间找回唯一的那一条（找不到或不止一条不猜，让人去主页看），IN_PROGRESS 只等结果不重发，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、口令自动续期还没接。
 
 ### Instagram 官方授权内测（API 66）
 

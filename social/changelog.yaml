@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.13.1
+  zh: "Threads 发布中断后核对更稳：平台还在处理时只等结果，同文案的帖子认不出是哪条时不乱认，都不会重复发帖。"
+  en: "Safer Threads checks after an interrupted publish: while Threads is still processing it only waits for the result, and it no longer guesses between posts with the same text, so nothing is posted twice."
+
 - version: 0.13.0
   zh: "支持 Threads：粘贴口令连接账号，用官方 API 发文字、链接、单图或视频帖子（可排期），每天采集帖子数据和粉丝数；Instagram API 发的帖子也能定时发布了。"
   en: "Threads support: connect by pasting a token, publish text, link, single-image or video posts through the official API (scheduling included), and collect post stats and followers daily. Instagram API posts can be scheduled too."

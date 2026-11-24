@@ -168,6 +168,41 @@ test('lost response after publish: retry finds the published post, no second pub
   assert.equal(calls.filter((c) => c.path.endsWith('threads_publish')).length, 1)
 })
 
+test('submitted and still IN_PROGRESS: waits, never builds a new container or publishes again', async () => {
+  const ctx = context()
+  graph((c) => { if (c.path.endsWith('threads_publish')) throw new TypeError('socket hang up') })
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /Could not reach Threads/)
+  const calls = graph((c) => { if (c.path === `/${container}`) return new Response(JSON.stringify({ id: container, status: 'IN_PROGRESS' })) })
+  await assert.rejects(social.publish({ post_id: 'post1', check_only: true }, ctx), /still processing this publication/)
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /still processing this publication/)
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0)
+  assert.equal(JSON.parse(ctx.rows.get('social_posts').get('post1').threads_api_state).stage, 'submitted')
+})
+
+test('PUBLISHED but the post cannot be told apart: no guessing, no second publish', async () => {
+  const text = 'Hello Threads https://example.org/x', later = new Date(Date.now() + 60_000).toISOString().replace('Z', '+0000').replace(/\.\d+/, '')
+  const lose = () => graph((c) => { if (c.path.endsWith('threads_publish')) throw new TypeError('socket hang up') })
+  const listing = (data) => graph((c) => { if (c.path === `/${uid}/threads` && c.method === 'GET') return new Response(JSON.stringify({ data })) }, { status: 'PUBLISHED' })
+  // 两条正文一样的新帖子：不认
+  let ctx = context(); lose()
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx))
+  let calls = listing([{ id: media, text, permalink, timestamp: later, media_type: 'TEXT_POST' }, { id: '18000111222333999', text, permalink, timestamp: later, media_type: 'TEXT_POST' }])
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /2 recent posts have the same text/)
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 0)
+  // 类型对不上（要的是文字帖，这条是图片）、或者是提交之前很久发的：都不认
+  ctx = context(); lose()
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx))
+  listing([{ id: media, text, permalink, timestamp: later, media_type: 'IMAGE' }, { id: '18000111222333999', text, permalink, timestamp: '2026-01-01T00:00:00+0000', media_type: 'TEXT_POST' }])
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /not among the recent posts/)
+  // 已经被别的记录认领的那条跳过，剩下唯一的一条才认
+  ctx = context(); lose()
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx))
+  ctx.rows.get('social_posts').set('post0', { id: 'post0', channel_id: 'acc1', status: 'published', post_id: '18000111222333999' })
+  listing([{ id: '18000111222333999', text, permalink, timestamp: later, media_type: 'TEXT_POST' }, { id: media, text, permalink, timestamp: later, media_type: 'TEXT_POST' }])
+  const r = await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(r.post_id, media)
+})
+
 test('lost before it went out: container still FINISHED, retry reuses the same container', async () => {
   const ctx = context()
   graph((c) => { if (c.path.endsWith('threads_publish')) throw new TypeError('down') })
