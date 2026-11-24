@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf, planPatch, linkInBody } from './_source'
-import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { X, problems, tweetText, xLen } from './_x_spec'
 import { Expired } from './_health'
 
@@ -19,7 +19,15 @@ export { problems as draftProblems } from './_x_spec'
 // social_posts 里 X 的推文：title 只是后台列表里显示的标题，不发出去；发出去的是 body + tags（#话题接在最后）。
 // 配图是 images（图片地址的 JSON 数组）；填了 video（素材库的 http(s) 地址，或本机文件 local:<名字>）就发视频推文：
 // 只传视频、不传图片，等 X 处理完视频（大文件要几分钟）再发。
+// media（[{ kind: 'image' | 'video', url }]，按顺序）有值时按它发：图片、视频最多 4 个，可以混放、可以有多个视频，一次选进发推框。
 // 页面结构和接口（2026-09）写成常量，X 改版时只改这里。
+
+/** 帖子的 media：[{ kind: 'image' | 'video', url }]，读不出来或是空的就是 []（按 images、video 发） */
+function mediaOf(p: { media?: string }): { kind: 'image' | 'video'; url: string }[] {
+  let l: any
+  try { l = JSON.parse(String(p.media || '[]')) } catch { return [] }
+  return Array.isArray(l) ? l.filter((m) => m && (m.kind === 'image' || m.kind === 'video') && typeof m.url === 'string' && m.url.trim()).map((m) => ({ kind: m.kind, url: m.url.trim() })) : []
+}
 
 type Post = {
   id: string
@@ -30,6 +38,7 @@ type Post = {
   tags?: string
   images?: string
   video?: string // 视频：http(s) 地址或 local:<名字>；有它就发视频、忽略 images
+  media?: string // 图片、视频混放的列表（JSON），有它就按它发，忽略 images、video
   status: string
   scheduled_at?: string
   claimed_at?: string
@@ -129,7 +138,7 @@ export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条推文：', 'No such post: ') + input?.post_id)
   const tags: string[] = parse(p.tags, [])
-  return { problems: problems({ body: p.body, tags, images: parse(p.images, []), video: p.video }, ctx), length: xLen(tweetText(p.body, tags)), max: X.textMax }
+  return { problems: problems({ body: p.body, tags, images: parse(p.images, []), video: p.video, media: mediaOf(p) }, ctx), length: xLen(tweetText(p.body, tags)), max: X.textMax }
 }
 
 // ---- 账号 ----
@@ -420,14 +429,16 @@ export async function publish(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条推文：', 'No such post: ') + input?.post_id)
   if (p.status === 'published') throw new Error(L(ctx, `「${p.title}」已经发布过了`, `"${p.title}" is already published`))
-  if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < (p.video ? 60 : 10) * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
+  if (p.status === 'publishing' && p.claimed_at && Date.now() - Date.parse(p.claimed_at) < (p.video || mediaOf(p).some((m) => m.kind === 'video') ? 60 : 10) * 60_000) throw new Error(L(ctx, `「${p.title}」正在发布`, `"${p.title}" is being published`))
   if (!['approved', 'scheduled', 'failed', 'publishing'].includes(p.status)) throw new Error(L(ctx, `「${p.title}」还没审核通过，不能发布`, `"${p.title}" isn't approved yet, so it can't be published`))
   const ch = xChannel(ctx, p.channel_id)
   if (!ch.browser_profile || !ch.handle) throw new Error(L(ctx, `「${ch.name}」还没在这台电脑上登录过，先到「社媒」里点「重新登录」`, `"${ch.name}" hasn't logged in on this computer yet: click "Log in again" on the Social page first`))
   const tags: string[] = parse(p.tags, [])
-  const video = String(p.video ?? '').trim()
-  const images: string[] = video ? [] : parse(p.images, []) // 有视频就只发视频
-  const bad = problems({ body: p.body, tags, images, video }, ctx)
+  const media = mediaOf(p)
+  const video = media.length ? '' : String(p.video ?? '').trim()
+  const images: string[] = media.length || video ? [] : parse(p.images, []) // 有视频就只发视频
+  const hasVideo = !!video || media.some((m) => m.kind === 'video')
+  const bad = problems({ body: p.body, tags, images, video, media }, ctx)
   if (bad.length) throw new Error(L(ctx, '不符合 X 的规格：', "Doesn't meet X's limits: ") + bad.join('; '))
   const text = tweetText(p.body, tags)
   ctx.log('X publish target', p.id, ch.id)
@@ -453,7 +464,14 @@ export async function publish(input: { post_id: string }, ctx: any) {
     ctx.progress({ message: L(ctx, '打开发推框…', 'Opening the composer…') })
     b.listen(API.create)
     await openComposer(ctx, b, ch)
-    if (video) {
+    if (media.length) {
+      ctx.progress({ message: hasVideo ? L(ctx, `上传 ${media.length} 个图片和视频…`, `Uploading ${media.length} images and videos…`) : L(ctx, '上传图片…', 'Uploading images…') })
+      await b.upload(SEL.fileInput, media.map((m) => m.url), { timeout: 10 * 60_000 })
+      await b.waitFor(SEL.attachments, { timeout: 120000 }).catch(async () => {
+        const toast = String((await b.eval(`document.querySelector('${SEL.toast}')?.innerText || ''`).catch(() => '')) || '').trim()
+        throw new Error(toast ? L(ctx, 'X 没收下这些图片和视频：', "X didn't accept these images and videos: ") + toast : L(ctx, '选了图片和视频，但发推框里没出现，X 的页面可能改了', "Picked the images and videos, but they never showed up in the composer — X's page may have changed"))
+      })
+    } else if (video) {
       // 素材库的地址 Annulo 先下载到本机再选进去，大文件下载也要时间
       ctx.progress({ message: L(ctx, '上传视频…', 'Uploading the video…') })
       await b.upload(SEL.fileInput, [video], { timeout: 10 * 60_000 })
@@ -468,8 +486,8 @@ export async function publish(input: { post_id: string }, ctx: any) {
     }
     ctx.progress({ message: L(ctx, '填写正文…', 'Filling in the text…') })
     await fillText(ctx, b, text)
-    if (video) ctx.progress({ message: L(ctx, '等 X 处理视频（大文件要几分钟）…', 'Waiting for X to process the video (large files take a few minutes)…') })
-    await waitPostable(ctx, b, video ? 10 * 60_000 : 90000, !!video)
+    if (hasVideo) ctx.progress({ message: L(ctx, '等 X 处理视频（大文件要几分钟）…', 'Waiting for X to process the video (large files take a few minutes)…') })
+    await waitPostable(ctx, b, hasVideo ? 10 * 60_000 : 90000, hasVideo)
     ctx.progress({ message: L(ctx, '发布…', 'Posting…') })
     const sentAt = Date.now()
     // 2026-10: X 的弹窗按钮虽可点，浏览器坐标点击有时没有触发提交；直接点弹窗内的按钮。
@@ -484,7 +502,7 @@ export async function publish(input: { post_id: string }, ctx: any) {
     // 只认发推接口：页面上别的请求也带 /Create（2026-10 点 Post 后 3 毫秒 Grok 的 CreateCheckoutSession 先回来，被当成发推结果，接着跳去主页把正在提交的视频推文打断了）
     const isCreate = (r: any) => /\/Create(?:Note)?Tweet(?:\?|$)/.test(r.url ?? '')
     let rs: any[] = [] // b.responses 每次返回到目前为止记到的全部匹配项
-    for (const until = Date.now() + (video ? 180_000 : 60_000); Date.now() < until;) {
+    for (const until = Date.now() + (hasVideo ? 180_000 : 60_000); Date.now() < until;) {
       rs = await b.responses(API.create, { min: 1, timeout: Math.max(1000, until - Date.now()) }).catch(() => rs)
       if (rs.some(isCreate)) break
       await ctx.sleep(1000)
@@ -594,10 +612,21 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     const totals = channelTotals(ctx, ch)
     let updated = 0
     let added = 0
+    // Annulo 发出去、没记上 id 的（含显示失败、卡在发布中其实发出去了的）：按文字和时间对上（_snapshot.ts 的 matchUnlinked）
+    const unlinked: any[] = unlinkedPosts(ctx, ch.id)
     for (const tw of tweets) {
       const metrics = { views: tw.views, likes: tw.likes, comments: tw.comments, collects: tw.collects, shares: tw.shares, metrics_at: t }
       // 按推文 id 单独查：ctx.db.query 一次最多 1000 行，一次拉出账号的全部推文再找，推文多了会漏、会重复插入
-      const hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: tw.id }, limit: 1 }).list[0]
+      let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: tw.id }, limit: 1 }).list[0]
+      if (!hit) {
+        const u: any = matchUnlinked(unlinked, tw.text, tw.created, (x: any) => tweetText(x.body, parse(x.tags, [])))
+        if (u) {
+          const patch = linkPatch(u, tw.id, `${SITE}/${ch.handle}/status/${tw.id}`, tw.created)
+          ctx.db.update('social_posts', u.id, patch)
+          if (u.status !== 'published') totals.posts++
+          hit = { ...u, ...patch }; unlinked.splice(unlinked.indexOf(u), 1)
+        }
+      }
       if (!hit || hit.status === 'published') {
         for (const k of METRIC_KEYS) totals[k] += (tw[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
         if (!hit) totals.posts++

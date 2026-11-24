@@ -11,6 +11,7 @@ import { LI, postText as liText } from './_linkedin_spec'
 import { X, tweetText, xLen } from './_x_spec'
 import { XHS } from './_xhs_spec'
 import { YT, postText as ytText } from './_youtube_spec'
+import { TH, threadsLen } from './_threads_spec'
 import { ZHIHU, htmlText, isHtml, markdownToHtml } from './_zhihu_spec'
 
 export type PostFields = {
@@ -28,6 +29,8 @@ export type PostFields = {
   images: number
   /** 视频：only 只发视频，optional 和配图二选一；没有就是不能发视频 */
   video?: 'only' | 'optional'
+  /** 图片、视频合计最多几个，能混放、能有多个视频（帖子的 media，X 是 4）；没有就是一条一个视频、图片和视频不能同发 */
+  media?: number
   /** 封面大字（cover_text）：没配图时用它生成文字封面 */
   cover: boolean
   /** 支持上传独立的视频封面 */
@@ -57,7 +60,7 @@ export type PostKind = 'article' | 'post' | 'video'
 const chars = (s: string) => [...String(s ?? '')].length
 
 export const FIELDS: Record<string, PostFields> = {
-  x: { title: 'note', titleMax: 30, body: 'text', bodyMax: X.textMax, len: (b, t) => xLen(tweetText(b, t)), tags: X.tagsMax, images: X.imagesMax, video: 'optional', cover: false, category: false, rate: { minutes: (X as any).minIntervalMinutes ?? 0, daily: X.dailyMax } },
+  x: { title: 'note', titleMax: 30, body: 'text', bodyMax: X.textMax, len: (b, t) => xLen(tweetText(b, t)), tags: X.tagsMax, images: X.imagesMax, video: 'optional', media: X.mediaMax, cover: false, category: false, rate: { minutes: (X as any).minIntervalMinutes ?? 0, daily: X.dailyMax } },
   linkedin: { title: 'note', titleMax: 30, body: 'text', bodyMax: LI.textMax, len: (b, t) => chars(liText(b, t)), tags: LI.tagsMax, images: LI.imagesMax, video: 'optional', cover: false, category: false, rate: { minutes: (LI as any).minIntervalMinutes ?? 0, daily: LI.dailyMax } },
   facebook: { title: 'note', titleMax: 30, body: 'text', bodyMax: FB.textMax, len: (b, t) => chars(fbText(b, t)), tags: FB.tagsMax, images: FB.imagesMax, video: 'optional', cover: false, category: false, rate: { minutes: (FB as any).minIntervalMinutes ?? 0, daily: FB.dailyMax } },
   instagram: { title: 'note', titleMax: 30, body: 'text', bodyMax: IG.textMax, len: (b, t) => chars(igText(b, t)), tags: IG.tagsMax, images: IG.imagesMax, video: 'optional', cover: true, category: false, rate: { minutes: (IG as any).minIntervalMinutes ?? 0, daily: IG.dailyMax } },
@@ -73,6 +76,8 @@ export const FIELDS: Record<string, PostFields> = {
       article: { titleMax: OPUS.titleMax, body: 'rich', bodyMax: OPUS.bodyMax, len: (b) => opusLen(b), tags: OPUS.topicsMax, images: 0, video: undefined, videoCover: false, coverRatio: undefined, category: false, rate: { minutes: OPUS.minIntervalMinutes, daily: OPUS.dailyMax } },
     },
   },
+  // Threads：只走官方 API；话题走 topic_tag 不接在正文后；文字、单图、视频（接口没有封面参数，所以没有 videoCover）
+  threads: { title: 'note', titleMax: 30, body: 'text', bodyMax: TH.textMax, len: (b) => threadsLen(String(b ?? '').trim()), tags: TH.tagsMax, images: TH.imagesMax, video: 'optional', videoCover: false, cover: false, category: false, rate: { minutes: 0, daily: TH.dailyMax } },
   zhihu: { title: 'publish', titleMax: ZHIHU.titleMax, body: 'rich', bodyMax: 50000, len: (b) => chars(htmlText(b).replace(/\s+/g, '')), tags: ZHIHU.tagsMax, images: 0, articleCover: true, handOver: true, cover: false, category: false, rate: { minutes: (ZHIHU as any).minIntervalMinutes ?? 0, daily: ZHIHU.dailyMax } },
 }
 

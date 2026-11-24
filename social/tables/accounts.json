@@ -6,7 +6,7 @@
     "properties": {
       "type": {
         "type": "string",
-        "description": "平台：x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili / zhihu"
+        "description": "平台：x / linkedin / facebook / instagram / threads / youtube / xiaohongshu / douyin / bilibili / zhihu"
       },
       "name": {
         "type": "string",
@@ -78,7 +78,7 @@
       },
       "api_credential": {
         "type": "string",
-        "description": "API 凭据来源：page_token / oauth / instagram_user_token；只存来源，不存令牌。 instagram_managed 表示服务端托管的 Unified Login。"
+        "description": "API 凭据来源：page_token / oauth / instagram_user_token / threads_user_token；只存来源，不存令牌。 instagram_managed 表示服务端托管的 Unified Login。"
       },
       "oauth_account": {
         "type": "string",
@@ -115,6 +115,14 @@
       "instagram_grant_id": {
         "type": "string",
         "description": "服务端不可变授权来源 ID；不存口令。"
+      },
+      "threads_media_host": {
+        "type": "string",
+        "description": "Threads：本机图片上传到哪个公开素材库 JSON {api_host,project_id,site_id}，不含密钥。"
+      },
+      "threads_auth_error": {
+        "type": "string",
+        "description": "Threads：最近一次授权检测失败的说明，不含口令。"
       }
     }
   }

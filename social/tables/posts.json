@@ -118,6 +118,10 @@
         "type": "string",
         "description": "旧字段：每篇每天的快照已经改存 social_post_daily，下次采集时搬过去并清空，别再写"
       },
+      "media": {
+        "type": "string",
+        "description": "图片、视频混放的列表（JSON 数组 [{ kind: image | video, url }]，按顺序）：只给能混放、能多个视频的平台（_fields.ts 的 media，X）用，有值时按它发、忽略 images 和 video；空的照旧"
+      },
       "video": {
         "type": "string",
         "description": "视频（有值就按视频发）：素材库的视频地址（http），或者存在本机的文件 local:<name>（页面「上传本机视频」，Shuttle 的 local/files）；本机函数直接交给 b.upload"
@@ -137,6 +141,10 @@
       "instagram_api_state": {
         "type": "string",
         "description": "Instagram API 单图发布回执 JSON；保存容器、提交阶段、媒体 ID 和链接，不含令牌。提交后只核对结果，禁止自动重发。"
+      },
+      "threads_api_state": {
+        "type": "string",
+        "description": "Threads API 发布回执 JSON：容器 id、提交阶段、媒体 id 和链接，不含口令。同一个容器只能发一次，结果丢了先核对再重发。"
       }
     },
     "required": [

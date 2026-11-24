@@ -8,7 +8,9 @@ export const X = {
   textMax: 280,
   urlLength: 23,
   imagesMax: 4,
-  // 视频：一条推文一个视频，有视频时不带图片；普通账号最长 140 秒（Premium 更长），文件最大 512MB。
+  // 图片、视频合计最多 4 个，可以混放、可以有多个视频（帖子的 media，按顺序）
+  mediaMax: 4,
+  // 视频：只填 video 时一条一个视频、不带图片；普通账号每个视频最长 140 秒（Premium 更长），文件最大 512MB。
   // 时长在本机读不到，不在发布前拦，超了 X 会在上传后报错
   videoMaxSeconds: 140,
   videoMaxMB: 512,
@@ -43,12 +45,15 @@ export type XDraft = { title: string; body: string; tags: string[] }
 export const isVideoRef = (v: any) => /^(https?:\/\/|\/_(annulo|shuttle)\/uploaded\/|local:|folder:|work:)\S+/.test(String(v ?? '').trim())
 
 /** 检查必填内容和素材；暂不按字符数拦截，平台常量仅供参考。 */
-export function problems(d: { body?: string; tags?: string[]; images?: string[]; video?: string }, ctx?: any): string[] {
+export function problems(d: { body?: string; tags?: string[]; images?: string[]; video?: string; media?: { kind: string; url: string }[] }, ctx?: any): string[] {
   const out: string[] = []
   if (!d.body?.trim()) out.push(L(ctx, '没有正文', 'No text'))
   if ((d.tags?.length ?? 0) > X.tagsMax) out.push(L(ctx, `话题 ${d.tags!.length} 个，最多 ${X.tagsMax} 个`, `${d.tags!.length} hashtags; max ${X.tagsMax}`))
-  // 有视频就发视频、不带图片（图片和视频都填了不算错，视频优先）
-  if (d.video?.trim()) {
+  // media（图片、视频混放的列表）有值就按它发；否则有视频就发视频、不带图片（图片和视频都填了不算错，视频优先）
+  if (d.media?.length) {
+    if (d.media.length > X.mediaMax) out.push(L(ctx, `图片和视频共 ${d.media.length} 个，最多 ${X.mediaMax} 个`, `${d.media.length} images and videos; max ${X.mediaMax}`))
+    if (d.media.some((m) => m.kind === 'video' && !isVideoRef(m.url))) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
+  } else if (d.video?.trim()) {
     if (!isVideoRef(d.video)) out.push(L(ctx, '视频要是资料库里的地址（http / https）或本机文件（local:…）', 'The video must be a Library URL (http / https) or a local file (local:…)'))
   } else if (d.images && d.images.length > X.imagesMax) out.push(L(ctx, `图片 ${d.images.length} 张，最多 ${X.imagesMax} 张`, `${d.images.length} images; max ${X.imagesMax}`))
   return out

@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf, planPatch, linkInBody } from './_source'
-import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { LI, liLen, postText, problems } from './_linkedin_spec'
 import { Expired } from './_health'
 
@@ -609,18 +609,20 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     const day = localDay()
     const today = todayRows(ctx, ch.id, day)
     const totals = channelTotals(ctx, ch)
-    // 发布时没认出 id 的帖子：按正文对上
-    const unlinked: Post[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id)
+    // Annulo 发出去、没记上 id 的（含显示失败、卡在发布中其实发出去了的）：按文字和时间对上（_snapshot.ts 的 matchUnlinked）
+    const unlinked: Post[] = unlinkedPosts(ctx, ch.id)
     let updated = 0
     let added = 0
     for (const lp of posts) {
       const metrics = { views: lp.views, likes: lp.likes, comments: lp.comments, collects: lp.collects, shares: lp.shares, metrics_at: t }
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: lp.urn }, limit: 1 }).list[0]
       if (!hit) {
-        const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(lp.text))
+        const u: any = matchUnlinked(unlinked, lp.text, lp.created, (x: any) => postText(x.body, parse(x.tags, [])))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: lp.urn, post_url: `${SITE}/feed/update/${lp.urn}/` })
-          hit = { ...u, post_id: lp.urn }
+          const patch = linkPatch(u, lp.urn, `${SITE}/feed/update/${lp.urn}/`, lp.created)
+          ctx.db.update('social_posts', u.id, patch)
+          if (u.status !== 'published') totals.posts++
+          hit = { ...u, ...patch }; unlinked.splice(unlinked.indexOf(u), 1)
         }
       }
       if (!hit || hit.status === 'published') {

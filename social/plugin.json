@@ -1,8 +1,8 @@
 {
   "name": { "zh": "社媒", "en": "Social media" },
   "description": {
-    "zh": "管理 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎账号：保留浏览器方式，Facebook 公共主页和 Instagram 专业账号可选官方 API；Instagram API 目前支持单图立即发布。其他平台可按能力发布、排期和采集数据。",
-    "en": "Manage X, LinkedIn, Facebook, Instagram, YouTube, Xiaohongshu, Douyin, Bilibili and Zhihu accounts. Keep browser publishing or use official APIs for Facebook Pages and Instagram professional accounts. Instagram API supports immediate single-image publishing; other publishing, scheduling and collection features depend on the platform."
+    "zh": "管理 X、LinkedIn、Facebook、Instagram、Threads、YouTube、小红书、抖音、B 站、知乎账号：保留浏览器方式，Facebook 公共主页和 Instagram 专业账号可选官方 API，Threads 走官方 API；Instagram、Threads API 目前支持文字或单图发布。其他平台可按能力发布、排期和采集数据。",
+    "en": "Manage X, LinkedIn, Facebook, Instagram, Threads, YouTube, Xiaohongshu, Douyin, Bilibili and Zhihu accounts. Keep browser publishing or use official APIs for Facebook Pages and Instagram professional accounts; Threads uses the official API. Instagram and Threads APIs publish text or single images for now; other publishing, scheduling and collection features depend on the platform."
   },
   "min_annulo_api": 65
 }

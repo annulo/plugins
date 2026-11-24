@@ -121,6 +121,7 @@ export async function openProfile(input: { channel_id: string }, ctx: any) {
     instagram: handle ? `https://www.instagram.com/${handle}/` : '',
     facebook: ch.fb_kind === 'page' && uid ? `https://www.facebook.com/${uid}` : handle ? `https://www.facebook.com/${handle}` : uid ? `https://www.facebook.com/profile.php?id=${uid}` : '',
     youtube: handle ? `https://www.youtube.com/@${handle}` : uid ? `https://www.youtube.com/channel/${uid}` : '',
+    threads: handle ? `https://www.threads.com/@${handle}` : '',
   }
   const url = urls[ch.type]
   if (!url) throw new Error(L(ctx, '这个账号还没有主页地址，请先采集账号信息', 'This account has no profile URL. Collect account details first.'))
@@ -208,7 +209,7 @@ export async function publish(input: { post_id: string; force_interval?: boolean
   ctx = showBrowserIf(ctx, input)
   const m = platformOfPost(ctx, input?.post_id)
   const ch = channelOfPost(ctx, input.post_id)
-  if (input.check_only && (!['facebook', 'instagram'].includes(ch?.type) || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook 或 Instagram 官方 API 通道', 'Publishing-result checks require a Facebook or Instagram API channel'))
+  if (input.check_only && (!['facebook', 'instagram', 'threads'].includes(ch?.type) || ch?.auth_mode !== 'api')) throw new Error(L(ctx, '发布结果核对仅支持 Facebook、Instagram、Threads 官方 API 通道', 'Publishing-result checks require a Facebook, Instagram or Threads API channel'))
   // 填好交给我：只有能交出浏览器窗口的平台做（FIELDS 的 handOver）；别的平台不认这个参数，会照常直接发出去，所以拦下
   if (input.manual && !FIELDS[ch?.type]?.handOver) throw new Error(L(ctx, '这个平台不能「填好交给我」，没有发布', "This platform can't hand the filled form over to you; nothing was published"))
   onThisMachine(ctx, ch)
@@ -235,11 +236,6 @@ export async function publishScheduled(input: { post_id: string }, ctx: any) {
   const p = ctx.db.get('social_posts', input?.post_id)
   if (!p || p.status !== 'scheduled') return { skipped: L(ctx, '已经不在排期里', 'No longer scheduled') }
   const ch = ctx.db.get('social_accounts', p.channel_id)
-  if (ch?.type === 'instagram' && ch.auth_mode === 'api') {
-    const error = L(ctx, 'Instagram API 自动排期尚未接入，请审核后立即发布。', 'Instagram API scheduling is not connected yet; review and publish now.')
-    ctx.db.update('social_posts', p.id, { status: 'failed', error })
-    return { failed: error }
-  }
   const other = ch && elsewhere(ctx, ch)
   if (other) return { skipped: L(ctx, `在「${other}」上登录的，由那台电脑发`, `Logged in on "${other}"; that computer publishes it`) }
   // 要发的文件是内容文件夹里的（引用，不是复制的一份）：到点先看还在不在、排期以后改过没有。改过了不自己发：记成失败写明原因，
@@ -275,6 +271,7 @@ export function purge(input: { post_id: string }, ctx: any) {
   // 没发出去的版本（草稿、待审核、已通过、已排期、发布失败、已退回）和已从平台删除的都能删记录；发出去的、正在发的要先从平台删除
   if (p.status === 'published' || p.status === 'publishing') throw new Error(L(ctx, '已经发出去的内容不能直接删记录，先「从平台删除」', 'Published posts cannot have their record deleted; delete them from the platform first'))
   if (p.instagram_api_state && /"stage":"submitted"/.test(p.instagram_api_state)) throw new Error(L(ctx, '请先核对 Instagram 发布结果，再处理记录。', 'Reconcile Instagram publishing before removing its record.'))
+  if (p.threads_api_state && /"stage":"submitted"/.test(p.threads_api_state)) throw new Error(L(ctx, '请先核对 Threads 发布结果，再处理记录。', 'Check the Threads publishing result before removing its record.'))
   let days = 0
   for (;;) {
     const r = ctx.db.query('social_post_daily', { where: { post_id: p.id }, limit: 500 })
@@ -298,7 +295,6 @@ export async function collect(input: { channel_id?: string; type?: string; pages
   const out: any[] = []
   const errors: string[] = []
   for (const ch of ctx.db.query('social_accounts', { where: { type: input.type }, limit: 100 }).list) {
-    if (ch.type === 'instagram' && ch.auth_mode === 'api') { out.push({ channel: ch.name, skipped: 'Instagram API collection is not connected' }); continue }
     const other = elsewhere(ctx, ch)
     if (other) {
       out.push({ channel: ch.name, skipped: L(ctx, `在「${other}」上登录的，由那台电脑采集`, `Logged in on "${other}"; that computer collects it`) })
@@ -319,7 +315,8 @@ async function collectOne(ctx: any, channelId: string, pages?: number) {
   const m = platformOf(ctx, channelId)
   const ch = ctx.db.get('social_accounts', channelId)
   // 打开浏览器、翻主页要十几秒到一分钟：按钮上说清楚在做什么（各平台的 collect 自己没有进度）
-  ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 Facebook API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the Facebook API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
+  const apiName = ch.type === 'threads' ? 'Threads' : ch.type === 'instagram' ? 'Instagram' : 'Facebook'
+  ctx.progress({ message: ch.auth_mode === 'api' ? L(ctx, `正在通过 ${apiName} API 读取「${ch?.name ?? ''}」的数据…`, `Reading "${ch?.name ?? ''}" through the ${apiName} API…`) : L(ctx, `正在打开「${ch?.name ?? ''}」的主页读数据…`, `Opening "${ch?.name ?? ''}" to read its data…`) })
   const r: any = await track(ctx, ch, 'collect', (c) => m.collect({ channel_id: channelId, pages }, c))
   ctx.progress({ message: L(ctx, '保存数据…', 'Saving…') })
   // 读到 0 条、但这个账号明明发过（有平台 id 的）：多半是平台的接口改名了，采集悄悄变成空的

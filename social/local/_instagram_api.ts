@@ -73,23 +73,35 @@ export async function verify(ctx: any, account: Account, token: string): Promise
 }
 
 export function imageInput(ctx: any, source: unknown, caption: unknown): { image_url: string; caption: string } {
+  const r = publicInput(ctx, source, caption, 'image')
+  return { image_url: r.url, caption: r.caption }
+}
+
+/** Reel 的视频地址：和图片一样只收公开的 https 地址（Meta 自己来抓） */
+export function videoInput(ctx: any, source: unknown, caption: unknown): { video_url: string; caption: string } {
+  const r = publicInput(ctx, source, caption, 'video')
+  return { video_url: r.url, caption: r.caption }
+}
+
+function publicInput(ctx: any, source: unknown, caption: unknown, kind: 'image' | 'video'): { url: string; caption: string } {
   if (typeof caption !== 'string' || !caption.trim() || [...caption].length > 2200 || /[\u0000]/.test(caption)) throw new Error(L(ctx, '填写 1–2200 字的测试正文。', 'Provide a test caption of 1–2200 characters.'))
+  const what = kind === 'video' ? L(ctx, '视频须为公开的 HTTPS 地址', 'Use a public HTTPS URL for the video') : L(ctx, '图片须为公开的 HTTPS JPEG 地址', 'Use a public HTTPS URL for a JPEG image')
   let url: URL
   try {
     if (typeof source !== 'string' || source !== source.trim()) throw new Error()
     url = new URL(source)
-  } catch { throw new Error(L(ctx, '图片须为公开的 HTTPS JPEG 地址。', 'Use a public HTTPS URL for a JPEG image.')) }
+  } catch { throw new Error(what + L(ctx, '。', '.')) }
   const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  // Meta fetches the image. Local uploads/work refs and private/IP hosts cannot
-  // be used here; the caller must supply a public image, not a sharing page.
+  // Meta fetches the media. Local uploads/work refs and private/IP hosts cannot
+  // be used here; the caller must supply a public file, not a sharing page.
   // Annulo's URL polyfill does not expose username/password. Check the original
   // authority too, rather than relying on browser/Node-only URL properties.
   if (url.protocol !== 'https:' || /^https:\/\/[^/?#]*@/i.test(source as string) || /[\\\s]/.test(source as string) || url.hash || url.port ||
       !host.includes('.') || /^[\d.]+$/.test(host) || host.includes(':') ||
       /(?:^|\.)(?:localhost|local|internal|lan|home|test|invalid|example)$/.test(host)) {
-    throw new Error(L(ctx, '图片须为公开的 HTTPS JPEG 地址，不能使用本机、内网或带登录信息的地址。', 'Use a public HTTPS JPEG URL, without local/private hosts or embedded credentials.'))
+    throw new Error(what + L(ctx, '，不能使用本机、内网或带登录信息的地址。', ', without local/private hosts or embedded credentials.'))
   }
-  return { image_url: source as string, caption }
+  return { url: source as string, caption }
 }
 
 export async function containerStatus(ctx: any, id: string, token: string): Promise<string> {

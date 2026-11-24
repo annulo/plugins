@@ -1,0 +1,35 @@
+{
+  "fn": "social/social.collect",
+  "input": {
+    "type": "threads",
+    "pages": 1
+  },
+  "count": {
+    "table": "social_accounts",
+    "where": {
+      "type": "threads"
+    },
+    "label": {
+      "zh": "{n} 个账号",
+      "en": "{n} accounts"
+    }
+  },
+  "at": "14:00",
+  "jitter": "3h",
+  "name": "采集 Threads 帖子数据",
+  "params": {
+    "pages": {
+      "type": "number",
+      "min": 1,
+      "max": 10,
+      "label": {
+        "zh": "每次读几页",
+        "en": "Pages per run"
+      },
+      "hint": {
+        "zh": "一页是最近的 25 条，每条读一次数据；页数越多越慢。更早的帖子在账号卡片上点「立即采集」补全（读到 10 页）。",
+        "en": "A page is the latest 25 posts, reading insights for each; more pages take longer. Click \"Collect now\" on the account card to fill in older posts (up to 10 pages)."
+      }
+    }
+  }
+}

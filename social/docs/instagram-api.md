@@ -43,7 +43,7 @@ Meta 当前同时显示以下入口：
 - 媒体 ID：`18036776168850147`；随后真实 API 读取 `id,permalink` 成功，函数返回 `published: true, verified: true`。
 - 帖子链接：[查看 Instagram 测试帖](https://www.instagram.com/p/DfOYPGCAYM_/)。
 - 工作目录记录：`instagram-api-tests/18015938438970629.json`，阶段 `published`，已保存媒体 ID 与永久链接。测试帖保留在线，未执行删除。
-- 独立入口的账号接入和单图发布验收完成。正式账号列表与内容中心的单图立即发布已实现；自动排期、多图/视频和令牌自动续期尚未接入。
+- 独立入口的账号接入和单图发布验收完成。正式账号列表与内容中心的发布和排期已实现（排期到点由 Annulo 本机提交，Instagram API 本身不支持定时）；多图/视频和令牌自动续期尚未接入。
 
 首次请求曾在 TLS 连接阶段失败；无令牌网络探针也失败，之后重新请求恢复，真实账号和容器 API 均通过。未改动系统代理或 Annulo 核心。当前安装版没有 `ctx.file`，测试素材改用现有 `creght upload` 命令上传；插件的 Instagram 请求仍使用原生 `fetch`。
 
@@ -54,6 +54,10 @@ Instagram Login 与 Facebook Login 的令牌、权限名、API 主机不能混�
 在「网站和账号 → 添加账号 → Instagram → 官方 API」填写用户名、Instagram Login 用户 ID，并保存访问口令。已有密钥时口令留空；账号卡片可「检测授权」和「管理连接」，失效后在管理窗口更新口令。口令仅存本机密钥，不进入业务表或函数输入。
 
 本机图片需要在连接窗口选择已连接的 Creght 站点素材库，并已登录对应主机的 Creght CLI；图片上传为素材，不修改站点页面。也可以选择不上传、使用已公开的 HTTPS JPEG。单图要求由插件检查，不支持 PNG、多图、视频或自动排期；API 删除与数据采集也尚未接入。
+
+**数据采集（2026-11-20 加）**：`social.collect` 对 API 账号不开浏览器，`local/_instagram_collect.ts` 读 `GET /<IG id>/media`（自带 `like_count`、`comments_count`，基础权限）、每条 `GET /<媒体 id>/insights?metric=views,likes,comments,saved,shares`（`instagram_business_manage_insights`，一次最多 50 条）、`GET /me?fields=followers_count`。insights 报权限错误时不算失败：只留点赞、评论，播放等不覆盖原来的数，结果带 `insights_missing: true` 和提示。帖子按媒体 id 对上；换成 API 以前浏览器方式采到的（post_id 是短码）按链接里的短码对上并改记媒体 id；都对不上按文案对。2026-11-20 用 @talizen_merry 实测：2 条 Reel 读到播放和分享，手动生成的口令有 insights 权限。
+
+**视频（Reel，2026-11-20 加）**：帖子的 `video` 有值就发成 Reel（`media_type=REELS`、`share_to_feed=true`，不带图片）。公开 https 地址原样交给 Meta；本机视频（`local:` / 上传的 / 内容文件夹引用）发布时用 `ctx.file` 流式传到账号选的同一个素材库（`_creght_asset.ts`，和 Threads 一样走 creght MCP 的 `asset_pre_upload`），所以本机视频也要先在「管理连接」里选素材库。发布前只查格式（MP4 / MOV）和大小（最大 300 MB）；时长（3 秒–15 分钟）、编码、画幅由 Meta 处理时报回来（容器 `ERROR`，提示换视频，重发会新建容器）。Meta 处理视频要一阵，最多等 5 分钟；还没好就不发，再点发布接着用已传好的容器，不重复上传、不重复发帖。暂不传封面（用平台默认帧）。代码在 `local/_instagram_video.ts`、`instagram_test.ts` 的 `prepareVideo`。
 
 程序入口为 `social/social.login({ type: 'instagram', mode: 'api', account_id, username, media_host? })`；`media_host` 为 `{ api_host, project_id, site_id }` 的 JSON 字符串。`publish.prepare({ article_id, channel_ids })` 准备内容中心发布记录，`social/social.publish({ post_id })` 发布并保存媒体 ID 和帖子链接。`social/instagram.preparePublication({ post_id })` 只上传图片并准备未发布容器，供发布前验收。
 

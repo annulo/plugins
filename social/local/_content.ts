@@ -10,6 +10,7 @@
 //   tags        话题，JSON 数组字符串或数组，不带 #
 //   images      图文笔记的配图，JSON 数组字符串或数组（顺序就是轮播顺序）
 //   video       视频地址（http）或本机文件 local:<name>
+//   media       图片、视频混放的列表 [{ kind: 'image' | 'video', url }]（按顺序）；平台能混放（FIELDS 的 media）且里面有视频时原样存进帖子，否则用 images / video
 //   video_cover 自己的封面图：视频的封面（FIELDS 的 videoCover），长文的文章封面（articleCover，知乎）
 //   cover_text  没配图时文字封面上的大字
 //   category    视频的分区（B 站）
@@ -59,7 +60,16 @@ export function fromContent(c: any, platform: string) {
   const base = { kind: t, title: shownTitle, body: String(c?.body ?? '').trim(), tags: JSON.stringify(tags), cover_text: '', video: '', video_cover: '', images: '[]', category: '' }
   if (t === 'article') return { ...base, images: JSON.stringify(htmlImages(base.body)), video_cover: f?.articleCover ? String(c?.video_cover ?? '').trim() : '' }
   if (t === 'post') return { ...base, images: JSON.stringify(parseList(c?.images).slice(0, f?.images ?? 0)), cover_text: f?.cover ? String(c?.cover_text ?? '') : '' }
-  return { ...base, video: String(c?.video ?? ''), video_cover: f?.videoCover ? String(c?.video_cover ?? '').trim() : '', category: f?.category ? String(c?.category ?? '') : '' }
+  return { ...base, video: String(c?.video ?? ''), video_cover: f?.videoCover ? String(c?.video_cover ?? '').trim() : '', category: f?.category ? String(c?.category ?? '') : '', ...(f?.media ? { media: mixedMedia(c?.media) } : {}) }
+}
+
+/** 能混放的平台用的 media：有视频才存（只有图片照旧走 images）；不截断，超过上限由检查报出来 */
+function mixedMedia(raw: unknown): string {
+  let l: any = raw
+  if (typeof raw === 'string') { try { l = JSON.parse(raw || '[]') } catch { return '' } }
+  if (!Array.isArray(l)) return ''
+  const items = l.filter((m: any) => m && (m.kind === 'image' || m.kind === 'video') && typeof m.url === 'string' && m.url).map((m: any) => ({ kind: m.kind, url: String(m.url) }))
+  return items.some((m: any) => m.kind === 'video') ? JSON.stringify(items) : ''
 }
 
 /** 这份内容发到这个平台，正文有多长、上限多少（X 中日韩文字算 2、话题接在正文后的平台把话题算进去） */

@@ -26,7 +26,9 @@ function base64(bytes: Uint8Array) {
 }
 
 /** Resolve only project-owned uploads/work refs; remote image requests never carry the IG token. */
-export async function publicImage(ctx: any, ch: any, source: string): Promise<string> {
+/** opts lets another Meta API channel (Threads) reuse this: its own image-host field and platform name in messages. */
+export async function publicImage(ctx: any, ch: any, source: string, opts: { host?: string; platform?: string } = {}): Promise<string> {
+  const name = opts.platform || 'Instagram'
   const local = localImage(source)
   let url = source
   if (/^(folder:|work:)/.test(source)) {
@@ -39,10 +41,10 @@ export async function publicImage(ctx: any, ch: any, source: string): Promise<st
   const res = await fetch(url)
   if (!res.ok) throw new Error(L(ctx, '无法读取配图，请重新选择。', 'Cannot read the image; select it again.'))
   const bytes = new Uint8Array(await res.arrayBuffer())
-  if ((res as any).truncated || bytes.length < 4 || bytes.length > 8 * 1024 * 1024 || bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255) throw new Error(L(ctx, 'Instagram API 单图须为不超过 8 MB 的 JPEG，请转换后重新选择。', 'Instagram API images must be JPEG and no larger than 8 MB; convert and select the image again.'))
+  if ((res as any).truncated || bytes.length < 4 || bytes.length > 8 * 1024 * 1024 || bytes[0] !== 255 || bytes[1] !== 216 || bytes[2] !== 255) throw new Error(L(ctx, `${name} API 单图须为不超过 8 MB 的 JPEG，请转换后重新选择。`, `${name} API images must be JPEG and no larger than 8 MB; convert and select the image again.`))
   if (!local) return source
   let host: any
-  try { host = JSON.parse(ch.instagram_media_host || '') } catch {}
+  try { host = JSON.parse((opts.host ?? ch.instagram_media_host) || '') } catch {}
   if (!host || !/^https:\/\/(creght\.cn|creght\.com|talizen\.com)$/.test(host.api_host) || !/^[a-z0-9]+$/.test(host.project_id) || !/^[a-z0-9]+$/.test(host.site_id)) throw new Error(L(ctx, '到账号的「管理连接」选择图片素材库，或使用公开的 HTTPS JPEG 图片。', 'Choose image hosting in Manage connection, or use a public HTTPS JPEG image.'))
   let result: any
   try { result = JSON.parse(await localTool(ctx, 'upload', `${host.project_id}/${host.site_id}`, base64(bytes), host.api_host)) }

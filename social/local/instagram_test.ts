@@ -1,12 +1,14 @@
 import { L } from './_i18n'
-import { Account, AccountInput, accountInput, containerStatus, imageInput, mediaInfo, numericId, request, tokenFor, verify } from './_instagram_api'
+import { Account, AccountInput, accountInput, containerStatus, imageInput, mediaInfo, numericId, request, tokenFor, verify, videoInput } from './_instagram_api'
 
 // An explicit own-account smoke test, independent of browser accounts/schedules.
 // Tokens stay in ctx.secrets; only publication receipts go in the work folder.
 type Receipt = Account & {
   version: 1
   container_id: string
-  image_url: string
+  // One of the two: image_url for a single image, video_url for a Reel.
+  image_url?: string
+  video_url?: string
   caption: string
   created_at: string
   stage: 'prepared' | 'submitted' | 'published'
@@ -33,7 +35,7 @@ function load(ctx: any, containerId: string): Saved {
   if (r?.version !== 1 || r.container_id !== containerId || !['prepared', 'submitted', 'published'].includes(r.stage) ||
       typeof r.created_at !== 'string' || !Number.isFinite(Date.parse(r.created_at))) throw new Error('Invalid Instagram test receipt')
   const account = accountInput(r)
-  const content = imageInput(ctx, r.image_url, r.caption)
+  const content = r.video_url ? videoInput(ctx, r.video_url, r.caption) : imageInput(ctx, r.image_url, r.caption)
   // Read a whitelist so a manually edited receipt cannot copy arbitrary fields
   // (especially credentials) into responses or subsequent persisted updates.
   const receipt: Receipt = { version: 1, ...account, ...content, container_id: containerId, created_at: r.created_at, stage: r.stage }
@@ -80,13 +82,32 @@ export async function prepareImage(input: AccountInput & { image_url: string; ca
   return { ...receipt, receipt_path: path, published: false }
 }
 
-/** Submit once, using the exact account, image and caption saved by prepareImage.
+/** Creates an unpublished Reel container (media_type=REELS). Meta fetches video_url
+ * and processes it for a while: poll checkImage until FINISHED before publishing.
+ * share_to_feed keeps the Reel on the profile grid, like a normal post. */
+export async function prepareVideo(input: AccountInput & { video_url: string; caption: string }, ctx: any) {
+  runtime(ctx)
+  const account = accountInput(input)
+  const content = videoInput(ctx, input.video_url, input.caption)
+  const token = tokenFor(ctx, account.account_id)
+  if (content.video_url.includes(token) || content.caption.includes(token)) throw new Error('Do not include the Instagram token in test content')
+  await verify(ctx, account, token)
+  const body = await request(ctx, `/${account.account_id}/media`, token, { media_type: 'REELS', share_to_feed: 'true', ...content }, 'POST')
+  const container_id = numericId(body.id)
+  const path = `${directory}/${container_id}.json`
+  if (ctx.fs.stat(path)) throw new Error('Instagram returned an existing container; its receipt was preserved')
+  const receipt: Receipt = { version: 1, ...account, ...content, container_id, created_at: new Date().toISOString(), stage: 'prepared' }
+  ctx.fs.write(path, JSON.stringify(receipt, null, 2) + '\n')
+  return { ...receipt, receipt_path: path, published: false }
+}
+
+/** Submit once, using the exact account, media and caption saved by prepareImage / prepareVideo.
  * Persist the attempt BEFORE POST. Any interruption after that is check-only:
  * even an API rejection needs inspection, not an automatic second POST. */
 export async function publishImage(input: { container_id: string; confirm_publish: boolean }, ctx: any) {
   const saved = load(ctx, input.container_id)
   const r = saved.receipt
-  if (input.confirm_publish !== true) throw new Error(L(ctx, '先确认记录里的账号、配图和正文，再传 confirm_publish: true。', 'Review the saved account, image and caption, then pass confirm_publish: true.'))
+  if (input.confirm_publish !== true) throw new Error(L(ctx, '先确认记录里的账号、配图和正文，再传 confirm_publish: true。', 'Review the saved account, media and caption, then pass confirm_publish: true.'))
   if (r.stage !== 'prepared') return checkImage({ container_id: r.container_id }, ctx)
   const token = tokenFor(ctx, r.account_id)
   await verify(ctx, r, token)

@@ -1,6 +1,6 @@
 # 社媒插件（social）
 
-管 X、LinkedIn、Facebook、Instagram、YouTube、小红书、抖音、B 站、知乎的账号和帖子：默认用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），Facebook 公共主页和 Instagram 专业账号也可选官方 API 通道，
+管 X、LinkedIn、Facebook、Instagram、Threads、YouTube、小红书、抖音、B 站、知乎的账号和帖子：默认用本机浏览器登录（`ctx.browser`，登录态只在这台电脑上），Facebook 公共主页和 Instagram 专业账号也可选官方 API 通道，Threads 只走官方 API，
 把内容改写成各平台的帖子，审核后发布或排期，定时采集互动数据和粉丝数，平台改版导致发布、采集失败时交给助手修。
 
 插件只管社媒这一段；**内容从哪来、页面怎么排是模板的事**。这份说明写给助手：项目要用社媒时照这里接。
@@ -23,7 +23,7 @@
 
 | 表 | 内容 |
 |---|---|
-| `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / youtube / xiaohongshu / douyin / bilibili / zhihu）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
+| `social_accounts` | 账号，一个平台账号一行：`type`（x / linkedin / facebook / instagram / threads / youtube / xiaohongshu / douyin / bilibili / zhihu）、`name`、`handle`、`avatar`、`profile`（账号定位，写帖子时用）、`login_status`（ok / expired）、`followers`、`collected_at`，以及浏览器 profile 的几个字段（插件自己维护） |
 | `social_posts` | 帖子：`channel_id`（账号 id）、`article_id`（出自哪篇内容，模板的 id）、`plan_item_id`（为增长计划的哪个计划项写的，可空，存帖子时助手带上）、`title`、`body`、`tags`、`images`、`video`、`status`、`scheduled_at`、`post_url`，以及采集回写的 `views`、`likes`、`comments`、`collects`、`shares` |
 | `social_daily` | 账号每天一行：粉丝和互动合计 |
 | `social_post_daily` | 帖子每天一行：当天最后一次采集的累计数 |
@@ -53,9 +53,9 @@
 
 Facebook 公共主页 API 通道与原浏览器通道并存，按账号的 `auth_mode` 分流；个人主页仍走浏览器。操作见 [Facebook API 授权与测试说明](docs/facebook-api.md)。启用 Annulo 的 `facebook` OAuth provider 后，`social.login({ type: 'facebook', mode: 'api', account: '<连接账号 ID>', channel_id?: '<已有主页账号 ID>' })` 返回可选主页，页面用 `ChooseAccounts` 调 `social.addChosen`。已有主页沿用 id，只重新绑定当前目标，原浏览器登录保留；其它 API 主页不被浏览器重登覆盖。User/Page token 都不写进项目表，绑定的 OAuth 账号断开时必须重连。
 
-Instagram 专业账号用 `social.login({ type: 'instagram', mode: 'api', account_id, username, media_host? })` 接入，凭据预先保存到 `INSTAGRAM_USER_TOKEN_<account_id>`；令牌不传入函数参数。`media_host` 是包含 `api_host/project_id/site_id` 的 JSON 字符串，指定本机 JPEG 上传到哪个已连接的 Creght 素材库。账号已有浏览器记录时按用户名复用，独立保存 Instagram Login ID。`social/instagram.checkLogin` 检测授权，`social/social.publish` 按 `auth_mode` 分流，API 目前仅支持单张 JPEG 立即发布；详情见 [Instagram API 接入说明](docs/instagram-api.md)。
+Instagram 专业账号用 `social.login({ type: 'instagram', mode: 'api', account_id, username, media_host? })` 接入，凭据预先保存到 `INSTAGRAM_USER_TOKEN_<account_id>`；令牌不传入函数参数。`media_host` 是包含 `api_host/project_id/site_id` 的 JSON 字符串，指定本机 JPEG 上传到哪个已连接的 Creght 素材库。账号已有浏览器记录时按用户名复用，独立保存 Instagram Login ID。`social/instagram.checkLogin` 检测授权，`social/social.publish` 按 `auth_mode` 分流，API 目前支持单张 JPEG 或一个视频（发成 Reel，`video` 有值时）立即发布；本机视频发布时传到同一个素材库（`ctx.file` 流式上传，最大 300 MB），公开 https 视频地址原样给 Meta；详情见 [Instagram API 接入说明](docs/instagram-api.md)。
 
-API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.publish({ post_id, check_only: true })` 只读核对，不能删除记录后重发。`instagram_api_state` 和工作目录 `instagram-api-posts/` 保存发布阶段，原子目录锁防止并发重复提交。`social/instagram.preparePublication({ post_id })` 只准备图片容器、不公开发帖，供验收使用。API 多图、视频、自动排期、平台删除、采集和令牌自动刷新尚未接入；不回退到浏览器。独立 `instagram_test.*` 入口保留作诊断。
+API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.publish({ post_id, check_only: true })` 只读核对，不能删除记录后重发。`instagram_api_state` 和工作目录 `instagram-api-posts/` 保存发布阶段，原子目录锁防止并发重复提交。`social/instagram.preparePublication({ post_id })` 只准备图片 / Reel 容器、不公开发帖，供验收使用。采集走 `social.collect`（`_instagram_collect.ts`）：帖子列表带点赞、评论，每条 insights 读播放、收藏、分享（要 `instagram_business_manage_insights`，没有时只采点赞、评论，结果带 `insights_missing` 和提示），粉丝数读 `/me`；以前浏览器方式采到的帖子按链接短码对上、改记媒体 id。排期也能用：Instagram API 自己不支持定时，到点由 Annulo 调 `social.publishScheduled` 提交（电脑要开着）。API 多图、视频封面、平台删除和令牌自动刷新尚未接入；不回退到浏览器。独立 `instagram_test.*` 入口保留作诊断。
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
 `social.collect`、`publish`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
@@ -71,7 +71,7 @@ API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.pu
 
 ## 写帖子：模板给内容，插件写和存
 
-每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、youtube、xiaohongshu、douyin、bilibili、zhihu），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
+每个平台一个任务 `social/write-<平台>`（x、linkedin、facebook、instagram、threads、youtube、xiaohongshu、douyin、bilibili、zhihu），按钮用 `TaskButton` 开一段对话交给助手。任务参数：
 
 ```json
 { "source": { "fn": "<模板的取数函数>", "id": "<内容 id>" }, "channel_ids": ["<账号 id>", "…"], "note": "<可选：这次怎么改>" }
@@ -104,6 +104,7 @@ API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.pu
 | 平台 | 标题 | 正文 | 配图 / 视频 | 别的 |
 |---|---|---|---|---|
 | X、LinkedIn、Facebook、Instagram | 不发（只在后台列表里显示） | 纯文字 | 一组图（顺序就是轮播顺序）或一个视频 | Instagram、小红书没图时用 `cover_text` 生成文字封面 |
+| Threads | 不发 | 纯文字，最多 500 字（emoji 按字节） | 一张图或一个视频（MP4 / MOV，≤ 5 分钟、≤ 1 GB，没有封面），或不配图（有链接时默认不配，第一个链接出预览卡） | 话题只 1 个，走 `topic_tag` 不接在正文里 |
 | 小红书 | 发 | 纯文字 | 一组图或一个视频 | `cover_text` |
 | YouTube、抖音 | 发 | 纯文字（简介） | 只有视频 | — |
 | B 站 | 发 | 视频：纯文字（简介）；专栏：图文是纯文字，长文是富文本 HTML | 视频投稿一个视频；图文、长文发成专栏，配图排在文字后面 / 图在正文里 | 视频 `category` 分区；专栏标题 50 字内、话题单选 |
@@ -143,6 +144,13 @@ B 站一个账号发两种东西（2026-10 起）：视频是**投稿**，图文
 
 视频独立封面：`video_cover` 使用资料库或本机上传图片地址，小红书、抖音、B站 使用（`FIELDS.videoCover`）；其他平台不传。比例看 `FIELDS.coverRatio`（小红书、抖音 3:4，B站 4:3），不是这个比例平台会裁，模板发布前提示、能当场裁。和 `images`、`cover_text` 相互独立。修改时省略保留、空字符串移除；排期到点按帖子里存的封面发。上传失败停止发布，不静默回退默认封面。
 
+
+### Threads（官方 API）
+
+Threads 只走官方 API（`graph.threads.com`），不开浏览器；设计和做法见 [docs/threads.md](docs/threads.md)。口令是用户自己 Meta 应用里 Threads 用例生成的用户口令（TH 开头），页面写进本机密钥 `THREADS_USER_TOKEN_<Threads 用户 id>`，不进表、不进函数参数：
+页面先写临时密钥 `THREADS_USER_TOKEN_PENDING`，`social/threads.identifyToken({ secret })` 问出 `{ account_id, username }`，页面再写正式密钥，调 `social.login({ type: 'threads', mode: 'api', account_id, username, media_host? })`（`media_host` 同 Instagram，本机 JPEG 传到哪个 Creght 素材库）。`social/threads.checkLogin` 检测口令。
+
+发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文找回那一条，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、口令自动续期还没接。
 
 ### Instagram 官方授权内测（API 66）
 

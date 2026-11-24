@@ -88,3 +88,55 @@ export function collectPages(input: { pages?: unknown } | undefined, full: numbe
   const n = Math.floor(Number(input?.pages))
   return Number.isFinite(n) && n >= 1 ? n : full
 }
+
+// ---- 采集时把平台上的帖子对回 Annulo 发出去的那条 ----
+// Annulo 发出去、却没记上平台 id 的帖子：发布时没认出 id，或者显示失败 / 卡在发布中、其实发出去了。
+// 采集到平台上的帖子时先按 id 找，找不到再用这里按文字和时间对，对上就记上 id（显示失败的改成已发布），不另存一条「平台上发的」。
+
+const plainText = (s: unknown) => String(s ?? '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').replace(/[\s\p{P}\p{S}]+/gu, '').toLowerCase()
+
+/** 两段文字有多像（0–1）：字的两两组合（bigram）的 Dice 系数，各取前 300 个字 */
+export function similarity(a: unknown, b: unknown): number {
+  const x = [...plainText(a)].slice(0, 300), y = [...plainText(b)].slice(0, 300)
+  if (!x.length || !y.length) return 0
+  if (x.join('') === y.join('')) return 1
+  const grams = (l: string[]) => { const m = new Map<string, number>(); for (let i = 0; i < l.length - 1; i++) { const k = l[i] + l[i + 1]; m.set(k, (m.get(k) ?? 0) + 1) } return m }
+  const gx = grams(x), gy = grams(y)
+  let both = 0
+  for (const [k, n] of gx) both += Math.min(n, gy.get(k) ?? 0)
+  const total = Math.max(x.length - 1, 0) + Math.max(y.length - 1, 0)
+  return total ? (2 * both) / total : 0
+}
+
+/** 这个账号可能对得上的帖子：没有 post_id、已发布 / 发布失败 / 发布中的 */
+export function unlinkedPosts(ctx: any, channelId: string): any[] {
+  const out: any[] = []
+  for (const status of ['published', 'failed', 'publishing']) out.push(...ctx.db.query('social_posts', { where: { channel_id: channelId, status }, limit: 500 }).list.filter((x: any) => !x.post_id))
+  return out
+}
+
+const DAY = 86400_000
+/**
+ * 平台上的这条（text 文字，created 平台上的发布时间）是 candidates 里的哪一条：textOf 给出 Annulo 发出去的文字（正文 + 话题）。
+ * 去掉链接、话题、标点、空白后完全一样就算；不一样时相似度 ≥ 0.85、且平台时间在开始发它（claimed_at，没有用 published_at / updated_at）前后 3 天内也算。
+ * 失败、发布中的还要平台时间不早于开始发它之前 1 分钟（免得对上以前发过的同样文字）。都对不上是 undefined
+ */
+export function matchUnlinked<T extends any>(candidates: T[], text: string, created: string | undefined, textOf: (p: T) => string): T | undefined {
+  const at = Date.parse(created || '')
+  let best: T | undefined, score = 0
+  for (const p of candidates as any[]) {
+    const started = Date.parse(p.claimed_at || p.published_at || p.updated_at || '')
+    if (p.status !== 'published' && at && started && at < started - 60_000) continue
+    const s = similarity(textOf(p), text)
+    const near = !at || !started || Math.abs(at - started) <= 3 * DAY
+    if ((s === 1 || (s >= 0.85 && near)) && s > score) { best = p; score = s }
+  }
+  return best
+}
+
+/** 对上以后要改的字段：记上平台 id 和链接；显示失败 / 发布中的改成已发布 */
+export function linkPatch(p: any, id: string, url: string, created?: string): Record<string, any> {
+  const patch: Record<string, any> = { post_id: id, post_url: url || p.post_url }
+  if (p.status !== 'published') Object.assign(patch, { status: 'published', published_at: created || p.claimed_at || new Date().toISOString(), error: null, claimed_at: null })
+  return patch
+}

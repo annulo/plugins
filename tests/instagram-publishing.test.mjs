@@ -116,11 +116,17 @@ test('connecting the same account preserves its ID and old browser UID without s
   assert.equal(JSON.stringify([...ctx.rows.get('social_accounts').values()]).includes(token),false)
   await assert.rejects(accounts.connectApi({channel_id:'account1',account_id:uid,username:'someoneelse'},ctx),/original Instagram/)
 })
-test('invalid formats, multi-image, video, and scheduled API posts do not submit',async()=>{
-  for(const data of [{images:'[]'},{images:JSON.stringify([url,url])},{video:'https://cdn.example.org/test.mp4'},{body:'x'.repeat(2201)},{status:'scheduled'}]){
+test('invalid formats, multi-image, bad video, and unapproved API posts do not submit',async()=>{
+  for(const data of [{images:'[]'},{images:JSON.stringify([url,url])},{video:'http://cdn.example.org/test.mp4'},{video:'local:clip.mp4'},{body:'x'.repeat(2201)},{status:'draft'}]){
     const ctx=context(),calls=graph();ctx.db.update('social_posts','post1',data)
     await assert.rejects(social.publish({post_id:'post1'},ctx));assert.equal(submits(calls).length,0)
   }
+})
+test('a scheduled API post is published when it comes due',async()=>{
+  const ctx=context(),calls=graph();ctx.db.update('social_posts','post1',{status:'scheduled',scheduled_at:new Date(Date.now()-1000).toISOString()})
+  const r=await social.publishScheduled({post_id:'post1'},ctx)
+  assert.equal(r.published,media);assert.equal(submits(calls).length,1)
+  assert.equal(ctx.db.get('social_posts','post1').status,'published')
 })
 test('unready container can resume once without creating another container',async()=>{
   const ctx=context();let ready=false
@@ -135,9 +141,66 @@ test('local JPEG upload preserves bytes and returns a public URL without IG cred
   assert.equal(await assets.publicImage(ctx,ch,'/_annulo/uploaded/'+'a'.repeat(32)+'.jpg'),url)
   await assert.rejects(assets.publicImage(ctx,{},'/_annulo/uploaded/'+'a'.repeat(32)+'.jpg'),/image hosting/)
 })
-test('API removal and collection never fall back to browser',async()=>{
+const mediaList=()=>new Response(JSON.stringify({data:[{id:media,caption:'API test',permalink,timestamp:'2026-11-20T08:00:00+0000',media_type:'IMAGE',like_count:3,comments_count:1,media_url:url},{id:'18000000000000001',caption:'Old browser post',permalink:'https://www.instagram.com/p/OLDCODE1/',timestamp:'2026-11-01T08:00:00+0000',media_type:'VIDEO',like_count:9,comments_count:2,thumbnail_url:url}]}))
+const collectGraph=(insights)=>graph(c=>c.path==='/me'?new Response(JSON.stringify({user_id:uid,username:'merry.liao',followers_count:42})):c.path===`/${uid}/media`&&c.method==='GET'?mediaList():c.path.endsWith('/insights')?insights(c):undefined)
+test('API removal never falls back to browser',async()=>{
   const ctx=context();graph()
   await assert.rejects(ig.remove({post_id:'post1'},ctx),/Delete API posts/)
-  await assert.rejects(ig.collect({channel_id:'account1'},ctx),/not connected/)
-  const r=await social.collect({type:'instagram'},ctx);assert.equal(r.channels.length,1)
+})
+test('API collection reads insights, followers, links published and old browser posts without opening a browser',async()=>{
+  const ctx=context();ctx.db.update('social_posts','post1',{status:'published',post_id:media,post_url:permalink})
+  ctx.db.insert('social_posts',{channel_id:'account1',status:'published',post_id:'OLDCODE1',post_url:'https://www.instagram.com/p/OLDCODE1/',body:'Old browser post',views:5})
+  collectGraph(()=>new Response(JSON.stringify({data:[{name:'views',values:[{value:120}]},{name:'likes',values:[{value:4}]},{name:'comments',values:[{value:1}]},{name:'saved',values:[{value:2}]},{name:'shares',values:[{value:3}]}]})))
+  const r=await social.collect({channel_id:'account1'},ctx)
+  assert.equal(r.channels[0].updated,2);assert.equal(r.channels[0].added,0);assert.equal(r.channels[0].followers,42)
+  const p=row(ctx);assert.equal(p.views,120);assert.equal(p.collects,2);assert.equal(p.shares,3)
+  const old=[...ctx.rows.get('social_posts').values()].find(x=>x.body==='Old browser post');assert.equal(old.post_id,'18000000000000001');assert.equal(old.views,120)
+  assert.equal(ctx.db.get('social_accounts','account1').followers,42)
+})
+test('API collection without insights permission keeps likes/comments and does not erase views',async()=>{
+  const ctx=context();ctx.db.update('social_posts','post1',{status:'published',post_id:media,post_url:permalink,views:77})
+  collectGraph(()=>new Response(JSON.stringify({error:{code:10,message:'no permission'}}),{status:403}))
+  const r=await social.collect({type:'instagram'},ctx)
+  assert.equal(r.channels[0].insights_missing,true)
+  const p=row(ctx);assert.equal(p.likes,3);assert.equal(p.comments,1);assert.equal(p.views,77)
+  assert.equal(ctx.db.get('social_accounts','account1').login_status,'ok')
+})
+
+const videoUrl='https://cdn.example.org/clip.mp4',reel='https://www.instagram.com/reel/test_REEL_1/'
+const reelGraph=(status=()=>'FINISHED')=>graph(c=>c.path===`/${container}`?new Response(JSON.stringify({status_code:status()})):c.path===`/${media}`?new Response(JSON.stringify({id:media,permalink:reel})):undefined)
+test('public video URL publishes as a Reel and waits for processing',async()=>{
+  const ctx=context();let polls=0
+  const calls=reelGraph(()=>++polls<3?'IN_PROGRESS':'FINISHED')
+  ctx.db.update('social_posts','post1',{video:videoUrl})
+  const r=await social.publish({post_id:'post1'},ctx)
+  const create=calls.find(c=>c.path.endsWith('/media'))
+  assert.equal(create.body.get('media_type'),'REELS');assert.equal(create.body.get('video_url'),videoUrl);assert.equal(create.body.get('share_to_feed'),'true');assert.equal(create.body.get('image_url'),null)
+  assert.equal(r.post_url,reel);assert.equal(row(ctx).status,'published');assert.equal(submits(calls).length,1)
+})
+test('local video uploads to the asset library, then Meta fetches the public URL',async()=>{
+  const ctx=context(),calls=reelGraph();const mcp=[]
+  ctx.db.update('social_accounts','account1',{instagram_media_host:JSON.stringify({api_host:'https://creght.cn',project_id:'project1',site_id:'site1'})})
+  ctx.db.update('social_posts','post1',{video:'local:clip.mp4'})
+  ctx.file=src=>({name:'clip.mp4',size:5*1048576,type:'video/mp4',sha256:'abc',src})
+  ctx.mcp=async(name,tool,args)=>{mcp.push(tool);return tool==='asset_pre_upload'?{existed:true,url:videoUrl}:{}}
+  await social.publish({post_id:'post1'},ctx)
+  assert.deepEqual(mcp,['asset_pre_upload']);assert.equal(calls.find(c=>c.path.endsWith('/media')).body.get('video_url'),videoUrl)
+})
+test('video still processing after the wait is not published and resumes with the same container',async()=>{
+  const ctx=context();let done=false
+  const calls=reelGraph(()=>done?'FINISHED':'IN_PROGRESS')
+  ctx.db.update('social_posts','post1',{video:videoUrl})
+  await assert.rejects(social.publish({post_id:'post1'},ctx),/still processing/)
+  assert.equal(submits(calls).length,0);assert.equal(ctx.locks.size,0);done=true
+  await social.publish({post_id:'post1'},ctx)
+  assert.equal(calls.filter(c=>c.path.endsWith('/media')).length,1);assert.equal(submits(calls).length,1)
+})
+test('video processing error is reported and a retry creates a fresh container',async()=>{
+  const ctx=context(),second='18015938438970630';let creates=0
+  // the first container stays ERROR; the one created on retry finishes
+  const calls=graph(c=>c.path.endsWith('/media')?new Response(JSON.stringify({id:++creates===1?container:second})):c.path===`/${container}`?new Response(JSON.stringify({status_code:'ERROR'})):c.path===`/${second}`?new Response(JSON.stringify({status_code:'FINISHED'})):c.path===`/${uid}/media_publish`?new Response(JSON.stringify({id:media})):c.path===`/${media}`?new Response(JSON.stringify({id:media,permalink:reel})):undefined)
+  ctx.db.update('social_posts','post1',{video:videoUrl})
+  await assert.rejects(social.publish({post_id:'post1'},ctx),/could not process the video/)
+  await social.publish({post_id:'post1'},ctx)
+  assert.equal(calls.filter(c=>c.path.endsWith('/media')).length,2);assert.equal(submits(calls).length,1)
 })

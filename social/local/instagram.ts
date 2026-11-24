@@ -1,10 +1,11 @@
 import { isManagedInstagram, connectManaged, checkManagedLogin } from './_instagram_managed'
-import { isInstagramApi, connectApi, checkApiLogin } from './_instagram_account'
+import { isInstagramApi, connectApi, checkApiLogin, authorizationError } from './_instagram_account'
+import { readApi, shortcode } from './_instagram_collect'
 import { apiProblems, publishApi } from './_instagram_publish'
 import { tokenGuide as guide, identifyToken as identify } from './_instagram_token_guide'
 import { L } from './_i18n'
 import { pickImages, sourceOf, planPatch } from './_source'
-import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { IG, postText, problems } from './_instagram_spec'
 import { Expired } from './_health'
 import { assist, ensure, markReady, readySel } from './_assist'
@@ -780,22 +781,33 @@ export async function remove(input: { post_id?: string; code?: string; channel_i
  * 在 Instagram 上直接发的帖子也收进来（source: platform）；发布时没认出 id 的，按文案对上补上 id。
  */
 export async function collect(input: { channel_id?: string; pages?: number }, ctx: any) {
-  if (input.channel_id && isInstagramApi(ctx.db.get('social_accounts', input.channel_id))) throw new Error(L(ctx, 'Instagram API 互动采集尚未接入。', 'Instagram API engagement collection is not connected yet.'))
   const chs = input?.channel_id ? [igChannel(ctx, input.channel_id)] : ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 100 }).list
   const out: any[] = []
   for (const ch of chs) {
-    if (isInstagramApi(ch)) { out.push({ channel: ch.name, skipped: 'Instagram API collection is not connected' }); continue }
-    if (!ch.browser_profile || !ch.handle || ch.login_status === 'expired') {
+    const api = isInstagramApi(ch)
+    if (api && isManagedInstagram(ch)) { out.push({ channel: ch.name, skipped: L(ctx, '这种连接暂不支持采集', 'Collection is not available for this connection yet') }); continue }
+    if (!api && (!ch.browser_profile || !ch.handle || ch.login_status === 'expired')) {
       out.push({ channel: ch.name, skipped: L(ctx, '没登录', 'Not logged in') })
       continue
     }
-    const b = await openBrowser(ctx, { profile: ch.browser_profile })
-    await b.goto(SITE + '/')
-    await ctx.sleep(2000)
-    const ok = await loggedIn(b)
-    const user = ok ? await readUser(b) : null
-    const posts = ok ? await readPosts(ctx, b, ch.platform_uid || user?.id || '', user?.handle || ch.handle, collectPages(input, 4)) : []
-    await b.close()
+    // 官方 API：帖子的 post_id 是媒体 id、链接用平台给的；浏览器方式：post_id 是短码
+    // 指标没读到的（API 没 insights 权限时的播放、收藏、分享）是 undefined，不覆盖原来的数
+    let ok = true, user: IgUser | null = null, insightsMissing = false, apiFollowers: number | undefined
+    let posts: { code: string; url?: string; text: string; image?: string; created?: string; views?: number; likes?: number; comments?: number; collects?: number; shares?: number }[]
+    if (api) {
+      let r: Awaited<ReturnType<typeof readApi>>
+      try { r = await readApi(ctx, ch, collectPages(input, 2)) } catch (e) { authorizationError(ctx, ch, e); throw e }
+      posts = r.posts.map((p) => ({ ...p, code: p.id }))
+      insightsMissing = r.insights_missing; apiFollowers = r.followers
+    } else {
+      const b = await openBrowser(ctx, { profile: ch.browser_profile })
+      await b.goto(SITE + '/')
+      await ctx.sleep(2000)
+      ok = await loggedIn(b)
+      user = ok ? await readUser(b) : null
+      posts = ok ? await readPosts(ctx, b, ch.platform_uid || user?.id || '', user?.handle || ch.handle, collectPages(input, 4)) : []
+      await b.close()
+    }
     if (!ok) {
       ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
       out.push({ channel: ch.name, skipped: L(ctx, '登录过期', 'Login expired') })
@@ -806,21 +818,32 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     const today = todayRows(ctx, ch.id, day)
     const totals = channelTotals(ctx, ch)
     // 发布时没认出 id 的帖子：按文案对上
-    const unlinked: Post[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id)
+    const publishedRows: any[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list
+    // Annulo 发出去、没记上 id 的（含显示失败、卡在发布中其实发出去了的）：按文字和时间对上（_snapshot.ts 的 matchUnlinked）
+    const unlinked: Post[] = unlinkedPosts(ctx, ch.id)
     let updated = 0
     let added = 0
     for (const ip of posts) {
-      const metrics = { views: ip.views, likes: ip.likes, comments: ip.comments, collects: ip.collects, shares: ip.shares, metrics_at: t }
+      const url = ip.url || post_url(ip.code)
+      const metrics: Record<string, any> = { metrics_at: t }
+      for (const k of METRIC_KEYS) if (ip[k] != null) metrics[k] = ip[k]
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: ip.code }, limit: 1 }).list[0]
+      // 换成官方 API 以前用浏览器方式采到的帖子，post_id 是短码：按链接里的短码对上，改记媒体 id
+      const code = api ? shortcode(url) : ''
+      const byCode = !hit && code ? publishedRows.find((x) => x.post_id === code || shortcode(x.post_url) === code) : null
+      if (byCode) { ctx.db.update('social_posts', byCode.id, { post_id: ip.code, post_url: url }); hit = { ...byCode, post_id: ip.code } }
       if (!hit) {
-        const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(ip.text))
+        const u: any = matchUnlinked(unlinked, ip.text, ip.created, (x: any) => postText(x.body, parse(x.tags, [])))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: ip.code, post_url: post_url(ip.code) })
-          hit = { ...u, post_id: ip.code }
+          const patch = linkPatch(u, ip.code, url, ip.created)
+          ctx.db.update('social_posts', u.id, patch)
+          if (u.status !== 'published') totals.posts++
+          hit = { ...u, ...patch }
+          unlinked.splice(unlinked.indexOf(u), 1)
         }
       }
       if (!hit || hit.status === 'published') {
-        for (const k of METRIC_KEYS) totals[k] += (ip[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
+        for (const k of METRIC_KEYS) if (ip[k] != null) totals[k] += (ip[k] || 0) - (hit ? Number(hit[k]) || 0 : 0)
         if (!hit) totals.posts++
       }
       if (hit) {
@@ -831,7 +854,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
         const plain = ip.text.trim()
         const saved = ctx.db.insert('social_posts', {
           channel_id: ch.id, title: [...(plain.split('\n')[0] || L(ctx, '（无文案）', '(no caption)'))].slice(0, 30).join(''), body: ip.text, status: 'published', source: 'platform',
-          post_id: ip.code, post_url: post_url(ip.code), images: JSON.stringify(ip.image ? [ip.image] : []), published_at: ip.created || t, created_at: t, ...metrics,
+          post_id: ip.code, post_url: url, images: JSON.stringify(ip.image ? [ip.image] : []), published_at: ip.created || t, created_at: t, ...metrics,
         })
         recordDay(ctx, ch.id, saved, day, metrics, today)
         added++
@@ -839,12 +862,14 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     }
     const patch: any = { collected_at: t, login_status: 'ok', last_checked_at: t, metric_totals: JSON.stringify(totals) }
     if (user) Object.assign(patch, channelFields(user))
+    if (api) { patch.instagram_auth_error = null; if (apiFollowers != null) patch.followers = apiFollowers }
     ctx.db.update('social_accounts', ch.id, patch)
     const daily = { channel_id: ch.id, date: day, followers: patch.followers ?? ch.followers ?? 0, ...totals, updated_at: t }
     const todayRow = ctx.db.query('social_daily', { where: { channel_id: ch.id, date: day }, limit: 1 }).list[0]
     if (todayRow) ctx.db.update('social_daily', todayRow.id, daily)
     else ctx.db.insert('social_daily', daily)
-    out.push({ channel: patch.name ?? ch.name, posts: posts.length, updated, added, followers: patch.followers })
+    out.push({ channel: patch.name ?? ch.name, posts: posts.length, updated, added, followers: patch.followers,
+      ...(insightsMissing ? { insights_missing: true, note: L(ctx, '口令没有「数据洞察」权限（instagram_business_manage_insights），只采了点赞和评论；播放、收藏、分享要在「管理连接」里重新生成口令并勾上这个权限。', 'The token lacks the insights permission (instagram_business_manage_insights), so only likes and comments were collected. Regenerate the token in Manage connection with that permission for views, saves and shares.') } : {}) })
   }
   return { channels: out }
 }

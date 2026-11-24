@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.13.0
+  zh: "支持 Threads：粘贴口令连接账号，用官方 API 发文字、链接、单图或视频帖子（可排期），每天采集帖子数据和粉丝数；Instagram API 发的帖子也能定时发布了。"
+  en: "Threads support: connect by pasting a token, publish text, link, single-image or video posts through the official API (scheduling included), and collect post stats and followers daily. Instagram API posts can be scheduled too."
+
 - version: 0.12.0
   zh: "Instagram 专业账号可以用官方 API 连接（粘贴访问口令），单张图片立即发布，发布中断后先核对结果、不会重复发帖。"
   en: "Instagram professional accounts can connect through the official API (paste an access token) and publish single images immediately; interrupted attempts are checked first so nothing is posted twice."

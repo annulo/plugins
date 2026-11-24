@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { pickImages, sourceOf, planPatch, linkInBody } from './_source'
-import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows } from './_snapshot'
+import { freeProfile, localDay, collectPages, profileFields, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { FB, postText, problems } from './_facebook_spec'
 import { Expired } from './_health'
 import { assist } from './_assist'
@@ -1115,8 +1115,8 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     const today = todayRows(ctx, ch.id, day)
     const totals = channelTotals(ctx, ch)
     const urlOf = (fp: FbPost) => fp.url || postUrl(ch, fp.id)
-    // 发布时没认出 id 的帖子：按正文对上
-    const unlinked: Post[] = ctx.db.query('social_posts', { where: { channel_id: ch.id, status: 'published' }, limit: 500 }).list.filter((x: any) => !x.post_id)
+    // Annulo 发出去、没记上 id 的（含显示失败、卡在发布中其实发出去了的）：按文字和时间对上（_snapshot.ts 的 matchUnlinked）
+    const unlinked: Post[] = unlinkedPosts(ctx, ch.id)
     let updated = 0
     let added = 0
     for (const fp of posts) {
@@ -1125,10 +1125,12 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
       const metrics = { ...values, ...(available.length ? { metrics_at: t } : {}), ...(apiMetrics ? { facebook_api_metrics: JSON.stringify({ ...apiMetrics, available }) } : { facebook_api_metrics: null }) }
       let hit: any = ctx.db.query('social_posts', { where: { channel_id: ch.id, post_id: fp.id }, limit: 1 }).list[0]
       if (!hit) {
-        const u = unlinked.find((x) => norm(postText(x.body, parse(x.tags, []))) === norm(fp.text))
+        const u: any = matchUnlinked(unlinked, fp.text, fp.created, (x: any) => postText(x.body, parse(x.tags, [])))
         if (u) {
-          ctx.db.update('social_posts', u.id, { post_id: fp.id, post_url: urlOf(fp) })
-          hit = { ...u, post_id: fp.id }
+          const patch = linkPatch(u, fp.id, urlOf(fp), fp.created)
+          ctx.db.update('social_posts', u.id, patch)
+          if (u.status !== 'published') totals.posts++
+          hit = { ...u, ...patch }; unlinked.splice(unlinked.indexOf(u), 1)
         }
       }
       if (!hit || hit.status === 'published') {
