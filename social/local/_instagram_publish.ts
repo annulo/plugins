@@ -1,4 +1,5 @@
-import { isManagedInstagram, managedPublishUnavailable } from './_instagram_managed'
+import { isManagedInstagram } from './_instagram_managed'
+import { publishManaged } from './_instagram_managed_publish'
 import { L } from './_i18n'
 import { postText } from './_instagram_spec'
 import { identity, authorizationError, checkApiLogin } from './_instagram_account'
@@ -12,7 +13,6 @@ const parse = (s: string, fallback: any) => { try { return JSON.parse(s) } catch
 const now = () => new Date().toISOString()
 
 export function apiProblems(p: any, ctx: any): string[] {
-  if (isManagedInstagram(ctx.db.get('social_accounts', p.channel_id))) return [managedPublishUnavailable(ctx).message]
   const out: string[] = []
   const images = parse(p.images, [])
   const tags = parse(p.tags, [])
@@ -66,7 +66,8 @@ function done(ctx: any, p: any, result: any, state: State, path: string) {
  * A process crash before submission leaves a stale claim: inspect it manually,
  * never auto-expire a claim while a process could still be publishing. */
 export async function publishApi(input: { post_id: string; check_only?: boolean; prepare_only?: boolean }, ctx: any, ch: any) {
-  if (isManagedInstagram(ch)) throw managedPublishUnavailable(ctx)
+  // 统一登录的托管连接：凭据在 creght，经契约 v2 发（_instagram_managed_publish.ts）
+  if (isManagedInstagram(ch)) return publishManaged(input, ctx, ch)
   const p = ctx.db.get('social_posts', input.post_id)
   const path = paths(ctx, p.id)
   let state = load(ctx, path.receipt, ch.id)

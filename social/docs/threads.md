@@ -8,13 +8,22 @@
 - 方向是能走 API 的平台都走 API（Annulo 仓库 `docs/social-api-oauth.md`）；浏览器自动化维护成本高（`publish-breakage.md`）。所以 Threads 没有浏览器通道，`login({ mode: 'browser' })` 直接报错。
 - 接口地址 `https://graph.threads.com/v1.0`（以前是 graph.threads.net，2026 年文档已换成 .com）。
 
-## 口令：用户自带应用，页面写密钥
+## 官方授权与旧口令兼容
+
+2026-11-24 新增官方授权（Annulo API 67，真实联调和发版状态见 Annulo 的 `docs/meta-api-authorization-plan.md`）：
+
+- 默认入口为「用 Threads 授权」。浏览器经过 creght 中转完成授权，本机连接层凭 PKCE verifier 兑换一次性取件码，把长期口令保存到当前项目的连接目录。App Secret 留在中转，插件不接触它。
+- `threads.login({ mode: 'oauth', account?, media_host? })` 通过 `ctx.oauth('threads', { account: oauth_account })` 识别账号。账号行记 `api_credential = threads_oauth` 和 `oauth_account`，不存口令。
+- 发布和采集仍由插件直接调用 `graph.threads.com`。本机连接层负责续期：口令满 24 小时，且已用满 7 天或剩余不足 14 天时刷新；失败保留原口令并显示原因，6 小时内不重试。过期后重新授权。
+- 老账号改用官方授权必须用户名一致；Threads 用户 ID 按应用区分，不能只按 ID 判断迁移。历史帖子和未决回执保留，不自动切换发布账号。
+
+「用自己的 Meta 应用口令（高级）」保留原流程：
 
 - 用户在自己的 Meta 应用里加「访问 Threads API」用例，加自己为 Threads 测试员，用「用户口令生成工具」生成口令（TH 开头，约 60 天）。只发自己的账号不用过应用审核。步骤在模板文案 `threads_connect.step_*`。
 - 本机函数只能读密钥：页面把粘贴的口令写进临时密钥 `THREADS_USER_TOKEN_PENDING`，`threads.identifyToken` 调 `/me?fields=id,username` 问出账号，页面再写 `THREADS_USER_TOKEN_<id>`、清掉临时密钥，调 `social.login`。口令不进表、不进函数参数、不进日志（报错里 40 位以上的串会被替换掉）。
 - 能认出贴错的：EA 开头是 Facebook 口令、IG 开头是 Instagram 口令，直接提示。
 - 账号行：`type = threads`、`platform_uid` = Threads 用户 id、`handle` = 用户名、`auth_mode = api`、`api_credential = threads_user_token`、`threads_media_host`（本机图片传到哪）、`threads_auth_error`。同一个 Threads id 不重复添加；换口令时口令必须是原来那个账号的。
-- **口令续期还没做**：Threads 支持 `GET /refresh_access_token?grant_type=th_refresh_token`（不用 app secret，口令满 24 小时、没过期就能续 60 天），但续出来的是新口令，插件写不了密钥（`ctx.secrets` 只有 `get`）。现在过期了（错误码 190）账号标成过期，用户到「管理连接」重新粘贴。要自动续期，要么 Annulo 给本机函数加写密钥的能力，要么像 Instagram 的 tokenGuide 那样由页面拿到新口令再写——前者要找 zhangliang 商量。
+- 手填口令没有自动续期；过期（错误码 190）后到「管理连接」重新粘贴，或确认同一用户名后改用官方授权。插件不写本机连接密钥。
 
 ## 发帖规格（`_threads_spec.ts`）
 
@@ -45,7 +54,7 @@
 
 `publish({ check_only: true })` 只核对不发。正文、话题、图片改过的，按新内容重新建容器。
 
-排期：`social.publishScheduled` 到点照常调 `publish`，API 后台就能发，所以 Threads 能排期（Instagram API 那边是还没放开）。
+排期：`social.publishScheduled` 到点调 `publish`，需要 Annulo 在运行。Threads 和 Instagram API 都支持排期。
 
 ## 采集（要 `threads_manage_insights`）
 
@@ -58,5 +67,5 @@
 ## 还没接的
 
 - 删帖（`DELETE /{media}`，要 `threads_delete` 权限），现在直接说明没接；
-- 轮播、口令自动续期（见上）；
-- 托管授权（不用用户自己建应用）：要 Annulo 注册 `threads` 托管连接、weave 补服务端，等 Instagram 的托管连接正式上线后照抄，改 Annulo 前先找 zhangliang。
+- 轮播、手填口令自动续期；
+- 服务端长期托管凭据与代理发布不在本阶段范围，官方授权的长期口令由本机可信连接层保存。

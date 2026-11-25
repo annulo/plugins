@@ -1,6 +1,6 @@
 import { isManagedInstagram, connectManaged, checkManagedLogin } from './_instagram_managed'
 import { isInstagramApi, connectApi, checkApiLogin, authorizationError } from './_instagram_account'
-import { readApi, shortcode } from './_instagram_collect'
+import { readApi, readManaged, shortcode } from './_instagram_collect'
 import { apiProblems, publishApi } from './_instagram_publish'
 import { tokenGuide as guide, identifyToken as identify } from './_instagram_token_guide'
 import { L } from './_i18n'
@@ -785,7 +785,6 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
   const out: any[] = []
   for (const ch of chs) {
     const api = isInstagramApi(ch)
-    if (api && isManagedInstagram(ch)) { out.push({ channel: ch.name, skipped: L(ctx, '这种连接暂不支持采集', 'Collection is not available for this connection yet') }); continue }
     if (!api && (!ch.browser_profile || !ch.handle || ch.login_status === 'expired')) {
       out.push({ channel: ch.name, skipped: L(ctx, '没登录', 'Not logged in') })
       continue
@@ -796,7 +795,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     let posts: { code: string; url?: string; text: string; image?: string; created?: string; views?: number; likes?: number; comments?: number; collects?: number; shares?: number }[]
     if (api) {
       let r: Awaited<ReturnType<typeof readApi>>
-      try { r = await readApi(ctx, ch, collectPages(input, 2)) } catch (e) { authorizationError(ctx, ch, e); throw e }
+      try { r = await (isManagedInstagram(ch) ? readManaged : readApi)(ctx, ch, collectPages(input, 2)) } catch (e) { authorizationError(ctx, ch, e); throw e }
       posts = r.posts.map((p) => ({ ...p, code: p.id }))
       insightsMissing = r.insights_missing; apiFollowers = r.followers
     } else {

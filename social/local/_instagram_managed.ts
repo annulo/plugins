@@ -1,7 +1,7 @@
 import { L } from './_i18n'
+import { mediaHostInput } from './_instagram_assets'
 
 export const isManagedInstagram = (ch: any) => ch?.type === 'instagram' && ch.auth_mode === 'api' && ch.api_credential === 'instagram_managed'
-export const managedPublishUnavailable = (ctx: any) => new Error(L(ctx, '此 Instagram 连接已支持授权和检测，发布服务尚未开放。', 'This Instagram connection supports authorization and checks; publishing is not available yet.'))
 
 function runtime(ctx: any) {
   if (!ctx.connections?.list || !ctx.connections?.request) throw new Error(L(ctx, '请先更新 Annulo，再连接 Instagram。', 'Update Annulo before connecting Instagram.'))
@@ -24,7 +24,7 @@ async function checked(ctx: any, connectionId: string, assetId: string) {
 }
 
 /** Names and IDs come from checked service metadata, never editable form fields. */
-export async function connectManaged(input: { channel_id?: string; connection_id?: string; asset_id?: string }, ctx: any) {
+export async function connectManaged(input: { channel_id?: string; connection_id?: string; asset_id?: string; media_host?: string }, ctx: any) {
   if (!input.connection_id || !input.asset_id) throw new Error(L(ctx, '请选择已授权的 Instagram 账号。', 'Select an authorized Instagram account.'))
   const old = input.channel_id ? ctx.db.get('social_accounts', input.channel_id) : null
   if (input.channel_id && (!isManagedInstagram(old) || old.instagram_user_id !== input.asset_id)) throw new Error(L(ctx, '请管理此账号原来的连接，已有账号不会自动切换授权来源。', 'Manage this account’s original connection; existing accounts do not switch credential sources automatically.'))
@@ -36,7 +36,7 @@ export async function connectManaged(input: { channel_id?: string; connection_id
   const fields = { type: 'instagram', name: target?.name || '@' + asset.name, handle: asset.name,
     platform_uid: asset.id, instagram_user_id: asset.id, auth_mode: 'api', api_credential: 'instagram_managed',
     instagram_login_method: 'unified_login', instagram_connection_id: connection.id, instagram_grant_id: connection.grant_id,
-    login_status: 'ok', instagram_auth_error: null, last_checked_at: new Date().toISOString() }
+    instagram_media_host: mediaHostInput(input.media_host, target), login_status: 'ok', instagram_auth_error: null, last_checked_at: new Date().toISOString() }
   if (target) { ctx.db.update('social_accounts', target.id, fields); return { id: target.id, added: false } }
   return { id: ctx.db.insert('social_accounts', { ...fields, created_at: new Date().toISOString() }).id, added: true }
 }

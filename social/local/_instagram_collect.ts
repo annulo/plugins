@@ -62,3 +62,25 @@ export async function readApi(ctx: any, ch: any, pages: number): Promise<{ posts
   }
   return { posts, followers: num(me.followers_count), insights_missing }
 }
+
+/**
+ * 托管连接（统一登录）读自己的帖子：经契约 v2 的 account.get、media.list（ctx.connections.request），插件拿不到口令。
+ * 首版只申请 instagram_basic，没有 insights：只有点赞、评论（列表自带），播放、收藏、分享不写（不当成 0）。
+ */
+export async function readManaged(ctx: any, ch: any, pages: number): Promise<{ posts: ApiPost[]; followers?: number; insights_missing: boolean }> {
+  const call = (operation: string, input: Record<string, unknown> = {}) => ctx.connections.request('instagram', { connection_id: ch.instagram_connection_id, asset_id: ch.instagram_user_id, operation, operation_id: `read_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`, input })
+  const me = await call('account.get')
+  if (String(me?.id ?? '') !== String(ch.instagram_user_id)) throw new InstagramError('The Instagram connection returned another account', 'permission')
+  const posts: ApiPost[] = []
+  let after = ''
+  for (let i = 0; i < pages; i++) {
+    const body = await call('media.list', { limit: 25, ...(after ? { after } : {}) })
+    for (const m of Array.isArray(body?.data) ? body.data : []) {
+      if (typeof m?.id !== 'string' || !/^\d+$/.test(m.id)) continue
+      posts.push({ id: m.id, url: typeof m.permalink === 'string' ? m.permalink : '', text: String(m.caption ?? ''), image: '', created: isoTime(m.timestamp), likes: num(m.like_count), comments: num(m.comments_count) })
+    }
+    after = typeof body?.next_cursor === 'string' ? body.next_cursor : ''
+    if (!after) break
+  }
+  return { posts, followers: num(me.followers_count), insights_missing: false }
+}

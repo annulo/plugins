@@ -51,3 +51,13 @@ export async function publicImage(ctx: any, ch: any, source: string, opts: { hos
   catch { throw new Error(L(ctx, '图片上传失败，请检查所选素材库和 Creght CLI 登录。', 'Image upload failed; check the selected image host and Creght CLI login.')) }
   return imageInput(ctx, result?.file_url, 'uploaded image').image_url
 }
+
+/** 本机图片、视频上传到哪个网站的素材库（{ api_host, project_id, site_id }）；没传就沿用账号原来的 */
+export function mediaHostInput(value: string | undefined, old: any): string {
+  const raw = value === undefined ? old?.instagram_media_host || '' : value
+  if (!raw) return ''
+  let h: any
+  try { h = JSON.parse(raw) } catch {}
+  if (!h || !/^https:\/\/(creght\.cn|creght\.com|talizen\.com)$/.test(h.api_host) || !/^[a-z0-9]+$/.test(h.project_id) || !/^[a-z0-9]+$/.test(h.site_id)) throw new Error('Invalid Instagram image hosting configuration')
+  return JSON.stringify({ api_host: h.api_host, project_id: h.project_id, site_id: h.site_id })
+}

@@ -1,7 +1,7 @@
 import { L } from './_i18n'
 import { linkInBody, pickImages, planPatch, sourceOf } from './_source'
 import { TH, postText, problems, threadsLen, topicOf } from './_threads_spec'
-import { ThreadsError, accountInput, containerStatus, createContainer, followersCount, identify, listPosts, mediaInfo, mediaInsights, publishContainer, recent, tokenFor, verify, type Account } from './_threads_api'
+import { ThreadsError, accountInput, containerStatus, createContainer, followersCount, identify, listPosts, mediaInfo, mediaInsights, publishContainer, recent, tokenFor, tokenOf, verify, whoIs, type Account } from './_threads_api'
 import { collectPages, localDay, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { localImage, localTool, publicImage } from './_instagram_assets'
 import { localFile, parseHost, uploadAsset } from './_creght_asset'
@@ -15,6 +15,7 @@ export { problems as draftProblems } from './_threads_spec'
 //   threads.check({ post_id })                     按平台规格检查
 //   threads.identifyToken({ secret })              页面把粘贴的口令先写进临时密钥，这里问出是哪个账号
 //   threads.login({ channel_id?, account_id, username, media_host? })  口令已存进 THREADS_USER_TOKEN_<account_id> 后，核对并写进 social_accounts
+//   threads.login({ channel_id?, mode: 'oauth', account?, media_host? })  用 Annulo 设置 → 连接 里的 Threads 官方授权（ctx.oauth('threads')）连接
 //   threads.checkLogin({ channel_id })             检测口令还能不能用
 //   threads.publish({ post_id, check_only? })      发布：纯文字、文字 + 链接（第一个链接平台自动出预览卡）、单张图片、视频（有视频就发视频，不带图）
 //   threads.collect({ channel_id?, pages? })       采集：读自己最近的帖子和每条的数字、粉丝数（要 threads_manage_insights 权限）
@@ -23,7 +24,8 @@ export { problems as draftProblems } from './_threads_spec'
 // 发布分两步（建容器 → threads_publish），回执存在工作目录 threads-api-posts/<post_id>.json 和 social_posts.threads_api_state：
 // 同一个容器只能发一次，发布结果丢了（网络断、Annulo 退出）时：容器已经 PUBLISHED 就按正文、类型、时间在最近的帖子里找回唯一的那一条（找不到或不止一条不猜）；
 // 还是 FINISHED 说明没发出去，拿同一个容器再发；IN_PROGRESS 是平台还在发，只等结果、不换容器重发。
-// 口令 60 天过期，插件写不了密钥，过期了到账号的「管理连接」重新粘贴（登录状态会标成过期）。
+// 粘贴的口令 60 天过期，插件写不了密钥，过期了到账号的「管理连接」重新粘贴（登录状态会标成过期）；
+// 官方授权的口令由 Annulo 保存、到期前自动续期（api_credential = threads_oauth）。
 
 type Post = { id: string; channel_id: string; article_id: string; title: string; body: string; tags: string; images: string; video?: string; status: string; post_id?: string; post_url?: string; threads_api_state?: string }
 type State = { version: 1; channel_id: string; container_id: string; text: string; topic: string; image: string; video?: string; stage: 'prepared' | 'submitted' | 'published'; submitted_at?: string; media_id?: string; permalink?: string }
@@ -139,8 +141,9 @@ function mediaHost(ctx: any, value: string | undefined, old: any) {
  * 连接账号 / 更新口令。口令由页面预先写进 THREADS_USER_TOKEN_<account_id>（函数只能读密钥），这里核对口令对应的就是这个账号再写表。
  * 同一个 Threads 账号不重复添加；已有账号换口令时账号 id 必须一样。
  */
-export async function login(input: { channel_id?: string; mode?: string; account_id?: string; username?: string; media_host?: string }, ctx: any) {
+export async function login(input: { channel_id?: string; mode?: string; account?: string; account_id?: string; username?: string; media_host?: string }, ctx: any) {
   const old = input?.channel_id ? channel(ctx, input.channel_id) : null
+  if (input?.mode === 'oauth') return loginOAuth(ctx, old, input)
   if (input?.mode === 'browser') throw new Error(L(ctx, 'Threads 只能用官方 API 连接：粘贴 Threads 口令', 'Threads connects through the official API only: paste a Threads token'))
   if (!input?.account_id && !old) throw new Error(L(ctx, '先粘贴 Threads 口令：页面会认出是哪个账号再连接', 'Paste a Threads token first; the page identifies the account and connects it'))
   const account = accountInput({ account_id: input.account_id || old?.platform_uid, username: input.username || old?.handle })
@@ -151,7 +154,32 @@ export async function login(input: { channel_id?: string; mode?: string; account
   const dup = ctx.db.query('social_accounts', { where: { type: 'threads', platform_uid: account.account_id }, limit: 2 }).list.find((c: any) => c.id !== old?.id)
   if (dup) throw new Error(L(ctx, `@${account.username} 已经添加过了，请在原来那个账号上管理连接`, `@${account.username} is already added; manage its connection there`))
   const fields = { type: 'threads', name: old?.name || '@' + account.username, handle: account.username, platform_uid: account.account_id,
-    auth_mode: 'api', api_credential: 'threads_user_token', threads_media_host: host, threads_auth_error: null, login_status: 'ok', last_checked_at: now() }
+    auth_mode: 'api', api_credential: 'threads_user_token', oauth_account: null, threads_media_host: host, threads_auth_error: null, login_status: 'ok', last_checked_at: now() }
+  if (old) { ctx.db.update('social_accounts', old.id, fields); return { id: old.id, name: fields.name, added: false } }
+  const row = ctx.db.insert('social_accounts', { ...fields, created_at: now() })
+  return { id: row.id, name: fields.name, added: true }
+}
+
+/**
+ * 用官方授权连接：Annulo 设置 → 连接 里授权过的 Threads 账号（ctx.oauth.accounts('threads')）。没指定 account 时用还没加进来的那个。
+ * 已有账号改用官方授权：Threads 的用户 id 按应用区分，用户自己建的应用和 Annulo 应用给的 id 可能不一样，
+ * 所以只认用户名一样的（用户在这个账号上点的「改用官方授权」就是确认），platform_uid 换成新的，历史帖子不动。
+ */
+async function loginOAuth(ctx: any, old: any, input: { account?: string; media_host?: string }) {
+  const accounts: string[] = typeof ctx.oauth?.accounts === 'function' ? ctx.oauth.accounts('threads') ?? [] : []
+  if (!accounts.length) throw new Error(L(ctx, '还没有 Threads 官方授权：先点「用 Threads 授权」，在打开的页面里同意。', 'No Threads authorization yet: click Authorize with Threads and approve it on the page that opens.'))
+  const taken = (id: string) => ctx.db.query('social_accounts', { where: { type: 'threads', platform_uid: id }, limit: 2 }).list.some((c: any) => c.id !== old?.id)
+  const pick = input?.account ? accounts.find((a) => a === input.account) : old ? (accounts.find((a) => a === old.oauth_account || a === old.platform_uid) ?? accounts.find((a) => !taken(a))) : accounts.find((a) => !taken(a))
+  if (!pick) throw new Error(input?.account ? L(ctx, '指定的 Threads 授权账号没有连接', 'The selected Threads account is not authorized') : L(ctx, '授权过的 Threads 账号都已经添加了。要加别的账号，先用那个账号再授权一次。', 'Every authorized Threads account is already added. To add another, authorize again with that account.'))
+  const ch = { platform_uid: pick, api_credential: 'threads_oauth', oauth_account: pick }
+  let who: Account
+  try { who = await whoIs(ctx, await tokenOf(ctx, ch)) }
+  catch (e) { authError(ctx, old, e); throw e }
+  if (who.account_id !== pick) throw new Error(L(ctx, 'Threads 授权对应的账号对不上，请重新授权。', 'The Threads authorization does not match its account; authorize again.'))
+  if (old && old.platform_uid !== who.account_id && old.handle !== who.username) throw new Error(L(ctx, `授权的是 @${who.username}，不是这个账号（@${old.handle}）。请用原来的 Threads 账号授权。`, `You authorized @${who.username}, not this account (@${old.handle}). Authorize with the original Threads account.`))
+  if (taken(who.account_id)) throw new Error(L(ctx, `@${who.username} 已经添加过了，请在原来那个账号上管理连接`, `@${who.username} is already added; manage its connection there`))
+  const fields = { type: 'threads', name: old?.name || '@' + who.username, handle: who.username, platform_uid: who.account_id, oauth_account: who.account_id,
+    auth_mode: 'api', api_credential: 'threads_oauth', threads_media_host: mediaHost(ctx, input.media_host, old), threads_auth_error: null, login_status: 'ok', last_checked_at: now() }
   if (old) { ctx.db.update('social_accounts', old.id, fields); return { id: old.id, name: fields.name, added: false } }
   const row = ctx.db.insert('social_accounts', { ...fields, created_at: now() })
   return { id: row.id, name: fields.name, added: true }
@@ -162,7 +190,7 @@ export async function checkLogin(input: { channel_id: string }, ctx: any) {
   const ch = channel(ctx, input?.channel_id)
   try {
     const account = identity(ch)
-    await verify(ctx, account, tokenFor(ctx, account.account_id))
+    await verify(ctx, account, await tokenOf(ctx, ch))
     ctx.db.update('social_accounts', ch.id, { login_status: 'ok', threads_auth_error: null, last_checked_at: now() })
     return { ok: true, username: account.username }
   } catch (e) { authError(ctx, ch, e); throw e }
@@ -241,7 +269,7 @@ export async function publish(input: { post_id: string; check_only?: boolean }, 
   if (input.check_only) {
     const state = load(ctx, path.receipt, ch.id)
     if (!state) throw new Error(L(ctx, '这条还没有发布记录', 'There is no publishing record for this post yet'))
-    const r = await reconcile(ctx, p, state, path.receipt, account, tokenFor(ctx, account.account_id), false)
+    const r = await reconcile(ctx, p, state, path.receipt, account, await tokenOf(ctx, ch), false)
     if (!r) throw new Error(L(ctx, '这条没有发出去，可以重新发布。', 'This post did not go out; you can publish it again.'))
     return r
   }
@@ -253,7 +281,7 @@ export async function publish(input: { post_id: string; check_only?: boolean }, 
 
   if ((await localTool(ctx, 'claim', path.lock)) !== 'created') throw new Error(L(ctx, '这条正在发布，等它结束再看结果', 'This post is being published; wait for it to finish'))
   try {
-    const token = tokenFor(ctx, account.account_id)
+    const token = await tokenOf(ctx, ch)
     await verify(ctx, account, token)
     ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
     const text = postText(p.body), topic = topicOf(tags)
@@ -357,7 +385,7 @@ export async function collect(input: { channel_id?: string; pages?: number }, ct
     let followers: number | undefined
     const insights = new Map<string, Record<string, number>>()
     try {
-      token = tokenFor(ctx, account.account_id)
+      token = await tokenOf(ctx, ch)
       posts = (await listPosts(ctx, account, token, Math.min(collectPages(input, 10), 10))).filter((t) => t.media_type !== 'REPOST_FACADE')
       try {
         followers = await followersCount(ctx, account, token)

@@ -43,6 +43,19 @@ export function tokenFor(ctx: any, accountId: string): string {
   return cleanToken(ctx, value)
 }
 
+/**
+ * 账号用的口令：官方授权的（api_credential = threads_oauth）由 Annulo 保存、到期前自动续期，用 ctx.oauth 取；
+ * 粘贴口令的（threads_user_token）读本机密钥。
+ */
+export async function tokenOf(ctx: any, ch: { platform_uid?: string; api_credential?: string; oauth_account?: string }): Promise<string> {
+  if (ch?.api_credential !== 'threads_oauth') return tokenFor(ctx, numericId(ch?.platform_uid))
+  if (typeof ctx.oauth !== 'function') throw new ThreadsError(L(ctx, '这个 Annulo 版本没有 Threads 官方授权，请先更新 Annulo。', 'This Annulo version has no Threads authorization; update Annulo first.'), 'expired')
+  let token: unknown
+  try { token = await ctx.oauth('threads', { account: numericId(ch.oauth_account || ch.platform_uid) }) }
+  catch { throw new ThreadsError(L(ctx, 'Threads 授权已断开或过期：到账号的「管理连接」重新授权。', 'Threads authorization is disconnected or expired; authorize again in Manage connection.'), 'expired') }
+  return cleanToken(ctx, token)
+}
+
 export async function request(ctx: any, path: string, token: string, params: Record<string, string> = {}, method = 'GET'): Promise<any> {
   const encoded = Object.entries(params).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
   let response: Response

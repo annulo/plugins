@@ -338,3 +338,54 @@ test('collect without threads_manage_insights says which permission to add', asy
   assert.equal(ctx.rows.get('social_accounts').get('acc1').login_status, 'ok') // 权限不够不算登录过期
   assert.equal([...ctx.rows.get('social_health').values()][0]?.kind, 'permission')
 })
+
+function withOAuth(ctx, accounts = [uid]) {
+  const asked = []
+  ctx.oauth = async (key, opts) => { asked.push([key, opts?.account]); if (key !== 'threads' || !accounts.includes(opts?.account)) throw new Error('not connected'); return token }
+  ctx.oauth.accounts = (key) => (key === 'threads' ? accounts : [])
+  ctx.secrets.get = () => '' // 官方授权不读本机密钥
+  return asked
+}
+
+test('official authorization: connect via ctx.oauth, publish and collect without a pasted token', async () => {
+  const ctx = context()
+  ctx.rows.get('social_accounts').clear()
+  const asked = withOAuth(ctx)
+  graph()
+  const r = await social.login({ type: 'threads', mode: 'oauth' }, ctx)
+  assert.ok(r.added)
+  const row = ctx.rows.get('social_accounts').get(r.id)
+  assert.equal(row.api_credential, 'threads_oauth'); assert.equal(row.oauth_account, uid); assert.equal(row.handle, 'merry.liao')
+  assert.equal(JSON.stringify(row).includes(token), false)
+  await assert.rejects(social.login({ type: 'threads', mode: 'oauth' }, ctx), /already added/)
+  ctx.rows.get('social_posts').get('post1').channel_id = r.id
+  const p = await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(p.post_url, permalink)
+  assert.ok(asked.every(([k, a]) => k === 'threads' && a === uid))
+  assert.ok((await th.checkLogin({ channel_id: r.id }, ctx)).ok)
+})
+
+test('official authorization lost: account marked expired, says to authorize again', async () => {
+  const ctx = context({ status: 'approved' })
+  Object.assign(ctx.rows.get('social_accounts').get('acc1'), { api_credential: 'threads_oauth', oauth_account: uid })
+  withOAuth(ctx, [])
+  graph()
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /authorize again in Manage connection/)
+  assert.equal(ctx.rows.get('social_accounts').get('acc1').login_status, 'expired')
+})
+
+test('pasted-token account switches to official authorization only for the same username', async () => {
+  const ctx = context()
+  const newId = '25899999999999999' // Annulo 应用给的 id 和用户自建应用的不一样
+  withOAuth(ctx, [newId])
+  graph((c) => (c.path === '/me' ? new Response(JSON.stringify({ id: newId, username: 'merry.liao' })) : undefined))
+  await social.login({ type: 'threads', channel_id: 'acc1', mode: 'oauth' }, ctx)
+  const row = ctx.rows.get('social_accounts').get('acc1')
+  assert.equal(row.platform_uid, newId); assert.equal(row.api_credential, 'threads_oauth')
+  // 别的用户名：不换
+  const other = context()
+  withOAuth(other, [newId])
+  graph((c) => (c.path === '/me' ? new Response(JSON.stringify({ id: newId, username: 'someone.else' })) : undefined))
+  await assert.rejects(social.login({ type: 'threads', channel_id: 'acc1', mode: 'oauth' }, other), /not this account/)
+  assert.equal(other.rows.get('social_accounts').get('acc1').api_credential, undefined)
+})

@@ -147,13 +147,15 @@ B 站一个账号发两种东西（2026-10 起）：视频是**投稿**，图文
 
 ### Threads（官方 API）
 
-Threads 只走官方 API（`graph.threads.com`），不开浏览器；设计和做法见 [docs/threads.md](docs/threads.md)。口令是用户自己 Meta 应用里 Threads 用例生成的用户口令（TH 开头），页面写进本机密钥 `THREADS_USER_TOKEN_<Threads 用户 id>`，不进表、不进函数参数：
+Threads 发布与采集只走官方 API（`graph.threads.com`）；设计和做法见 [docs/threads.md](docs/threads.md)。Annulo API 67 起支持浏览器 OAuth，`social/threads.login({ mode: 'oauth', account?, media_host? })` 绑定本机连接，账号记 `api_credential=threads_oauth`；插件用 `ctx.oauth('threads', { account })` 取口令，本机连接层负责保存和续期。老账号迁移须确认用户名一致。
+
+高级入口仍可粘贴用户自己 Meta 应用生成的口令（TH 开头），页面写进本机密钥 `THREADS_USER_TOKEN_<Threads 用户 id>`，不进表、不进函数参数：
 页面先写临时密钥 `THREADS_USER_TOKEN_PENDING`，`social/threads.identifyToken({ secret })` 问出 `{ account_id, username }`，页面再写正式密钥，调 `social.login({ type: 'threads', mode: 'api', account_id, username, media_host? })`（`media_host` 同 Instagram，本机 JPEG 传到哪个 Creght 素材库）。`social/threads.checkLogin` 检测口令。
 
-发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文、类型和提交时间找回唯一的那一条（找不到或不止一条不猜，让人去主页看），IN_PROGRESS 只等结果不重发，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、口令自动续期还没接。
+发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文、类型和提交时间找回唯一的那一条（找不到或不止一条不猜，让人去主页看），IN_PROGRESS 只等结果不重发，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、手填口令自动续期还没接。
 
 ### Instagram 官方授权内测（API 66）
 
 新连接通过浏览器完成 Unified Login，账号行保存 `api_credential=instagram_managed`、`instagram_connection_id` 和不可变 `instagram_grant_id`；Meta 凭据只在授权服务持有。`social.login` 的 `mode=managed` 只接受核心连接列表中的连接/资产 ID，并实时检测再绑定。旧手动口令来源与浏览器账号保留原记录；不同来源不自动合并。
 
-当前 v1 只支持授权、绑定、检测和项目级断开，新来源的发布、素材与采集尚未开放，禁止降级到旧口令或浏览器。网络故障不标记账号过期；明确撤权/连接消失才标记需要重连。
+契约 v2（Annulo 能力版本 67 起）：单图和 Reel 发布（`_instagram_managed_publish.ts`：`media.prepare` → `media.status` → `media.publish`，回执记 operation_id，结果没确认时同一个 operation_id 再调只核对不重发，重新授权后的旧发布只用旧连接 `operation.get` 查；`prepare_only` 只建容器不提交），采集用 `account.get` + `media.list`（只有点赞、评论，没有 insights，播放等不写）。本机图片、视频照旧先传到账号选的素材库拿公网地址。禁止降级到旧口令或浏览器。网络故障不标记账号过期；明确撤权/连接消失才标记需要重连。

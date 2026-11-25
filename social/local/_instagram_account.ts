@@ -1,4 +1,5 @@
 import { isManagedInstagram, checkManagedLogin } from './_instagram_managed'
+import { mediaHostInput } from './_instagram_assets'
 import { L } from './_i18n'
 import { accountInput, tokenFor, verify } from './_instagram_api'
 
@@ -32,12 +33,7 @@ export async function connectApi(input: { channel_id?: string; account_id?: stri
   // Browser IDs and Instagram Login IDs may differ: bind conversion by handle,
   // retain platform_uid for old browser posts, and save the API ID separately.
   if (old && old.handle?.toLowerCase().replace(/^@/, '') !== account.username) throw new Error(L(ctx, '请连接此账号原来的 Instagram 用户名。', 'Connect the original Instagram username for this account.'))
-  let host = input.media_host === undefined ? old?.instagram_media_host || '' : input.media_host
-  if (host) {
-    const h = JSON.parse(host)
-    if (!/^https:\/\/(creght\.cn|creght\.com|talizen\.com)$/.test(h.api_host) || !/^[a-z0-9]+$/.test(h.project_id) || !/^[a-z0-9]+$/.test(h.site_id)) throw new Error('Invalid Instagram image hosting configuration')
-    host = JSON.stringify({ api_host: h.api_host, project_id: h.project_id, site_id: h.site_id })
-  }
+  const host = mediaHostInput(input.media_host, old)
   try { await verify(ctx, account, tokenFor(ctx, account.account_id)) }
   catch (e) { authorizationError(ctx, old, e); throw e }
   const matches = ctx.db.query('social_accounts', { where: { type: 'instagram' }, limit: 1000 }).list.filter((c: any) => !isManagedInstagram(c) && (c.instagram_user_id === account.account_id || c.handle?.toLowerCase().replace(/^@/, '') === account.username))
