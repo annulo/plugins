@@ -57,7 +57,7 @@ export function fromContent(c: any, platform: string) {
   const title = String(c?.title ?? '').trim()
   // 平台上没有标题（X、LinkedIn…）：title 只是后台列表里认这条用的，截短
   const shownTitle = f?.title === 'note' ? [...title].slice(0, f.titleMax).join('') : title
-  const base = { kind: t, title: shownTitle, body: String(c?.body ?? '').trim(), tags: JSON.stringify(tags), cover_text: '', video: '', video_cover: '', images: '[]', category: '' }
+  const base = { kind: t, title: shownTitle, body: String(c?.body ?? '').trim(), tags: JSON.stringify(tags), cover_text: '', video: '', video_cover: '', images: '[]', media: '', category: '' }
   if (t === 'article') return { ...base, images: JSON.stringify(htmlImages(base.body)), video_cover: f?.articleCover ? String(c?.video_cover ?? '').trim() : '' }
   if (t === 'post') return { ...base, images: JSON.stringify(parseList(c?.images).slice(0, f?.images ?? 0)), cover_text: f?.cover ? String(c?.cover_text ?? '') : '' }
   return { ...base, video: String(c?.video ?? ''), video_cover: f?.videoCover ? String(c?.video_cover ?? '').trim() : '', category: f?.category ? String(c?.category ?? '') : '', ...(f?.media ? { media: mixedMedia(c?.media) } : {}) }

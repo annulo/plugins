@@ -76,8 +76,8 @@ export const FIELDS: Record<string, PostFields> = {
       article: { titleMax: OPUS.titleMax, body: 'rich', bodyMax: OPUS.bodyMax, len: (b) => opusLen(b), tags: OPUS.topicsMax, images: 0, video: undefined, videoCover: false, coverRatio: undefined, category: false, rate: { minutes: OPUS.minIntervalMinutes, daily: OPUS.dailyMax } },
     },
   },
-  // Threads：只走官方 API；话题走 topic_tag 不接在正文后；文字、单图、视频（接口没有封面参数，所以没有 videoCover）
-  threads: { title: 'note', titleMax: 30, body: 'text', bodyMax: TH.textMax, len: (b) => threadsLen(String(b ?? '').trim()), tags: TH.tagsMax, images: TH.imagesMax, video: 'optional', videoCover: false, cover: false, category: false, rate: { minutes: 0, daily: TH.dailyMax } },
+  // Threads：只走官方 API；话题走 topic_tag 不接在正文后；文字、图片和视频轮播（接口没有封面参数，所以没有 videoCover）
+  threads: { title: 'note', titleMax: 30, body: 'text', bodyMax: TH.textMax, len: (b) => threadsLen(String(b ?? '').trim()), tags: TH.tagsMax, images: TH.imagesMax, media: TH.mediaMax, video: 'optional', videoCover: false, cover: false, category: false, rate: { minutes: 0, daily: TH.dailyMax } },
   zhihu: { title: 'publish', titleMax: ZHIHU.titleMax, body: 'rich', bodyMax: 50000, len: (b) => chars(htmlText(b).replace(/\s+/g, '')), tags: ZHIHU.tagsMax, images: 0, articleCover: true, handOver: true, cover: false, category: false, rate: { minutes: (ZHIHU as any).minIntervalMinutes ?? 0, daily: ZHIHU.dailyMax } },
 }
 

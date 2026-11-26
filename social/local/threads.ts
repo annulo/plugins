@@ -1,6 +1,6 @@
 import { L } from './_i18n'
 import { linkInBody, pickImages, planPatch, sourceOf } from './_source'
-import { TH, postText, problems, threadsLen, topicOf } from './_threads_spec'
+import { TH, mediaOf, postText, problems, threadsLen, topicOf, type MediaItem } from './_threads_spec'
 import { ThreadsError, accountInput, containerStatus, createContainer, followersCount, identify, listPosts, mediaInfo, mediaInsights, publishContainer, recent, tokenFor, tokenOf, verify, whoIs, type Account } from './_threads_api'
 import { collectPages, localDay, recordDay, todayRows, unlinkedPosts, matchUnlinked, linkPatch } from './_snapshot'
 import { localImage, localTool, publicImage } from './_instagram_assets'
@@ -17,7 +17,7 @@ export { problems as draftProblems } from './_threads_spec'
 //   threads.login({ channel_id?, account_id, username, media_host? })  口令已存进 THREADS_USER_TOKEN_<account_id> 后，核对并写进 social_accounts
 //   threads.login({ channel_id?, mode: 'oauth', account?, media_host? })  用 Annulo 设置 → 连接 里的 Threads 官方授权（ctx.oauth('threads')）连接
 //   threads.checkLogin({ channel_id })             检测口令还能不能用
-//   threads.publish({ post_id, check_only? })      发布：纯文字、文字 + 链接（第一个链接平台自动出预览卡）、单张图片、视频（有视频就发视频，不带图）
+//   threads.publish({ post_id, check_only? })      发布：纯文字、文字 + 链接、单图 / 视频、最多 20 个图片和视频的轮播
 //   threads.collect({ channel_id?, pages? })       采集：读自己最近的帖子和每条的数字、粉丝数（要 threads_manage_insights 权限）
 //   threads.remove                                 还没接（删帖到 Threads 上删）
 //
@@ -27,8 +27,8 @@ export { problems as draftProblems } from './_threads_spec'
 // 粘贴的口令 60 天过期，插件写不了密钥，过期了到账号的「管理连接」重新粘贴（登录状态会标成过期）；
 // 官方授权的口令由 Annulo 保存、到期前自动续期（api_credential = threads_oauth）。
 
-type Post = { id: string; channel_id: string; article_id: string; title: string; body: string; tags: string; images: string; video?: string; status: string; post_id?: string; post_url?: string; threads_api_state?: string }
-type State = { version: 1; channel_id: string; container_id: string; text: string; topic: string; image: string; video?: string; stage: 'prepared' | 'submitted' | 'published'; submitted_at?: string; media_id?: string; permalink?: string }
+type Post = { id: string; channel_id: string; article_id: string; title: string; body: string; tags: string; images: string; media?: string; video?: string; status: string; post_id?: string; post_url?: string; threads_api_state?: string }
+type State = { version: 1; channel_id: string; container_id: string; text: string; topic: string; image: string; video?: string; stage: 'prepared' | 'submitted' | 'published'; submitted_at?: string; media_id?: string; permalink?: string; media?: MediaItem[]; children?: (string | null)[] }
 
 const now = () => new Date().toISOString()
 const parse = (s: any, fallback: any) => { try { const v = JSON.parse(s); return v ?? fallback } catch { return fallback } }
@@ -56,7 +56,7 @@ function existing(ctx: any, articleId: string, channelId: string) {
  * 存一条写好的帖子（待审）。内容有链接时接在正文最后（带来源参数）；有链接的默认不配图：纯文字帖的第一个链接 Threads 会出预览卡，
  * 配了图链接就只是一行字。要配图用 post_images 指定。字数、话题、链接数的问题在 problems 里返回，让助手改了带 post_id 再存。
  */
-export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; channel_id: string; title?: string; body: string; tags?: string[]; post_id?: string; plan_item_id?: string }, ctx: any) {
+export function save(input: { article_id: string; article_title?: string; url?: string; images?: string[]; post_images?: string[]; media?: MediaItem[]; video?: string; channel_id: string; title?: string; body: string; tags?: string[]; post_id?: string; plan_item_id?: string }, ctx: any) {
   const a = sourceOf(input)
   if (!a) throw new Error(L(ctx, '要给出 article_id：这条出自哪篇内容', 'article_id is required: which content this post comes from'))
   const ch = channel(ctx, input?.channel_id)
@@ -66,6 +66,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   const picked = pickImages(input, TH.imagesMax)
   const post = {
     ...planPatch(input),
+    ...(input.media !== undefined ? { media: JSON.stringify(input.media), video: input.media.find(m => m.kind === 'video')?.url || '', images: JSON.stringify(input.media.filter(m => m.kind === 'image').map(m => m.url)) } : input.video !== undefined ? { video: input.video, media: '' } : {}),
     title: String(input.title ?? '').trim() || [...String(a.title ?? '')].slice(0, 20).join(''),
     body,
     tags: JSON.stringify((input.tags ?? []).map((t) => String(t).replace(/^#/, '').trim()).filter(Boolean)),
@@ -74,20 +75,20 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (id) {
     const old = ctx.db.get('social_posts', id)
     if (!old || old.channel_id !== ch.id || old.article_id !== a.id) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
-    ctx.db.update('social_posts', id, { ...post, ...(picked ? { images: JSON.stringify(picked) } : {}), updated_at: now() })
+    ctx.db.update('social_posts', id, { ...post, ...(picked && input.media === undefined ? { images: JSON.stringify(picked) } : {}), updated_at: now() })
   } else {
     const dup = existing(ctx, a.id, ch.id)
     if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇内容还没发出去的帖子了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished post for this content (post_id ${dup.id}); pass that post_id to rewrite it`))
     const images = picked ?? (a.url ? [] : a.images.slice(0, TH.imagesMax))
-    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(images), status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }).id
+    id = ctx.db.insert('social_posts', { ...post, channel_id: ch.id, article_id: a.id, images: JSON.stringify(images), ...(input.media !== undefined ? { images: JSON.stringify(input.media.filter(m => m.kind === 'image').map(m => m.url)) } : {}), status: 'pending_review', source: 'shuttle', created_at: now(), updated_at: now() }).id
   }
   const saved = ctx.db.get('social_posts', id)
-  return { post_id: id, channel: ch.name, problems: problems({ body: saved.body, tags: parse(saved.tags, []), images: parse(saved.images, []), video: saved.video }, ctx), length: threadsLen(saved.body), max: TH.textMax }
+  return { post_id: id, channel: ch.name, problems: postProblems(ctx, saved, ch), length: threadsLen(saved.body), max: TH.textMax }
 }
 
 function imageProblems(ctx: any, images: string[]): string[] {
   if (!images.length) return []
-  try { if (!localImage(images[0])) imageInput(ctx, images[0], 'validation'); return [] }
+  try { for (const image of images) if (!localImage(image)) imageInput(ctx, image, 'validation'); return [] }
   catch { return [L(ctx, '配图要是本机的 JPEG，或公开的 HTTPS JPEG 地址', 'The image must be a local JPEG or a public HTTPS JPEG URL')] }
 }
 
@@ -117,8 +118,19 @@ function videoProblems(ctx: any, ch: any, video: string): string[] {
 export function check(input: { post_id: string }, ctx: any) {
   const p: Post | null = ctx.db.get('social_posts', input?.post_id)
   if (!p) throw new Error(L(ctx, '没有这条帖子：', 'No such post: ') + input?.post_id)
-  const images = parse(p.images, [])
-  return { problems: [...problems({ body: p.body, tags: parse(p.tags, []), images, video: p.video }, ctx), ...(p.video ? videoProblems(ctx, ctx.db.get('social_accounts', p.channel_id), p.video) : imageProblems(ctx, images))], length: threadsLen(postText(p.body)), max: TH.textMax }
+  return { problems: postProblems(ctx, p, ctx.db.get('social_accounts', p.channel_id)), length: threadsLen(postText(p.body)), max: TH.textMax }
+}
+
+function postMedia(p: Post): MediaItem[] {
+  let raw: any = []
+  if (p.media) { try { raw = JSON.parse(p.media) } catch { throw new Error('Invalid Threads media list') } }
+  if (!Array.isArray(raw) || raw.some((m: any) => !m || !['image', 'video'].includes(m.kind) || typeof m.url !== 'string' || !m.url.trim())) throw new Error('Invalid Threads media list')
+  return mediaOf({ media: raw, video: p.video, images: parse(p.images, []) })
+}
+function postProblems(ctx: any, p: Post, ch: any): string[] {
+  const media = postMedia(p)
+  return [...problems({ body: p.body, tags: parse(p.tags, []), media }, ctx),
+    ...media.flatMap(m => m.kind === 'video' ? videoProblems(ctx, ch, m.url) : imageProblems(ctx, [m.url]))]
 }
 
 // ---- 账号 ----
@@ -208,7 +220,8 @@ function paths(ctx: any, id: string) {
 function load(ctx: any, path: string, channelId: string): State | null {
   if (!ctx.fs.stat(path)) return null
   const s = parse(ctx.fs.read(path), null)
-  if (s?.version !== 1 || s.channel_id !== channelId || !/^\d+$/.test(s.container_id) || !['prepared', 'submitted', 'published'].includes(s.stage) || typeof s.text !== 'string') throw new Error('Invalid Threads publication receipt; check the post on Threads before retrying')
+  if (s?.version !== 1 || s.channel_id !== channelId || (!/^\d+$/.test(s.container_id) && !(s.container_id === '' && s.stage === 'prepared' && Array.isArray(s.media) && s.media.length >= 2)) || !['prepared', 'submitted', 'published'].includes(s.stage) || typeof s.text !== 'string') throw new Error('Invalid Threads publication receipt; check the post on Threads before retrying')
+  if (s.media && (!Array.isArray(s.media) || s.media.length < 2 || s.media.length > TH.mediaMax || s.media.some((m: any) => !m || !['image', 'video'].includes(m.kind) || typeof m.url !== 'string') || !Array.isArray(s.children) || s.children.length !== s.media.length || s.children.some((id: any) => (id !== null && !/^\d+$/.test(id)) || (s.stage !== 'prepared' && id === null)))) throw new Error('Invalid Threads carousel receipt; check the post before retrying')
   return s
 }
 
@@ -230,7 +243,7 @@ function done(ctx: any, p: Post, state: State, path: string, media: { media_id: 
  * 发在提交之后（留 5 分钟时钟误差）、还没被别的记录认领；正好一条才认，没有或不止一条都不猜，留给用户到 Threads 上核对。
  */
 async function findPublished(ctx: any, p: Post, state: State, account: Account, token: string) {
-  const want = state.video ? ['VIDEO'] : state.image ? ['IMAGE'] : ['TEXT_POST', '']
+  const want = state.media && state.media.length > 1 ? ['CAROUSEL_ALBUM'] : state.video ? ['VIDEO'] : state.image ? ['IMAGE'] : ['TEXT_POST', '']
   const since = Date.parse(state.submitted_at || '') - 5 * 60_000
   const taken = (id: string) => ctx.db.query('social_posts', { where: { channel_id: p.channel_id, post_id: id }, limit: 2 }).list.some((x: any) => x.id !== p.id)
   const hits = (await recent(ctx, account, token)).filter((t) => same(t.text, state.text) && want.includes(t.media_type) && !(Date.parse(t.timestamp) < since) && !taken(t.id))
@@ -244,6 +257,7 @@ async function findPublished(ctx: any, p: Post, state: State, account: Account, 
  * IN_PROGRESS → 平台还在处理这次发布，不能当没发、不能换容器重发；ERROR / EXPIRED → 没发出去，返回 null 让调用方重新建容器。
  */
 async function reconcile(ctx: any, p: Post, state: State, path: string, account: Account, token: string, retry: boolean) {
+  if (!state.container_id) throw new Error(L(ctx, '轮播还在准备素材，没有发布；请稍后再点发布。', 'The carousel is still preparing media; nothing was published. Publish again later.'))
   if (state.media_id) return done(ctx, p, state, path, await mediaInfo(ctx, state.media_id, token))
   const st = await containerStatus(ctx, state.container_id, token)
   if (st.status === 'PUBLISHED') return done(ctx, p, state, path, await mediaInfo(ctx, (await findPublished(ctx, p, state, account, token)).id, token))
@@ -256,6 +270,18 @@ async function reconcile(ctx: any, p: Post, state: State, path: string, account:
   }
   if (st.status === 'FINISHED') throw new Error(L(ctx, '这条还没发出去（容器已就绪），点「发布」会用同一个容器发，不会重复。', 'Not published yet (the container is ready). Publish again; it reuses the same container, so nothing is posted twice.'))
   return null // ERROR / EXPIRED：没发出去，交回调用方重新建
+}
+
+/** 只轮询已经保存的容器；超时保留回执，下次接着处理，不重新发布。 */
+async function waitReady(ctx: any, id: string, token: string, video: boolean) {
+  let st = await containerStatus(ctx, id, token)
+  const [tries, gap] = video ? [30, 10_000] : [12, 5000]
+  for (let i = 0; i < tries && st.status === 'IN_PROGRESS'; i++) {
+    ctx.progress?.({ message: L(ctx, 'Threads 正在处理素材…', 'Threads is processing media…') })
+    await ctx.sleep(gap); st = await containerStatus(ctx, id, token)
+  }
+  if (st.status === 'IN_PROGRESS' && video) throw new Error(L(ctx, 'Threads 处理视频超过 5 分钟还没好，没有发布。稍后再点发布会继续处理，不会重复。', 'Threads is still processing the video after 5 minutes; nothing was published. Publish again later to resume.'))
+  if (st.status !== 'FINISHED') throw new Error(L(ctx, `Threads 还没准备好素材（${st.status}${st.error_message ? '：' + st.error_message : ''}），没有发布。`, `Threads has not finished preparing media (${st.status}${st.error_message ? ': ' + st.error_message : ''}); nothing was published.`))
 }
 
 /** 发布一条（要先审核通过，排期到点也走这里）。check_only 只核对上次的结果，不发 */
@@ -274,9 +300,9 @@ export async function publish(input: { post_id: string; check_only?: boolean }, 
     return r
   }
   if (!['approved', 'scheduled', 'failed'].includes(p.status)) throw new Error(L(ctx, '先审核通过再发布', 'Approve the post before publishing'))
-  const images: string[] = parse(p.images, [])
+  const items = postMedia(p)
   const tags: string[] = parse(p.tags, [])
-  const bad = [...problems({ body: p.body, tags, images, video: p.video }, ctx), ...(p.video ? videoProblems(ctx, ch, p.video) : imageProblems(ctx, images))]
+  const bad = postProblems(ctx, p, ch)
   if (bad.length) throw new Error(bad.join('；'))
 
   if ((await localTool(ctx, 'claim', path.lock)) !== 'created') throw new Error(L(ctx, '这条正在发布，等它结束再看结果', 'This post is being published; wait for it to finish'))
@@ -285,9 +311,8 @@ export async function publish(input: { post_id: string; check_only?: boolean }, 
     await verify(ctx, account, token)
     ctx.db.update('social_posts', p.id, { status: 'publishing', claimed_at: now(), error: null })
     const text = postText(p.body), topic = topicOf(tags)
-    // 有视频就发视频、不带图（和 X 一样）
-    const video = String(p.video ?? '').trim(), image = video ? '' : images[0] || ''
-    const sameContent = (s: State) => same(s.text, text) && s.topic === topic && s.image === image && (s.video || '') === video
+    const video = items.find(m => m.kind === 'video')?.url || '', image = items.find(m => m.kind === 'image')?.url || ''
+    const sameContent = (s: State) => same(s.text, text) && s.topic === topic && JSON.stringify(s.media || mediaOf({ video: s.video, images: s.image ? [s.image] : [] })) === JSON.stringify(items)
     let state = load(ctx, path.receipt, ch.id)
     if (state && state.stage !== 'prepared') {
       const r = await reconcile(ctx, p, state, path.receipt, account, token, sameContent(state))
@@ -296,22 +321,34 @@ export async function publish(input: { post_id: string; check_only?: boolean }, 
     }
     if (state && !sameContent(state)) state = null
     // 上次建好、还没发的容器：处理失败或过了 24 小时就重新建
-    if (state && ['ERROR', 'EXPIRED'].includes((await containerStatus(ctx, state.container_id, token)).status)) state = null
+    if (state?.container_id && ['ERROR', 'EXPIRED'].includes((await containerStatus(ctx, state.container_id, token)).status)) state = null
     if (!state) {
-      ctx.progress?.({ message: video ? L(ctx, '正在上传视频、准备 Threads 帖子…', 'Uploading the video and preparing the Threads post…') : image ? L(ctx, '正在上传图片、准备 Threads 帖子…', 'Uploading the image and preparing the Threads post…') : L(ctx, '正在准备 Threads 帖子…', 'Preparing the Threads post…') })
-      const media = video ? { video_url: await publicVideo(ctx, ch, video) } : image ? { image_url: await publicImage(ctx, ch, image, { host: ch.threads_media_host || '', platform: 'Threads' }) } : {}
-      state = { version: 1, channel_id: ch.id, container_id: await createContainer(ctx, account, token, { text, topic, ...media }), text, topic, image, video, stage: 'prepared' }
+      ctx.progress?.({ message: L(ctx, '正在准备 Threads 素材…', 'Preparing Threads media…') })
+      if (items.length > 1) {
+        state = { version: 1, channel_id: ch.id, container_id: '', text, topic, image, video, stage: 'prepared', media: items, children: items.map(() => null) }
+      } else {
+        const media = video ? { video_url: await publicVideo(ctx, ch, video) } : image ? { image_url: await publicImage(ctx, ch, image, { host: ch.threads_media_host || '', platform: 'Threads' }) } : {}
+        state = { version: 1, channel_id: ch.id, container_id: await createContainer(ctx, account, token, { text, topic, ...media }), text, topic, image, video, stage: 'prepared' }
+      }
       store(ctx, path.receipt, p.id, state)
     }
-    // 平台建议等容器处理好再发：文字很快，图片要抓取，最多等约 1 分钟；视频要转码，平台建议每分钟查一次、最多 5 分钟
-    let st = await containerStatus(ctx, state.container_id, token)
-    const [tries, gap] = video ? [30, 10_000] : [12, 5000]
-    for (let i = 0; i < tries && st.status === 'IN_PROGRESS'; i++) {
-      if (video) ctx.progress?.({ message: L(ctx, `Threads 正在处理视频…（${Math.round((i * gap) / 1000)} 秒）`, `Threads is processing the video… (${Math.round((i * gap) / 1000)}s)`) })
-      await ctx.sleep(gap); st = await containerStatus(ctx, state.container_id, token)
+    if (!state.container_id && state.media && state.children) {
+      for (let i = 0; i < state.media.length; i++) {
+        const item = state.media[i]
+        let id = state.children[i]
+        if (id && ['ERROR', 'EXPIRED'].includes((await containerStatus(ctx, id, token)).status)) id = null
+        if (!id) {
+          const asset = item.kind === 'video' ? { video_url: await publicVideo(ctx, ch, item.url) } : { image_url: await publicImage(ctx, ch, item.url, { host: ch.threads_media_host || '', platform: 'Threads' }) }
+          id = await createContainer(ctx, account, token, { text: '', ...asset, carousel_item: true })
+          state.children[i] = id
+          store(ctx, path.receipt, p.id, state)
+        }
+        await waitReady(ctx, id, token, item.kind === 'video')
+      }
+      state.container_id = await createContainer(ctx, account, token, { text, topic, children: state.children as string[] })
+      store(ctx, path.receipt, p.id, state)
     }
-    if (st.status === 'IN_PROGRESS' && video) throw new Error(L(ctx, 'Threads 处理视频超过 5 分钟还没好，没有发布。过一会儿再点「发布」，会接着用已经传好的视频，不会重复。', 'Threads is still processing the video after 5 minutes; nothing was published. Publish again later; it reuses the uploaded video, so nothing is posted twice.'))
-    if (st.status !== 'FINISHED') throw new Error(L(ctx, `Threads 还没准备好这条（${st.status}${st.error_message ? '：' + st.error_message : ''}），没有发布。`, `Threads has not finished preparing this post (${st.status}${st.error_message ? ': ' + st.error_message : ''}); nothing was published.`))
+    await waitReady(ctx, state.container_id, token, !!video)
     state.stage = 'submitted'; state.submitted_at = now()
     store(ctx, path.receipt, p.id, state)
     ctx.progress?.({ message: L(ctx, '正在发布到 Threads…', 'Publishing to Threads…') })

@@ -389,3 +389,126 @@ test('pasted-token account switches to official authorization only for the same 
   await assert.rejects(social.login({ type: 'threads', channel_id: 'acc1', mode: 'oauth' }, other), /not this account/)
   assert.equal(other.rows.get('social_accounts').get('acc1').api_credential, undefined)
 })
+
+const clips = [{ kind: 'video', url: 'https://cdn.example.org/one.mp4' }, { kind: 'video', url: 'https://cdn.example.org/two.mp4' }]
+function carouselGraph(hook = () => undefined) {
+  let n = 0
+  const children = new Set()
+  const calls = graph(async c => {
+    const custom = await hook(c); if (custom !== undefined) return custom
+    if (c.path === `/${uid}/threads` && c.method === 'POST' && c.body.get('is_carousel_item') === 'true') {
+      const id = String(17000000000000000n + BigInt(++n)); children.add(id)
+      return Response.json({ id })
+    }
+    if (children.has(c.path.slice(1))) return Response.json({ status: 'FINISHED' })
+  })
+  return calls
+}
+
+test('two videos: ordered children, one carousel parent, publish only the parent', async () => {
+  const ctx = context({ media: JSON.stringify(clips), video: clips[0].url })
+  assert.deepEqual(th.check({ post_id: 'post1' }, ctx).problems, [])
+  const calls = carouselGraph()
+  await th.publish({ post_id: 'post1' }, ctx)
+  const creates = calls.filter(c => c.method === 'POST' && c.path.endsWith('/threads'))
+  assert.deepEqual(creates.map(c => c.body.get('media_type')), ['VIDEO', 'VIDEO', 'CAROUSEL'])
+  assert.deepEqual(creates.slice(0, 2).map(c => c.body.get('video_url')), clips.map(m => m.url))
+  assert.ok(creates.slice(0, 2).every(c => c.body.get('is_carousel_item') === 'true' && !c.body.has('text') && !c.body.has('topic_tag')))
+  assert.equal(creates[2].body.get('children'), '17000000000000001,17000000000000002')
+  assert.equal(creates[2].body.get('text'), 'Hello Threads https://example.org/x')
+  assert.equal(creates[2].body.get('topic_tag'), 'webdesign')
+  assert.equal(calls.filter(c => c.path.endsWith('threads_publish')).length, 1)
+  assert.equal(calls.find(c => c.path.endsWith('threads_publish')).body.get('creation_id'), container)
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(calls.filter(c => c.path.endsWith('threads_publish')).length, 1)
+})
+
+test('mixed carousel preserves image/video order and checks every item', async () => {
+  const items = [clips[1], { kind: 'image', url: 'https://cdn.example.org/photo.jpg' }, clips[0]]
+  const ctx = context({ media: JSON.stringify(items) }), calls = carouselGraph()
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.deepEqual(calls.filter(c => c.body.get('is_carousel_item')).map(c => [c.body.get('media_type'), c.body.get('video_url') || c.body.get('image_url')]), items.map(m => [m.kind.toUpperCase(), m.url]))
+  const bad = context({ media: JSON.stringify([clips[0], { kind: 'video', url: 'local:broken.avi' }]) })
+  assert.match(th.check({ post_id: 'post1' }, bad).problems.join(), /MP4 or MOV/)
+})
+
+test('carousel limits: twenty accepted, twenty-one rejected before network writes', async () => {
+  assert.deepEqual(spec.problems({ body: 'x', media: Array(20).fill(clips[0]) }), [])
+  const ctx = context({ media: JSON.stringify(Array(21).fill(clips[0])) }), calls = carouselGraph()
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /max 20/)
+  assert.equal(calls.length, 0)
+  assert.equal(FIELDS.threads.media, 20)
+})
+
+test('processing child pauses carousel; retry reuses saved children', async () => {
+  const ctx = context({ media: JSON.stringify(clips) })
+  let processing = true
+  const calls = carouselGraph(c => c.path === '/17000000000000001' && processing ? Response.json({ status: 'IN_PROGRESS' }) : undefined)
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /still processing the video/)
+  assert.equal(calls.filter(c => c.method === 'POST').length, 1)
+  const state = JSON.parse(ctx.files.get('threads-api-posts/post1.json'))
+  assert.deepEqual(state.children, ['17000000000000001', null])
+  await assert.rejects(th.publish({ post_id: 'post1', check_only: true }, ctx), /nothing was published/)
+  processing = false
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(calls.filter(c => c.body.get('is_carousel_item')).length, 2)
+})
+
+test('failed second child stops publishing, then resumes without recreating first', async () => {
+  const ctx = context({ media: JSON.stringify(clips) })
+  let fail = true
+  const calls = carouselGraph(c => {
+    if (c.body.get('video_url') === clips[1].url && fail) { fail = false; throw new Error('test transport failure') }
+  })
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx))
+  assert.equal(calls.filter(c => c.path.endsWith('threads_publish')).length, 0)
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(calls.filter(c => c.body.get('video_url') === clips[0].url).length, 1)
+  assert.equal(calls.filter(c => c.body.get('media_type') === 'CAROUSEL').length, 1)
+})
+
+test('lost carousel publish response reconciles CAROUSEL_ALBUM without another publish', async () => {
+  const ctx = context({ media: JSON.stringify(clips) })
+  let lost = false
+  const calls = carouselGraph(c => {
+    if (c.path.endsWith('threads_publish')) { lost = true; throw new Error('lost publish response') }
+    if (lost && c.path === `/${container}`) return Response.json({ status: 'PUBLISHED' })
+    if (c.path === `/${uid}/threads` && c.method === 'GET') return Response.json({ data: [{ id: media, text: 'Hello Threads https://example.org/x', permalink, timestamp: new Date().toISOString(), media_type: 'CAROUSEL_ALBUM' }] })
+  })
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx))
+  const r = await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(r.post_id, media)
+  assert.equal(calls.filter(c => c.path.endsWith('threads_publish')).length, 1)
+  assert.equal(calls.filter(c => c.body.get('media_type') === 'CAROUSEL').length, 1)
+})
+
+
+test('image-only carousel uses all legacy images in order', async () => {
+  const images = ['https://cdn.example.org/one.jpg', 'https://cdn.example.org/two.jpg']
+  const ctx = context({ images: JSON.stringify(images) }), calls = carouselGraph()
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.deepEqual(calls.filter(c => c.body.get('is_carousel_item')).map(c => c.body.get('image_url')), images)
+})
+
+test('a child processing error never publishes; retry replaces only that child', async () => {
+  const ctx = context({ media: JSON.stringify(clips) })
+  let broken = true
+  const calls = carouselGraph(c => c.path === '/17000000000000002' && broken ? Response.json({ status: 'ERROR', error_message: 'INVALID_DURATION' }) : undefined)
+  await assert.rejects(th.publish({ post_id: 'post1' }, ctx), /INVALID_DURATION/)
+  assert.equal(calls.filter(c => c.path.endsWith('threads_publish')).length, 0)
+  // Keep that old container ERROR so the retry replaces it.
+  await th.publish({ post_id: 'post1' }, ctx)
+  assert.equal(calls.filter(c => c.body.get('video_url') === clips[0].url).length, 1)
+  assert.equal(calls.filter(c => c.body.get('video_url') === clips[1].url).length, 2)
+  assert.equal(calls.find(c => c.body.get('media_type') === 'CAROUSEL').body.get('children'), '17000000000000001,17000000000000003')
+})
+
+test('save accepts ordered media and an explicit empty list removes it', () => {
+  const ctx = context(); ctx.rows.get('social_posts').clear()
+  const r = th.save({ article_id: 'a1', channel_id: 'acc1', body: 'x', media: clips }, ctx)
+  assert.deepEqual(r.problems, [])
+  assert.deepEqual(JSON.parse(ctx.rows.get('social_posts').get(r.post_id).media), clips)
+  th.save({ article_id: 'a1', channel_id: 'acc1', body: 'y', post_id: r.post_id, media: [], post_images: ['https://cdn.example.org/ignored.jpg'] }, ctx)
+  assert.equal(ctx.rows.get('social_posts').get(r.post_id).video, '')
+  assert.equal(ctx.rows.get('social_posts').get(r.post_id).images, '[]')
+})

@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.15.0
+  zh: "Threads 支持多视频、多图及混排轮播，最多 20 个素材；中断后可继续处理并核对发布结果。"
+  en: "Publish up to 20 images and videos in ordered Threads carousels, with resumable processing and checks after interrupted publishing."
+
 - version: 0.14.0
   zh: "Threads 可直接官方授权；Instagram 官方授权账号支持单图、Reel 发布和帖子采集，发布中断后可核对结果。需要新版 Annulo。"
   en: "Authorize Threads directly. Authorized Instagram accounts can publish single images and Reels and collect posts, with result checks after interrupted attempts. Requires an updated Annulo app."

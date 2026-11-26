@@ -104,7 +104,7 @@ API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.pu
 | 平台 | 标题 | 正文 | 配图 / 视频 | 别的 |
 |---|---|---|---|---|
 | X、LinkedIn、Facebook、Instagram | 不发（只在后台列表里显示） | 纯文字 | 一组图（顺序就是轮播顺序）或一个视频 | Instagram、小红书没图时用 `cover_text` 生成文字封面 |
-| Threads | 不发 | 纯文字，最多 500 字（emoji 按字节） | 一张图或一个视频（MP4 / MOV，≤ 5 分钟、≤ 1 GB，没有封面），或不配图（有链接时默认不配，第一个链接出预览卡） | 话题只 1 个，走 `topic_tag` 不接在正文里 |
+| Threads | 不发 | 纯文字，最多 500 字（emoji 按字节） | 最多 20 个图片 / 视频混排（每个视频 MP4 / MOV，≤ 5 分钟、≤ 1 GB，没有封面），或不配图（有链接时默认不配，第一个链接出预览卡） | 话题只 1 个，走 `topic_tag` 不接在正文里 |
 | 小红书 | 发 | 纯文字 | 一组图或一个视频 | `cover_text` |
 | YouTube、抖音 | 发 | 纯文字（简介） | 只有视频 | — |
 | B 站 | 发 | 视频：纯文字（简介）；专栏：图文是纯文字，长文是富文本 HTML | 视频投稿一个视频；图文、长文发成专栏，配图排在文字后面 / 图在正文里 | 视频 `category` 分区；专栏标题 50 字内、话题单选 |
@@ -152,7 +152,7 @@ Threads 发布与采集只走官方 API（`graph.threads.com`）；设计和做�
 高级入口仍可粘贴用户自己 Meta 应用生成的口令（TH 开头），页面写进本机密钥 `THREADS_USER_TOKEN_<Threads 用户 id>`，不进表、不进函数参数：
 页面先写临时密钥 `THREADS_USER_TOKEN_PENDING`，`social/threads.identifyToken({ secret })` 问出 `{ account_id, username }`，页面再写正式密钥，调 `social.login({ type: 'threads', mode: 'api', account_id, username, media_host? })`（`media_host` 同 Instagram，本机 JPEG 传到哪个 Creght 素材库）。`social/threads.checkLogin` 检测口令。
 
-发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文、类型和提交时间找回唯一的那一条（找不到或不止一条不猜，让人去主页看），IN_PROGRESS 只等结果不重发，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。删帖、多图、手填口令自动续期还没接。
+发布走 `social.publish`，排期也能用（到点调 API 发）；纯文字、文字 + 链接、单张图片、视频，以及最多 20 个图片 / 视频的混排轮播。本机视频用 `ctx.file` 经 creght MCP（`asset_pre_upload` → PUT → `asset_upload_ack`）传到账号的 `threads_media_host` 素材库再交给 Threads，视频处理最多等 5 分钟，没好就报错，下次接着用同一个容器。回执在工作目录 `threads-api-posts/<post_id>.json` 和 `social_posts.threads_api_state`；同一个容器只能发一次，所以发布结果丢了可以放心重试：容器已 PUBLISHED 按正文、类型和提交时间找回唯一的那一条（找不到或不止一条不猜，让人去主页看），IN_PROGRESS 只等结果不重发，还是 FINISHED 用同一个容器再发。`check_only: true` 只核对。采集（`schedules/threads.collect.json`，每天一次）读最近的帖子、每条的 insights 和粉丝数，要口令带 `threads_manage_insights`：回复记成 `comments`，转发 + 引用 + 分享记成 `shares`，没有收藏。轮播用 `media: [{ kind: "image" | "video", url }]` 保留顺序，子容器就绪后只发布父容器；中断后复用回执。删帖、手填口令自动续期还没接。
 
 ### Instagram 官方授权内测（API 66）
 

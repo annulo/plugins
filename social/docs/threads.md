@@ -30,8 +30,8 @@
 - 500 字；emoji 按 UTF-8 字节算。goja 不认 `\p{Extended_Pictographic}`，按码位段近似判断（U+1F000 以上、U+2600–27BF、U+2B00–2BFF、变体选择符、零宽连接符）。
 - 一条最多 5 个不同的链接（2025-12-22 起超了建容器就失败）。
 - 话题只 1 个，走 `topic_tag` 参数（1–50 字，不能有 `.` `&`），**不接在正文里**：文档说正文里的 `#话题` 只是兼容老写法。
-- 接了 `TEXT`、`IMAGE`（单图）、`VIDEO`。接口还支持轮播（2–20）、`link_attachment`、GIF，以后按需加。
-- 视频（官方规格）：MP4 / MOV（moov 在前、没有 edit list），H.264 或 HEVC，AAC 音频，23–60 帧，宽最多 1920，画幅 0.01:1–10:1（建议 9:16），最长 300 秒，最大 1 GB。本机读不到时长、编码、画幅，发布前只查格式（扩展名 / 文件类型）和大小，别的由平台处理时报回来（容器 `ERROR` + `error_message`，比如 `INVALID_DURATION`）。接口没有封面参数，所以字段表里 `videoCover: false`。有视频就发视频、不带图（和 X 一样）。
+- 接了 `TEXT`、`IMAGE`、`VIDEO` 和 `CAROUSEL`。轮播支持 2–20 个图片、视频或混排，保持 `media` 顺序；只有图片时沿用 `images` 顺序。官方依据：https://developers.facebook.com/documentation/threads/posts/ （2026-11-26 核对）。`link_attachment`、GIF 以后按需加。
+- 视频（官方规格）：MP4 / MOV（moov 在前、没有 edit list），H.264 或 HEVC，AAC 音频，23–60 帧，宽最多 1920，画幅 0.01:1–10:1（建议 9:16），最长 300 秒，最大 1 GB。本机读不到时长、编码、画幅，发布前只查格式（扩展名 / 文件类型）和大小，别的由平台处理时报回来（容器 `ERROR` + `error_message`，比如 `INVALID_DURATION`）。接口没有封面参数，所以字段表里 `videoCover: false`。`media` 有内容时按它的完整顺序发布；只有旧 `video` 字段时仍只发该视频，兼容旧数据。
 - 本机视频（`local:…`、`/_annulo/uploaded/…`、内容文件夹的 `folder:` / `work:`）：`ctx.file`（能力版本 65）拿文件信息，经 creght MCP 的 `asset_pre_upload` → 预签名地址直接 PUT（`ctx.file` 当 body，流式发，不读进内存）→ `asset_upload_ack`，传到账号的 `threads_media_host` 素材库（`_creght_asset.ts`，和模板 websites 的 `uploadAsset` 同一套），按 sha256 去重。公开的 https 视频地址原样交给 Threads。
 - 视频处理：每 10 秒查一次容器，最多 5 分钟（平台建议每分钟一次、最多 5 分钟）；还没好就报错不发，回执留着 `prepared`，下次点发布接着用同一个容器，不重传。没发的容器 `ERROR` / `EXPIRED` 时下次重新建。
 - 图片要公开的 HTTPS 地址（Threads 自己去抓）：本机图片沿用 Instagram 的做法，经 creght CLI 传到用户选的 Creght 素材库（`_instagram_assets.ts` 的 `publicImage`，传 `{ host, platform }`）。暂时只收 JPEG（上传脚本按 JPEG 传；Threads 本身也收 PNG）。以后可以改成和视频一样走 MCP + `ctx.file`，就能收 PNG、不依赖 CLI。
@@ -43,6 +43,10 @@
 2. 查 `GET /{container}?fields=status,error_message` 等到 `FINISHED`（文字很快，图片要抓取；最多等约 1 分钟，没好就报错不发）；
 3. `POST /{uid}/threads_publish`（`creation_id`）拿到媒体 id，再读 `GET /{media}?fields=id,permalink` 写回帖子。
 
+轮播先为每个素材创建 `is_carousel_item=true` 的 IMAGE / VIDEO 子容器（不带正文、话题），每得到一个 id 就存回执、等到 FINISHED；再用有序 `children` 创建 CAROUSEL 父容器，正文和话题只放父容器，最终只发布父容器。视频处理超时或某一项失败不发布任何子项；重试复用已保存的子容器，ERROR / EXPIRED 的项单独重建。父容器 PUBLISHED 时按 `CAROUSEL_ALBUM` 核对，仍要求唯一匹配。
+
+回执保留 version 1 兼容旧单素材记录；轮播另存 `media` 和对应 `children`，父容器创建前 container_id 为空且只能处于 prepared。
+
 回执（容器 id、阶段、媒体 id、链接）先写工作目录 `threads-api-posts/<post_id>.json`，再写 `social_posts.threads_api_state`；`mkdir` 锁防同一条并发发两次（`scripts/instagram-local.sh` 的 `claim` / `release`）。
 
 和 Instagram 不同的地方：**同一个容器只能发布一次**，所以结果丢了（网络断、Annulo 退出）不用永久锁住：
@@ -52,7 +56,7 @@
 - 容器还是 `FINISHED`：没发出去，用**同一个容器**再发；
 - `ERROR` / `EXPIRED`（24 小时没发就过期）：没发出去，重新建容器。
 
-`publish({ check_only: true })` 只核对不发。正文、话题、图片改过的，按新内容重新建容器。
+`publish({ check_only: true })` 只核对不发。正文、话题、素材及顺序改过的，按新内容重新建容器；已经提交但结果未确认时先核对旧发布。
 
 排期：`social.publishScheduled` 到点调 `publish`，需要 Annulo 在运行。Threads 和 Instagram API 都支持排期。
 

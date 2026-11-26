@@ -111,12 +111,17 @@ export async function verify(ctx: any, account: Account, token: string): Promise
   return account
 }
 
-/** 建容器（还没发出去）：TEXT、IMAGE 或 VIDEO，带 topic_tag。图片、视频都要公开地址，Threads 自己来抓 */
-export async function createContainer(ctx: any, account: Account, token: string, d: { text: string; image_url?: string; video_url?: string; topic?: string }): Promise<string> {
-  const params: Record<string, string> = { media_type: d.video_url ? 'VIDEO' : d.image_url ? 'IMAGE' : 'TEXT', text: d.text }
+/** 建容器（还没发出去）：TEXT、IMAGE、VIDEO 或 CAROUSEL；子项不带正文和话题。图片、视频都要公开地址，Threads 自己来抓 */
+export async function createContainer(ctx: any, account: Account, token: string, d: { text: string; image_url?: string; video_url?: string; topic?: string; carousel_item?: boolean; children?: string[] }): Promise<string> {
+  const params: Record<string, string> = { media_type: d.children ? 'CAROUSEL' : d.video_url ? 'VIDEO' : d.image_url ? 'IMAGE' : 'TEXT', text: d.text }
   if (d.video_url) params.video_url = d.video_url
   else if (d.image_url) params.image_url = d.image_url
-  if (d.topic) params.topic_tag = d.topic
+  if (d.carousel_item) { params.is_carousel_item = 'true'; delete params.text }
+  if (d.children) {
+    if (d.children.length < 2 || d.children.length > 20) throw new Error('Invalid Threads carousel size')
+    params.children = d.children.map(numericId).join(',')
+  }
+  if (d.topic && !d.carousel_item) params.topic_tag = d.topic
   const body = await request(ctx, `/${account.account_id}/threads`, token, params, 'POST')
   return numericId(body.id)
 }
