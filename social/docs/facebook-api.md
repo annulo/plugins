@@ -101,3 +101,14 @@ npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/
 - 审核录屏需要一条有真实用户评论的测试主页帖子，展示授权、选择主页、打开评论和读取结果。模拟评论仅用于开发验证，不能用作权限审核的真实读取证据。
 
 接口和可见性限制见 [Meta 评论连线](https://developers.facebook.com/docs/graph-api/reference/object/comments/)。
+
+
+## 已发布帖子编辑与删除（social 0.16.0）
+
+- `social/social.edit({ post_id: '<本机记录 id>', body: '<新正文>', tags: ['tag'] })`：只支持官方 API 公共主页，检查已发布状态、平台帖子 ID 和所属主页，使用绑定账号派生的 Page token 向原 `/{page_post_id}` 发送 `POST message`。`tags` 省略时保留原话题，传 `[]` 清空独立话题。不创建新帖、不改图片或原文章，不重置发布时间与互动数据。
+- 模板的文章发布记录、已发布内容和社媒数据页提供「编辑 Facebook 原帖」入口；正文与话题在弹窗中确认后保存。Facebook 只允许应用编辑由同一个应用创建的帖子；来自其它应用或直接在 Facebook 创建的帖子可能被拒绝，错误原样显示。
+- 「从 Facebook 删除」删除平台原帖；已发布内容与社媒帖子页会先显示账号、正文和删除确认。文章发布记录仍保留「从平台删除 / 只删记录」菜单。`DELETE /{page_post_id}` 成功后，本地保留正文及历史，状态为 `removed`。
+- 两种操作都仅在 Graph 返回 `success: true` 后更改发布记录；权限、网络、未知响应均报错，保留原记录，不自动重试。授权过期会标记账号需要重连。草稿 `facebook.save` 不允许改写已发布记录，避免只改本地。
+- 官方依据：[更新与删除 Page 帖子](https://developers.facebook.com/documentation/pages-api/posts)。沿用已配置的 `v26.0` 和 `pages_manage_posts`。
+
+验证：`npx --yes --package=esbuild -c 'node --test tests/facebook-management.test.mjs'` 覆盖原帖定点修改、话题、所属主页、OAuth 账号、成功回执、权限/过期/网络失败、删除与记录保留。模拟测试与界面验证不代表真实 Facebook 验收；仍需在用户确认的测试帖上操作并在 Facebook 核对，不能用改草稿或另发一帖代替。

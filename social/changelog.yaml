@@ -2,6 +2,10 @@
 # Annulo 的升级卡片按界面语言从这里取（没有这种语言用 en）；git tag 的说明只写英文，文件里没有这一版时才用它。
 # Upgrade notes, newest first: each entry has a version plus one note per language.
 
+- version: 0.16.0
+  zh: "Facebook 已发布帖子可直接修改正文和话题；删除前可核对确认，平台成功后再同步本地记录。"
+  en: "Edit published Facebook captions and hashtags, and confirm post deletion before updating local records after Facebook succeeds."
+
 - version: 0.15.0
   zh: "Threads 支持多视频、多图及混排轮播，最多 20 个素材；中断后可继续处理并核对发布结果。"
   en: "Publish up to 20 images and videos in ordered Threads carousels, with resumable processing and checks after interrupted publishing."

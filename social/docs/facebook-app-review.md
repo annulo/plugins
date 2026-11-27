@@ -44,14 +44,14 @@ This permission supports the Page selection needed by pages_manage_posts, pages_
 ```text
 Annulo uses pages_manage_posts to publish content prepared and approved by a Page administrator to the Facebook Page they select. For example, a business operator writes a product announcement, reviews its caption and images in Content center, selects the connected brand Page, and clicks Publish. The Page post appears on Facebook and its published record and link appear in Annulo.
 
-The official API workflow supports text posts and posts containing one or multiple images, up to ten images. It uploads the selected images and publishes them together as one Page post. Users can also schedule approved content for the selected Page. When a user requests removal of a published Page post from its standalone post controls, Annulo deletes that post through the Graph API and marks its local record as removed.
+The official API workflow supports text posts and posts containing one or multiple images, up to ten images. It uploads the selected images and publishes them together as one Page post. Users can also schedule approved content for the selected Page. Users can edit the text and hashtags of posts created through this app using Edit Facebook post and Save to Facebook. The original post ID, media and engagement are preserved. When a user confirms Delete from Facebook, Annulo deletes the original post through the Graph API and marks its local record as removed. Local published records change only after Facebook confirms success.
 
-The permission enables the publishing and post-removal actions requested by the Page administrator. Page access is checked against the connected account and destination Page before an API operation. Published post IDs and links are retained in the project so users can identify the result and manage that post.
+The permission enables the publishing, editing and post-removal actions requested by the Page administrator. Page access is checked against the connected account and destination Page before an API operation. Published post IDs and links are retained in the project so users can identify the result and manage that post.
 ```
 
 演示重点：授权 → 在 Annulo 准备并发布文字 / 图片 → 在 Facebook 核对实际帖子 → 在 Annulo 核对发布记录；删除演示使用独立、可删除的测试帖。
 
-当前 API 支持创建和删除；**不支持编辑已发布 Facebook 帖子**。Meta 参考的录屏项列出创建、编辑和删除。提交文本如实描述本应用使用的创建、删除子集；若审核要求演示远端编辑，需要先补该功能。修改本地草稿或再次发布一条新帖不能作为远端编辑证明。[Meta 权限参考：pages_manage_posts](https://developers.facebook.com/documentation/development/permissions#pages_manage_posts)
+social 0.16.0 加入已发布原帖正文与话题编辑，保留原帖 ID；模板共用页面提供入口。Meta 参考的录屏项列出创建、编辑和删除，必须用同一应用创建的测试帖逐项真实操作并到 Facebook 核对；实现与模拟测试不能代替验收。修改本地草稿或再次发布一条新帖不能作为远端编辑证明。[Meta 权限参考：pages_manage_posts](https://developers.facebook.com/documentation/development/permissions#pages_manage_posts)
 
 ## pages_read_engagement：用途说明
 
@@ -114,7 +114,9 @@ Start with App access instructions 1–4, including the Facebook authorization f
 ```text
 Start with App access instructions 1–4, including the Facebook authorization flow. Open Content center > New article, choose Image post and Write it myself, enter a test caption and save it. Click Publish, select one authorized Facebook Page, choose Publish now, and click Publish to 1. Wait for the publishing record to show Published, then open View published content to verify the caption on Facebook. Repeat with one or two selected images to verify an image post.
 
-For post removal, use a separate disposable test post created on that Facebook Page. Click Collect now in Social media > Performance, open this imported post by its title, close its preview if necessary, and click Delete from Facebook in the standalone post controls. Verify that Annulo marks the post as removed and check the Page on Facebook. Preserve the post used for the comment-reading test. The recording 02-pages_manage_posts.mp4 demonstrates the implemented creation and removal actions; editing an already published Facebook post is not implemented in this version.
+Return to the published record, click Edit Facebook post, revise its text or hashtags, and click Save to Facebook. Open the original Facebook post and refresh it to verify the revised text at the same post URL, with its images still present. Use a post created through this app: Facebook does not allow an app to edit posts created by other apps.
+
+For removal, choose a separate disposable post published through Annulo with the owner’s approval. Open its published record or Social media > Performance post controls and select Delete from Facebook. Confirm the account and post in the confirmation dialog. Verify that Annulo marks the record as removed and refresh the original post on Facebook to confirm removal. Preserve the post used for the comment-reading test. The recording 02-pages_manage_posts.mp4 must demonstrate creation, editing and deletion on Facebook.
 ```
 
 ### pages_read_engagement

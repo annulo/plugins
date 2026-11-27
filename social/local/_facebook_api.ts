@@ -299,8 +299,20 @@ export async function publishText(ctx: any, ch: any, message: string): Promise<s
   return body.id
 }
 
-export async function deletePost(ctx: any, ch: any, id: string): Promise<void> {
+function ownedPost(ctx: any, ch: any, id: string) {
   if (!/^\d+_\d+$/.test(id) || !id.startsWith(`${pageId(ch.page_id || ch.platform_uid)}_`)) throw new Error(L(ctx, '帖子 ID 不属于这个公共主页', 'The post ID does not belong to this Page'))
+}
+
+export async function updatePost(ctx: any, ch: any, id: string, message: string): Promise<void> {
+  ownedPost(ctx, ch, id)
   const token = await pageToken(ctx, ch)
-  await request(ctx, `/${id}`, token, { method: 'DELETE' })
+  const result = await request(ctx, `/${id}`, token, { method: 'POST', body: { message } })
+  if (result?.success !== true) throw new Error(L(ctx, 'Facebook 未确认修改成功，请打开原帖核对后重试。', 'Facebook did not confirm the update. Check the original post before retrying.'))
+}
+
+export async function deletePost(ctx: any, ch: any, id: string): Promise<void> {
+  ownedPost(ctx, ch, id)
+  const token = await pageToken(ctx, ch)
+  const result = await request(ctx, `/${id}`, token, { method: 'DELETE' })
+  if (result?.success !== true) throw new Error(L(ctx, 'Facebook 未确认删除成功，请打开原帖核对后重试。', 'Facebook did not confirm deletion. Check the original post before retrying.'))
 }

@@ -40,7 +40,8 @@
 |---|---|
 | `social.login({ type })` / `social.login({ channel_id })` | 添加账号（弹出浏览器让用户登录，登录成功写进 `social_accounts`）/ 重新登录 |
 | `social.publish({ post_id, manual? })` | 发布一条（要先审核通过）。页面上按住 Alt 点会带 `_show_browser: true`，浏览器在前台打开。`manual: true` 是「填好交给我」：在浏览器里填好、核对，不点发布，窗口交给用户自己调（封面、合集…）、自己发，发出去照常记下（最多等 30 分钟）；只有 `FIELDS.handOver` 的平台（小红书、抖音、B站、知乎）能用，别的平台报错不发，排期的不要用 |
-| `social.remove({ post_id })` | 从平台删除 |
+| `social.edit({ post_id, body, tags? })` | 修改已发布原帖正文和话题（Facebook 官方 API 公共主页）；远端确认后回写本地，媒体与原文章不变 |
+| `social.remove({ post_id })` | 从平台删除，平台确认成功后标记为 removed |
 | `social.purge({ post_id })` | 删掉一条没发出去或已从平台删除的记录，连同每天的数据 |
 | `social.check({ post_id })` | 按平台规格检查一条，返回 `problems` |
 | `social.publishScheduled({ post_id })` | 到点发一条排期（`schedules/publish.json` 调）：按帖子里存的内容发 |
@@ -58,7 +59,7 @@ Instagram 专业账号用 `social.login({ type: 'instagram', mode: 'api', accoun
 API 发布会回写媒体 ID 和永久链接；超时后使用 `social/social.publish({ post_id, check_only: true })` 只读核对，不能删除记录后重发。`instagram_api_state` 和工作目录 `instagram-api-posts/` 保存发布阶段，原子目录锁防止并发重复提交。`social/instagram.preparePublication({ post_id })` 只准备图片 / Reel 容器、不公开发帖，供验收使用。采集走 `social.collect`（`_instagram_collect.ts`）：帖子列表带点赞、评论，每条 insights 读播放、收藏、分享（要 `instagram_business_manage_insights`，没有时只采点赞、评论，结果带 `insights_missing` 和提示），粉丝数读 `/me`；以前浏览器方式采到的帖子按链接短码对上、改记媒体 id。排期也能用：Instagram API 自己不支持定时，到点由 Annulo 调 `social.publishScheduled` 提交（电脑要开着）。API 多图、视频封面、平台删除和令牌自动刷新尚未接入；不回退到浏览器。独立 `instagram_test.*` 入口保留作诊断。
 
 手机上打开后台（不在 Annulo 里）时：`social.check`、`social.createDraftBatch`、`stats.*` 在云端跑（`cloud`）；
-`social.collect`、`publish`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
+`social.collect`、`publish`、`edit`、`purge`、`remove`、`elsewhereAll` 转给电脑上的 Annulo 跑（`remote`）。云端站点 Func 的名字是 `local/social__social.<函数>`、`local/social__stats.<函数>`。
 
 ## 内容怎么变成帖子（`local/_content.ts`）
 

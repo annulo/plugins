@@ -7,7 +7,7 @@ import { list as healthList, record, showBrowserIf, track } from './_health'
 // 手机上打开后台（不在 Annulo 里）时这几个也能用：shuttle push 会把它们打包成站点 Func，只用 ctx.db
 export const cloud = ['check', 'createDraftBatch']
 // 手机上点也能做，转给电脑上开着的 Annulo 跑（要本机浏览器的登录态）
-export const remote = ['collect', 'publish', 'purge', 'remove', 'elsewhereAll']
+export const remote = ['collect', 'publish', 'edit', 'purge', 'remove', 'elsewhereAll']
 
 // 社媒的统一入口（本机函数）：按账号的平台（social_accounts.type）转给各平台自己的函数（x.ts、linkedin.ts、facebook.ts、instagram.ts、youtube.ts、xhs.ts、bilibili.ts、douyin.ts、zhihu.ts）。
 // 页面上的按钮调这里，不用关心笔记 / 推文是哪个平台的。支持哪些平台在 _platforms.ts。项目里的名字都带插件 id：social/social.publish、social/x.save……
@@ -224,6 +224,15 @@ export function remove(input: { post_id: string; _show_browser?: boolean }, ctx:
   const ch = channelOfPost(ctx, input.post_id)
   onThisMachine(ctx, ch)
   return track(ctx, ch, 'remove', (c) => m.remove(input, c), input.post_id)
+}
+
+/** 编辑平台上的原帖，成功后更新本机发布记录。当前支持 Facebook 官方 API 公共主页的正文和话题。 */
+export function edit(input: { post_id: string; body: string; tags?: string[] }, ctx: any) {
+  const m = platformOfPost(ctx, input?.post_id)
+  const ch = channelOfPost(ctx, input.post_id)
+  if (!('edit' in m) || typeof m.edit !== 'function') throw new Error(L(ctx, '这个平台暂不支持编辑已发布的帖子。', 'Editing published posts is not supported for this platform yet.'))
+  onThisMachine(ctx, ch)
+  return track(ctx, ch, 'edit', (c) => m.edit(input, c), input.post_id)
 }
 
 /**

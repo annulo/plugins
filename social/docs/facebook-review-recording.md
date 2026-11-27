@@ -15,7 +15,7 @@
 | 读取帖 R | 直接在主页 A 发布过、能够采回到 Annulo 的真实帖子 | 证明 `pages_read_engagement` 从平台读取正文 |
 | 留言帖 C | 主页 A 的真实帖子，有个人账号发布的可见评论 | 评论正文演示；后续保留 |
 | 发布帖 P1、P2 | 录屏时从 Annulo 分别发布文字和一至两张图片 | 发布演示 |
-| 删除帖 D | 直接在主页 A 创建的独立可删除测试帖，随后采回 Annulo | 删除演示，不使用留言帖 C |
+| 删除帖 D | 从 Annulo 向主页 A 发布的独立可删除测试帖，获得用户对删除的明确确认 | 删除演示，不使用留言帖 C |
 | 图片 | 自己有权使用的普通测试图片，每张不超过 4 MB | 图片发布；避免把正式客户资料用作测试素材 |
 | 安装包 | 含 social 0.8.2、Creator 0.13.0、官方授权入口及评论 UI | 审核员按同一流程复现 |
 
@@ -63,7 +63,7 @@ Please confirm that this comment appears in the app.
 
 ## 02-pages_manage_posts.mp4
 
-目标：展示用户在应用内准备内容、明确选择主页并发布，Facebook 上实际出现该内容；随后在独立测试帖上演示删除。
+目标：展示用户在应用内准备内容、明确选择主页并发布，Facebook 上实际出现该内容；随后编辑原帖并核对，再在独立测试帖上演示删除。
 
 | 建议时段 | 实际操作 | 英文字幕 |
 |---|---|---|
@@ -73,14 +73,15 @@ Please confirm that this comment appears in the app.
 | 02:35–03:10 | 等待发布记录 `Published`；打开 `View published content`，展示 Facebook 上完整测试文字 | `The text post is live on the selected Page.` |
 | 03:10–03:50 | 创建 P2，选择一至两张测试图片，按同一流程发布 | `Publish a caption and selected images together as one Page post.` |
 | 03:50–04:20 | 展示 Facebook 上 P2 的文字、图片和主页名称，再返回发布记录 | `Facebook and Annulo identify the same published post.` |
-| 04:20–04:55 | `Social media` → `Performance` → `Collect now`；打开从 Facebook 采回的独立删除帖 D；如先出现预览，关闭预览以显示下方操作 | `Select a separate disposable Page post for the removal test.` |
-| 04:55–05:25 | 核对 D 后点击 `Delete from Facebook`；等待状态变成已移除，再到 Facebook 核对该测试帖消失 | `Remove the selected test post at the administrator's request.` |
+| 04:20–05:00 | 返回 P2 发布记录，点击 `Edit Facebook post`，改正文或话题，点击 `Save to Facebook` 并等待成功 | `Edit the original published post from Annulo.` |
+| 05:00–05:30 | 打开 P2 原链接并刷新，核对新正文、原图片与相同帖子地址 | `The same Facebook post now shows the updated caption.` |
+| 05:30–06:00 | 打开本次获准删除的 D，点击 `Delete from Facebook`，核对弹窗账号和正文，再确认删除 | `Confirm removal of the selected disposable test post.` |
+| 06:00–06:30 | 等待 Annulo 状态变成已移除，再打开 Facebook 原链接并刷新，核对 D 已删除 | `The test post has been removed from Facebook.` |
 
 删除按钮是真实操作。D 应是本次演示允许删除的测试帖，且不是需要保留的评论测试帖或正式业务帖。本次材料准备没有执行发布或删除。
 
-**当前差距：** Meta 参考中还列出了编辑帖子演示。现有官方 API 没有修改已发布帖正文的功能；上面草稿修改只说明发布前审阅，不是远端编辑。提交说明限定为已实现的创建、删除用途；若 Meta 要求补远端编辑，必须先实现并真实录制。再次发布另一条帖子也不是编辑原帖。[Meta 的 pages_manage_posts 说明](https://developers.facebook.com/documentation/development/permissions#pages_manage_posts)
+social 0.16.0 实现原帖正文与话题编辑；模板的发布记录和帖子页提供入口。编辑只用本应用创建的 P1 / P2，符合 Meta 的同应用限制。D 改为由 Annulo 创建的独立测试帖，页面确认后从平台删除。必须录到 Facebook 上同一原帖修改后的结果及 D 删除后的结果；尚未完成这两项真实验收。[Meta 帖子更新和删除说明](https://developers.facebook.com/documentation/pages-api/posts)
 
-删除帖 D 选择直接在 Facebook 创建的独立帖子，是为了录到当前 UI 的完整删除入口：内容中心的文章关联发布记录没有相同的删除按钮；独立采回帖子可在社交媒体页展开操作。
 
 ## 03-pages_read_engagement.mp4
 
@@ -139,7 +140,7 @@ Please confirm that this comment appears in the app.
 | 计划文件名 | 实际文件 / 日期 / 版本 | 关键结果 | 当前状态 |
 |---|---|---|---|
 | `01-pages_show_list.mp4` | 待录制后填写 | 两个主页绑定 | 未录制 |
-| `02-pages_manage_posts.mp4` | 待录制后填写 | 文字 / 图片发布、删除测试帖 | 未录制；远端编辑差距见上文 |
+| `02-pages_manage_posts.mp4` | 待录制后填写 | 文字 / 图片发布、编辑原帖、删除测试帖 | 未录制；待真实编辑 / 删除验收 |
 | `03-pages_read_engagement.mp4` | 待录制后填写 | 真实主页帖正文显示 | 未录制 |
 | `04-pages_read_user_content.mp4` | 待录制后填写 | 真实评论正文和时间显示 | 未录制 |
 

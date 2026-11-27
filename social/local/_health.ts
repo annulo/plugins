@@ -4,7 +4,7 @@
 // 只记真实的操作（local/social.ts 用 track 包一层）：失败时带着现场（Annulo 存的截图、页面上的可操作元素，见 ctx.browser 的 snapshot）。
 // 以前有「自检」（probe，只走到找到发布按钮，不真发），查不到真正会坏的步骤，2026-10 去掉了；表里可能还留着 op 是 probe 的旧记录，页面忽略它。
 
-export type Op = 'publish' | 'remove' | 'collect'
+export type Op = 'publish' | 'edit' | 'remove' | 'collect'
 /** broken：页面 / 接口对不上了（要改代码）；expired：登录过期（重新登录就好） */
 export type Kind = 'broken' | 'expired' | 'permission' | 'restricted' | 'network'
 

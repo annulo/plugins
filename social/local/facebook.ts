@@ -12,7 +12,7 @@ import * as pageApi from './_facebook_api'
 //                                          存一条写好的帖子（待审，social_posts）；帖子由助手按任务 tasks/write-facebook.md 写
 //   facebook.check({ post_id })            按平台规格检查
 //   facebook.login / facebook.checkLogin   本机浏览器登录（ctx.browser），登录态只在这台电脑上
-//   facebook.publish / remove 发布、删除
+//   facebook.publish / edit / remove 发布、编辑已发布正文、删除（edit 仅官方 API 公共主页）
 //   facebook.collect                       采集最近帖子的互动数据和粉丝数
 //   facebook.comments({ post_id, after? })  只读 API 公共主页帖子的评论正文和时间（post_id 是本机记录 id）
 //
@@ -229,6 +229,7 @@ export function save(input: { article_id: string; article_title?: string; url?: 
   if (id) {
     const old = ctx.db.get('social_posts', id)
     if (!old || old.channel_id !== ch.id || old.article_id !== a.id) throw new Error(L(ctx, 'post_id 不对', 'Bad post_id'))
+    if (['published', 'publishing', 'removed'].includes(old.status)) throw new Error(L(ctx, '不能用草稿保存修改已发布记录；修改 Facebook 原帖请用 social/social.edit。', 'Draft saving cannot modify published records; use social/social.edit to update the Facebook post.'))
     ctx.db.update('social_posts', id, { ...post, ...(picked ? { images: JSON.stringify(picked) } : {}), updated_at: now() })
   } else {
     { const dup = existing(ctx, a.id, ch.id); if (dup) throw new Error(L(ctx, `「${ch.name}」已经有这篇文章还没发出去的帖子了（post_id ${dup.id}），带上这个 post_id 改写它`, `"${ch.name}" already has an unpublished post for this article (post_id ${dup.id}); pass that post_id to rewrite it`)) }
@@ -1033,17 +1034,46 @@ async function publishApi(input: { post_id: string; force_interval?: boolean; co
   }
 }
 
+/** 修改已发布的 Facebook 公共主页帖子正文和话题。远端确认成功后才回写发布记录；不修改原文章或媒体。 */
+export async function edit(input: { post_id: string; body: string; tags?: string[] }, ctx: any) {
+  const p: Post | null = ctx.db.get('social_posts', input?.post_id)
+  if (!p) throw new Error(L(ctx, '帖子不存在，请重新打开帖子。', 'Post not found. Open the post again.'))
+  const ch = fbChannel(ctx, p.channel_id)
+  if (!isApi(ch) || !isPage(ch)) throw new Error(L(ctx, '编辑已发布帖子需要通过官方 API 连接 Facebook 公共主页。', 'Connect a Facebook Page through the official API to edit published posts.'))
+  if (p.status !== 'published' || !p.post_id) throw new Error(L(ctx, '只能编辑有平台 ID 的已发布帖子。', 'Only published posts with a platform ID can be edited.'))
+  const tags = input.tags === undefined ? parse<unknown>(p.tags, []) : input.tags
+  if (typeof input.body !== 'string' || !Array.isArray(tags) || tags.some((t) => typeof t !== 'string' || !t.trim())) throw new Error(L(ctx, '正文和话题格式无效。', 'Invalid text or hashtags.'))
+  const issues = problems({ body: input.body, tags }, ctx)
+  if (issues.length) throw new Error(issues.join('; '))
+  try {
+    await pageApi.updatePost(ctx, ch, p.post_id, postText(input.body, tags))
+    ctx.db.update('social_posts', p.id, { body: input.body, tags: JSON.stringify(tags), updated_at: now() })
+    return { updated: p.post_id, post_url: p.post_url }
+  } catch (e) {
+    if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+    throw e
+  }
+}
+
 /**
  * 从 Facebook 上删除一条已发布的帖子，表里记成 removed 并清掉 post_id。
  * 个人号的「删除」是「移至回收站」（30 天内能在 Facebook 上恢复）；主页的帖子先切到主页身份再删。
  */
 export async function remove(input: { post_id?: string; urn?: string; channel_id?: string }, ctx: any) {
   const p: Post | null = input?.post_id ? ctx.db.get('social_posts', input.post_id) : null
+  if (input?.post_id && !p) throw new Error(L(ctx, '帖子不存在，请重新打开帖子。', 'Post not found. Open the post again.'))
   const id = p?.post_id || input?.urn
   const ch = fbChannel(ctx, p?.channel_id || input?.channel_id || '')
   if (isApi(ch)) {
+    if (!isPage(ch)) throw new Error(L(ctx, '请选择通过官方 API 连接的公共主页。', 'Choose a Page connected through the official API.'))
+    if (p && p.status !== 'published') throw new Error(L(ctx, '只能从平台删除已发布的帖子。', 'Only published posts can be deleted from the platform.'))
     if (!id) throw new Error(L(ctx, '要给出已发布帖子的 ID', 'Provide a published post ID'))
-    await pageApi.deletePost(ctx, ch, id)
+    try {
+      await pageApi.deletePost(ctx, ch, id)
+    } catch (e) {
+      if (e instanceof Expired) ctx.db.update('social_accounts', ch.id, { login_status: 'expired', last_checked_at: now() })
+      throw e
+    }
     if (p) ctx.db.update('social_posts', p.id, { status: 'removed', post_id: null, post_url: null, review_note: null, removed_at: now(), updated_at: now() })
     return { removed: id }
   }

@@ -14,7 +14,7 @@
       },
       "op": {
         "type": "string",
-        "description": "publish 发布 / remove 删除 / collect 采集（以前的 probe 自检已去掉，旧记录忽略）"
+        "description": "publish 发布 / edit 编辑 / remove 删除 / collect 采集（以前的 probe 自检已去掉，旧记录忽略）"
       },
       "ok": {
         "type": "boolean",
