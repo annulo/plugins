@@ -80,7 +80,7 @@ Please confirm that this comment appears in the app.
 
 删除按钮是真实操作。D 应是本次演示允许删除的测试帖，且不是需要保留的评论测试帖或正式业务帖。本次材料准备没有执行发布或删除。
 
-social 0.16.0 实现原帖正文与话题编辑；模板的发布记录和帖子页提供入口。编辑只用本应用创建的 P1 / P2，符合 Meta 的同应用限制。D 改为由 Annulo 创建的独立测试帖，页面确认后从平台删除。必须录到 Facebook 上同一原帖修改后的结果及 D 删除后的结果；尚未完成这两项真实验收。[Meta 帖子更新和删除说明](https://developers.facebook.com/documentation/pages-api/posts)
+social 0.16.0 实现原帖正文与话题编辑；模板的发布记录和帖子页提供入口。编辑只用本应用创建的 P1 / P2，符合 Meta 的同应用限制。D 改为由 Annulo 创建的独立测试帖，页面确认后从平台删除。必须录到 Facebook 上同一原帖修改后的结果及 D 删除后的结果；2026-11-27 已完成这两项真实验收：在 Annulo 点击正式按钮，并独立读取 Facebook Graph API 核对同一原帖的修改及删除结果；审核视频仍未录制。详见 [验收记录](facebook-api.md#真实验收通过2026-11-27)。[Meta 帖子更新和删除说明](https://developers.facebook.com/documentation/pages-api/posts)
 
 
 ## 03-pages_read_engagement.mp4
@@ -140,7 +140,7 @@ social 0.16.0 实现原帖正文与话题编辑；模板的发布记录和帖子
 | 计划文件名 | 实际文件 / 日期 / 版本 | 关键结果 | 当前状态 |
 |---|---|---|---|
 | `01-pages_show_list.mp4` | 待录制后填写 | 两个主页绑定 | 未录制 |
-| `02-pages_manage_posts.mp4` | 待录制后填写 | 文字 / 图片发布、编辑原帖、删除测试帖 | 未录制；待真实编辑 / 删除验收 |
+| `02-pages_manage_posts.mp4` | 待录制后填写 | 文字 / 图片发布、编辑原帖、删除测试帖 | 未录制；2026-11-27 编辑 / 删除真实验收通过 |
 | `03-pages_read_engagement.mp4` | 待录制后填写 | 真实主页帖正文显示 | 未录制 |
 | `04-pages_read_user_content.mp4` | 待录制后填写 | 真实评论正文和时间显示 | 未录制 |
 

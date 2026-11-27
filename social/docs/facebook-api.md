@@ -112,3 +112,16 @@ npx --yes --package=esbuild -c 'node --test tests/facebook-oauth.test.mjs tests/
 - 官方依据：[更新与删除 Page 帖子](https://developers.facebook.com/documentation/pages-api/posts)。沿用已配置的 `v26.0` 和 `pages_manage_posts`。
 
 验证：`npx --yes --package=esbuild -c 'node --test tests/facebook-management.test.mjs'` 覆盖原帖定点修改、话题、所属主页、OAuth 账号、成功回执、权限/过期/网络失败、删除与记录保留。模拟测试与界面验证不代表真实 Facebook 验收；仍需在用户确认的测试帖上操作并在 Facebook 核对，不能用改草稿或另发一帖代替。
+
+
+### 真实验收通过（2026-11-27）
+
+用户明确批准修改并删除 Creght AI 的 11/25 单图测试帖 `1274376505755273_122126925285430019` 后，在 Annulo 的帖子预览中使用正式按钮执行：
+
+1. 11:28（Asia/Shanghai）先只读核对原帖正文、链接、图片 ID `122126925243430019`。
+2. 11:29 点击「编辑 Facebook 原帖」，正文末尾追加 `Edited from Annulo — 27 Nov 2026.`，点击「保存到 Facebook」。独立 Graph GET 读回完全一致的新正文；帖子 ID、链接、图片 ID 和原发布时间保留。
+3. 随后点击「从 Facebook 删除」，核对账号与正文后确认；正式删除函数成功返回，本地状态变为 `removed` 并记录删除时间。独立 Graph GET 原帖返回 HTTP 400 / code 10（对象不可读取），同一授权仍能读取主页帖子列表，列表中不再含该 ID；结合删除成功回执判断删除完成，不把单独的 code 10 当作删除证据。
+
+脱敏核对记录在联调项目工作目录 `meta-api-validation-1127/facebook-management.json`（before / after_edit / after_delete），不含凭据。仅操作这一条已获准测试帖，没有删除本地历史记录。80 项 Facebook 插件模拟测试、12 项模板恢复/授权回归测试及 creator/product/trade 类型检查通过。正式审核录屏仍未录制。
+
+对应版本：social `0.16.0`，creator `0.35.0`，product `0.48.0`，trade `v206`（cn 206 / com 74 / talizen 50）。未升级正式用户项目。
